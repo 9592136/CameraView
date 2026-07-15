@@ -1,0 +1,37 @@
+@startuml
+title 测量结果和图片导出 - 时序图
+
+actor "操作者" as User
+participant "MainWindow" as UI
+participant "ExportService" as ExportService
+participant "ObservationSession" as Session
+participant "MeasurementCsvExporter" as MeasurementCsvExporter
+participant "ImageExporter" as ImageExporter
+participant "OverlayRenderer" as OverlayRenderer
+participant "文件系统" as FS
+
+User -> UI: 选择导出 CSV
+UI -> ExportService: exportCsv(targetFile)
+ExportService -> Session: getMeasurementResults()
+Session --> ExportService: MeasurementResult list
+ExportService -> MeasurementCsvExporter: write(results)
+MeasurementCsvExporter -> FS: write *.csv
+MeasurementCsvExporter --> ExportService: ok
+ExportService --> UI: CSV exported
+
+User -> UI: 选择导出图片
+UI -> ExportService: exportImage(targetFile, includeOverlay)
+ExportService -> Session: getCurrentFrameAndMeasurements()
+Session --> ExportService: ImageFrame + measurements
+alt include overlay
+  ExportService -> OverlayRenderer: render(frame, measurements)
+  OverlayRenderer --> ExportService: composed image
+else source image only
+  ExportService -> ExportService: use source image
+end
+ExportService -> ImageExporter: write(image)
+ImageExporter -> FS: write png/bmp
+ImageExporter --> ExportService: ok
+ExportService --> UI: image exported
+
+@enduml

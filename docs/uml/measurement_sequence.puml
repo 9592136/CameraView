@@ -1,0 +1,23 @@
+@startuml
+title 创建长度测量 - 时序图
+
+actor "操作者" as User
+participant "MeasurementPanel" as Panel
+participant "ImageViewport" as Viewport
+participant "MeasurementController" as Controller
+participant "ObservationSession" as Session
+
+User -> Panel: 选择长度测量
+Panel -> Controller: beginTool(Line)
+User -> Viewport: 点击起点
+Viewport -> Controller: addPoint(screenToImage(point))
+User -> Viewport: 点击终点
+Viewport -> Controller: addPoint(screenToImage(point))
+Controller -> Controller: finish()
+Controller -> Session: addMeasurement(LineMeasurement)
+Session -> Session: calculate(calibration)
+Session -> Viewport: updateOverlay()
+Session -> Panel: updateResultList()
+
+@enduml
+

@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{672a3f62-81a7-43e0-8903-c3216fb548ef}</ProjectGuid>
+    <RootNamespace>CameraView</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if "$(Platform)"=="x64" (copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32.dll" "$(OutDir)" &gt;nul) else (copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32.dll" "$(OutDir)" &gt;nul)</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+    <PostBuildEvent>
+      <Command>if "$(Platform)"=="x64" (copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32.dll" "$(OutDir)" &gt;nul) else (copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32.dll" "$(OutDir)" &gt;nul)</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>if "$(Platform)"=="x64" (copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32.dll" "$(OutDir)" &gt;nul) else (copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32.dll" "$(OutDir)" &gt;nul)</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comdlg32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+    <PostBuildEvent>
+      <Command>if "$(Platform)"=="x64" (copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x64\MUCam32.dll" "$(OutDir)" &gt;nul) else (copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32Ex.dll" "$(OutDir)" &gt;nul &amp; copy /Y "$(ProjectDir)MUCamSDK\bin\x86\MUCam32.dll" "$(OutDir)" &gt;nul)</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app\DiagnosticReportActions.h" />
+    <ClInclude Include="src\camera\CameraControlStatusFormatter.h" />
+    <ClInclude Include="src\camera\CameraDevice.h" />
+    <ClInclude Include="src\app\ExportActions.h" />
+    <ClInclude Include="src\app\ProjectActions.h" />
+    <ClInclude Include="src\app\ProjectSessionRestorer.h" />
+    <ClInclude Include="src\camera\CameraDeviceListFormatter.h" />
+    <ClInclude Include="src\camera\CameraTelemetryFormatter.h" />
+    <ClInclude Include="src\camera\FrameBuffer.h" />
+    <ClInclude Include="src\camera\ICameraDriver.h" />
+    <ClInclude Include="src\camera\MUCamCameraDriver.h" />
+    <ClInclude Include="src\domain\CalibrationProfile.h" />
+    <ClInclude Include="src\domain\Geometry.h" />
+    <ClInclude Include="src\domain\ImageFrame.h" />
+    <ClInclude Include="src\domain\Measurement.h" />
+    <ClInclude Include="src\domain\MeasurementCollection.h" />
+    <ClInclude Include="src\domain\MeasurementFormatter.h" />
+    <ClInclude Include="src\domain\MeasurementNameFormatter.h" />
+    <ClInclude Include="src\imaging\ChannelFusionEngine.h" />
+    <ClInclude Include="src\imaging\DyeLibrary.h" />
+    <ClInclude Include="src\imaging\EdfProcessor.h" />
+    <ClInclude Include="src\imaging\EdfStackListActions.h" />
+    <ClInclude Include="src\imaging\Fluorescence.h" />
+    <ClInclude Include="src\imaging\FluorescenceChannelFactory.h" />
+    <ClInclude Include="src\imaging\FluorescenceChannelListActions.h" />
+    <ClInclude Include="src\imaging\FluorescenceChannelSettings.h" />
+    <ClInclude Include="src\imaging\FluorescenceChannelUpdater.h" />
+    <ClInclude Include="src\imaging\FluorescenceFormatter.h" />
+    <ClInclude Include="src\imaging\ImageRegistration.h" />
+    <ClInclude Include="src\imaging\ImageStitcher.h" />
+    <ClInclude Include="src\imaging\ImageViewport.h" />
+    <ClInclude Include="src\imaging\OverlayRenderer.h" />
+    <ClInclude Include="src\imaging\PreviewDisplayActions.h" />
+    <ClInclude Include="src\imaging\PreviewFrameComposer.h" />
+    <ClInclude Include="src\imaging\ProcessingBuildActions.h" />
+    <ClInclude Include="src\imaging\ProcessingStartActions.h" />
+    <ClInclude Include="src\imaging\ProcessingJobExecutor.h" />
+    <ClInclude Include="src\imaging\ProcessingParameterRules.h" />
+    <ClInclude Include="src\imaging\ProcessingPanelActions.h" />
+    <ClInclude Include="src\imaging\ProcessingProgressActions.h" />
+    <ClInclude Include="src\imaging\ProcessingWorkerActions.h" />
+    <ClInclude Include="src\imaging\ProcessingProgressThrottle.h" />
+    <ClInclude Include="src\imaging\ProcessingJobState.h" />
+    <ClInclude Include="src\imaging\ProcessingResultActions.h" />
+    <ClInclude Include="src\imaging\ProcessingResultFrames.h" />
+    <ClInclude Include="src\imaging\ProcessingRetryActions.h" />
+    <ClInclude Include="src\imaging\ProcessingRetryState.h" />
+    <ClInclude Include="src\imaging\ProcessingStatusFormatter.h" />
+    <ClInclude Include="src\imaging\PseudoColorMapper.h" />
+    <ClInclude Include="src\imaging\StitchTileListActions.h" />
+    <ClInclude Include="src\imaging\StitchTilePlacementPlanner.h" />
+    <ClInclude Include="src\imaging\ViewTransform.h" />
+    <ClInclude Include="src\imaging\ViewportInteractionActions.h" />
+    <ClInclude Include="src\MUCamApi.h" />
+    <ClInclude Include="src\platform\FileDialog.h" />
+    <ClInclude Include="src\platform\TextInputParser.h" />
+    <ClInclude Include="src\storage\DiagnosticReportBuilder.h" />
+    <ClInclude Include="src\storage\ImageExporter.h" />
+    <ClInclude Include="src\storage\MeasurementCsvExporter.h" />
+    <ClInclude Include="src\storage\ProjectDocument.h" />
+    <ClInclude Include="src\storage\ProjectRepository.h" />
+    <ClInclude Include="src\storage\ProjectSessionMapper.h" />
+    <ClInclude Include="src\ui\CameraPanelActions.h" />
+    <ClInclude Include="src\ui\ControlIds.h" />
+    <ClInclude Include="src\ui\DyeLibraryActions.h" />
+    <ClInclude Include="src\ui\DyeProfileFormPresenter.h" />
+    <ClInclude Include="src\ui\DyeProfileFormParser.h" />
+    <ClInclude Include="src\ui\FluorescenceDisplayActions.h" />
+    <ClInclude Include="src\ui\FluorescenceChannelFormPresenter.h" />
+    <ClInclude Include="src\ui\MeasurementActionApplier.h" />
+    <ClInclude Include="src\ui\MeasurementDisplayActions.h" />
+    <ClInclude Include="src\ui\MeasurementEditSession.h" />
+    <ClInclude Include="src\ui\MeasurementHitTester.h" />
+    <ClInclude Include="src\ui\MeasurementInteractionActions.h" />
+    <ClInclude Include="src\ui\MeasurementInteractionState.h" />
+    <ClInclude Include="src\ui\MeasurementListActions.h" />
+    <ClInclude Include="src\ui\MeasurementListSelection.h" />
+    <ClInclude Include="src\ui\MeasurementOverlayModelBuilder.h" />
+    <ClInclude Include="src\ui\MeasurementToolAvailability.h" />
+    <ClInclude Include="src\ui\MeasurementToolStartActions.h" />
+    <ClInclude Include="src\ui\ProcessingBuildInputActions.h" />
+    <ClInclude Include="src\ui\ProcessingQueueActions.h" />
+    <ClInclude Include="src\ui\WindowControlDefinitions.h" />
+    <ClInclude Include="src\ui\WindowControlLayout.h" />
+    <ClInclude Include="src\ui\WindowLayout.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\MUCamApi.cpp" />
+    <ClCompile Include="src\app\DiagnosticReportActions.cpp" />
+    <ClCompile Include="src\camera\CameraControlStatusFormatter.cpp" />
+    <ClCompile Include="src\camera\CameraDeviceListFormatter.cpp" />
+    <ClCompile Include="src\camera\CameraTelemetryFormatter.cpp" />
+    <ClCompile Include="src\camera\FrameBuffer.cpp" />
+    <ClCompile Include="src\camera\MUCamCameraDriver.cpp" />
+    <ClCompile Include="src\domain\CalibrationProfile.cpp" />
+    <ClCompile Include="src\domain\Measurement.cpp" />
+    <ClCompile Include="src\domain\MeasurementCollection.cpp" />
+    <ClCompile Include="src\domain\MeasurementFormatter.cpp" />
+    <ClCompile Include="src\domain\MeasurementNameFormatter.cpp" />
+    <ClCompile Include="src\app\ExportActions.cpp" />
+    <ClCompile Include="src\app\ProjectActions.cpp" />
+    <ClCompile Include="src\app\ProjectSessionRestorer.cpp" />
+    <ClCompile Include="src\imaging\ChannelFusionEngine.cpp" />
+    <ClCompile Include="src\imaging\DyeLibrary.cpp" />
+    <ClCompile Include="src\imaging\EdfProcessor.cpp" />
+    <ClCompile Include="src\imaging\EdfStackListActions.cpp" />
+    <ClCompile Include="src\imaging\FluorescenceChannelFactory.cpp" />
+    <ClCompile Include="src\imaging\FluorescenceChannelListActions.cpp" />
+    <ClCompile Include="src\imaging\FluorescenceChannelSettings.cpp" />
+    <ClCompile Include="src\imaging\FluorescenceChannelUpdater.cpp" />
+    <ClCompile Include="src\imaging\FluorescenceFormatter.cpp" />
+    <ClCompile Include="src\imaging\ImageRegistration.cpp" />
+    <ClCompile Include="src\imaging\ImageStitcher.cpp" />
+    <ClCompile Include="src\imaging\ImageViewport.cpp" />
+    <ClCompile Include="src\imaging\OverlayRenderer.cpp" />
+    <ClCompile Include="src\imaging\PreviewDisplayActions.cpp" />
+    <ClCompile Include="src\imaging\PreviewFrameComposer.cpp" />
+    <ClCompile Include="src\imaging\ProcessingBuildActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingStartActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingJobExecutor.cpp" />
+    <ClCompile Include="src\imaging\ProcessingParameterRules.cpp" />
+    <ClCompile Include="src\imaging\ProcessingPanelActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingProgressActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingWorkerActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingProgressThrottle.cpp" />
+    <ClCompile Include="src\imaging\ProcessingJobState.cpp" />
+    <ClCompile Include="src\imaging\ProcessingResultActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingResultFrames.cpp" />
+    <ClCompile Include="src\imaging\ProcessingRetryActions.cpp" />
+    <ClCompile Include="src\imaging\ProcessingRetryState.cpp" />
+    <ClCompile Include="src\imaging\ProcessingStatusFormatter.cpp" />
+    <ClCompile Include="src\imaging\PseudoColorMapper.cpp" />
+    <ClCompile Include="src\imaging\StitchTileListActions.cpp" />
+    <ClCompile Include="src\imaging\StitchTilePlacementPlanner.cpp" />
+    <ClCompile Include="src\imaging\ViewTransform.cpp" />
+    <ClCompile Include="src\imaging\ViewportInteractionActions.cpp" />
+    <ClCompile Include="src\platform\FileDialog.cpp" />
+    <ClCompile Include="src\platform\TextInputParser.cpp" />
+    <ClCompile Include="src\storage\DiagnosticReportBuilder.cpp" />
+    <ClCompile Include="src\storage\ImageExporter.cpp" />
+    <ClCompile Include="src\storage\MeasurementCsvExporter.cpp" />
+    <ClCompile Include="src\storage\ProjectRepository.cpp" />
+    <ClCompile Include="src\storage\ProjectSessionMapper.cpp" />
+    <ClCompile Include="src\ui\CameraPanelActions.cpp" />
+    <ClCompile Include="src\ui\DyeLibraryActions.cpp" />
+    <ClCompile Include="src\ui\DyeProfileFormPresenter.cpp" />
+    <ClCompile Include="src\ui\DyeProfileFormParser.cpp" />
+    <ClCompile Include="src\ui\FluorescenceDisplayActions.cpp" />
+    <ClCompile Include="src\ui\FluorescenceChannelFormPresenter.cpp" />
+    <ClCompile Include="src\ui\MeasurementActionApplier.cpp" />
+    <ClCompile Include="src\ui\MeasurementDisplayActions.cpp" />
+    <ClCompile Include="src\ui\MeasurementEditSession.cpp" />
+    <ClCompile Include="src\ui\MeasurementHitTester.cpp" />
+    <ClCompile Include="src\ui\MeasurementInteractionActions.cpp" />
+    <ClCompile Include="src\ui\MeasurementInteractionState.cpp" />
+    <ClCompile Include="src\ui\MeasurementListActions.cpp" />
+    <ClCompile Include="src\ui\MeasurementListSelection.cpp" />
+    <ClCompile Include="src\ui\MeasurementOverlayModelBuilder.cpp" />
+    <ClCompile Include="src\ui\MeasurementToolAvailability.cpp" />
+    <ClCompile Include="src\ui\MeasurementToolStartActions.cpp" />
+    <ClCompile Include="src\ui\ProcessingBuildInputActions.cpp" />
+    <ClCompile Include="src\ui\ProcessingQueueActions.cpp" />
+    <ClCompile Include="src\ui\WindowControlDefinitions.cpp" />
+    <ClCompile Include="src\ui\WindowControlLayout.cpp" />
+    <ClCompile Include="src\ui\WindowLayout.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

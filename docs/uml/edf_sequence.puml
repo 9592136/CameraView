@@ -1,0 +1,30 @@
+@startuml
+title EDF 景深扩展 - 时序图
+
+actor "操作者" as User
+participant "EdfPanel" as Panel
+participant "EdfService" as Service
+participant "ProcessingQueue" as Queue
+participant "ImageRegistration" as Registration
+participant "EdfProcessor" as Processor
+participant "ObservationSession" as Session
+participant "ImageViewport" as View
+participant "ProjectDocument" as Project
+
+User -> Panel: 导入/选择 Z 轴图像序列
+Panel -> Service: addSlice(frame, zIndex)
+User -> Panel: 设置对齐和合成参数
+Panel -> Service: createJob(stack)
+Service --> Panel: ProcessingJob
+Panel -> Queue: submit(job)
+Queue -> Registration: align stack
+Registration --> Queue: aligned ImageStack
+Queue -> Processor: compose(stack)
+Processor --> Queue: EdfResult
+Queue -> Service: onCompleted(job)
+Service -> Project: save stack refs, focus map and composite ref
+Service -> Session: setDisplayFrame(compositeFrame)
+Session -> View: setDisplayImage(compositeFrame)
+View -> View: repaint EDF result + overlays
+
+@enduml

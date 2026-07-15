@@ -1,0 +1,32 @@
+@startuml
+title 图像处理任务 - 状态图
+
+state "Created\n已创建" as Created
+state "Queued\n等待执行" as Queued
+state "Running\n后台执行" as Running
+state "Cancelling\n请求取消" as Cancelling
+state "Completed\n已完成" as Completed
+state "Failed\n失败" as Failed
+state "Canceled\n已取消" as Canceled
+
+[*] --> Created
+Created --> Queued: submit
+Queued --> Running: worker available
+Running --> Running: report progress
+Running --> Completed: result produced
+Running --> Failed: processing error
+Running --> Cancelling: cancel requested
+Queued --> Canceled: cancel before start
+Cancelling --> Canceled: cleanup done
+Failed --> Queued: retry
+Completed --> [*]
+Failed --> [*]
+Canceled --> [*]
+
+note right of Running
+  用于拼接、EDF 等耗时处理。
+  UI 只接收进度和完成通知，
+  不直接执行大图计算。
+end note
+
+@enduml

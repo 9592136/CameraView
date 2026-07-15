@@ -1,0 +1,25 @@
+@startuml
+title 荧光伪彩与通道融合 - 活动图
+
+start
+:导入或采集单通道图像;
+:选择荧光染料或自定义颜色;
+:设置强度范围和伪彩 LUT;
+:生成 FluorescenceChannel;
+repeat
+  :加入融合配方;
+  :设置通道可见性、透明度和混合方式;
+repeat while (继续添加通道?) is (是)
+
+if (通道数量有效?) then (是)
+  :按 ChannelFusionRecipe 融合;
+  :生成显示用 RGB 图像;
+  :保留原始单通道数据;
+  :刷新 ImageViewport;
+  stop
+else (否)
+  :提示至少选择一个有效通道;
+  stop
+endif
+
+@enduml

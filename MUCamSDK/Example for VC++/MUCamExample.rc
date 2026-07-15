@@ -1,0 +1,196 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE DISCARDABLE 
+BEGIN
+    "#define _AFX_NO_SPLITTER_RESOURCES\r\n"
+    "#define _AFX_NO_OLE_RESOURCES\r\n"
+    "#define _AFX_NO_TRACKER_RESOURCES\r\n"
+    "#define _AFX_NO_PROPERTY_RESOURCES\r\n"
+	"\r\n"
+	"#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)\r\n"
+	"#ifdef _WIN32\r\n"
+	"LANGUAGE 9, 1\r\n"
+	"#pragma code_page(1252)\r\n"
+	"#endif //_WIN32\r\n"
+	"#include ""res\\MUCamExample.rc2""  // non-Microsoft Visual C++ edited resources\r\n"
+	"#include ""afxres.rc""  	// Standard components\r\n"
+	"#endif\r\n"
+    "\0"
+END
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDR_MAINFRAME           ICON    DISCARDABLE     "res\\MUCamExample.ico"
+
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE 9, 1
+#pragma code_page(1252)
+#endif //_WIN32
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_MUCAMEXAMPLE_DIALOG DIALOGEX  0, 0, 588, 430 
+STYLE DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "MUCamExample"
+FONT 8, "MS Sans Serif"
+BEGIN
+    COMBOBOX        IDC_COMBO_DEVICES,492,10,85,67,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Device",IDC_STATIC,456,14,25,8
+    GROUPBOX        "",IDC_STATIC,439,2,143,420,0,WS_EX_CLIENTEDGE
+    COMBOBOX        IDC_COMBO_BINNING,492,40,85,67,CBS_DROPDOWN | WS_DISABLED | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Binning",IDC_STATIC,453,44,29,8
+    PUSHBUTTON      "ROI",IDC_BUTTON_ROI,459,62,115,14
+    CONTROL         "Flip",IDC_CHECK_FLIP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,462,284,31,10
+    CONTROL         "Mirror",IDC_CHECK_MIRROR,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,501,284,37,10
+    CONTROL         "",IDC_SLIDER_OFFSET,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,461,142,112,6
+    LTEXT           "Exposure",IDC_STATIC,446,90,34,12
+    EDITTEXT        IDC_EDIT_EXPOSURE,497,89,46,12,ES_AUTOHSCROLL
+    LTEXT           "Offset",IDC_STATIC,445,128,34,12
+    EDITTEXT        IDC_EDIT_OFFSET,497,126,46,12,ES_AUTOHSCROLL | ES_READONLY
+    LTEXT           "Red Gain",IDC_STATIC,445,166,34,12
+    CONTROL         "Cooler Enable",IDC_CHECK_COOLER,"Button",BS_AUTOCHECKBOX | WS_DISABLED | WS_TABSTOP,462,314,69,14
+    LTEXT           "Green Gain",IDC_STATIC,445,198,43,12
+    LTEXT           "Blue Gain",IDC_STATIC,445,232,45,12
+    CONTROL         "",IDC_STATIC_SHOW,"Static",SS_GRAYFRAME,7,3,428,419
+    CONTROL         "",IDC_SPIN_EXPOSURE,"msctls_updown32",UDS_ARROWKEYS,543,89,10,12
+    CONTROL         "",IDC_SLIDER_BLUEGAIN,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,461,244,112,6
+    EDITTEXT        IDC_EDIT_BLUEGAIN,497,228,46,12,ES_AUTOHSCROLL | ES_READONLY
+    CONTROL         "",IDC_SLIDER_GREENGAIN,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,462,210,112,6
+    EDITTEXT        IDC_EDIT_GREENGAIN,498,194,46,12,ES_AUTOHSCROLL | ES_READONLY
+    CONTROL         "",IDC_SLIDER_REDGAIN,"msctls_trackbar32",TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,461,178,112,6
+    EDITTEXT        IDC_EDIT_REDGAIN,497,163,46,12,ES_AUTOHSCROLL | ES_READONLY
+    CONTROL         "8Bits",IDC_RADIO_8Bits,"Button",BS_AUTORADIOBUTTON,464,339,33,11
+    CONTROL         "16Bits",IDC_RADIO_16BITS,"Button",BS_AUTORADIOBUTTON,505,338,33,11
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO     VERSIONINFO
+  FILEVERSION       1,0,0,1
+  PRODUCTVERSION    1,0,0,1
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+        BLOCK "040904B0"
+		BEGIN 
+			VALUE "CompanyName",     "\0"
+			VALUE "FileDescription", "MUCamExample MFC Application\0"
+			VALUE "FileVersion",     "1, 0, 0, 1\0"
+			VALUE "InternalName",    "MUCamExample\0"
+			VALUE "LegalCopyright",  "Copyright (C) 2008\0"
+			VALUE "LegalTrademarks", "\0"
+			VALUE "OriginalFilename","MUCamExample.EXE\0"
+			VALUE "ProductName",     "MUCamExample Application\0"
+			VALUE "ProductVersion",  "1, 0, 0, 1\0"
+		END
+	END
+	BLOCK "VarFileInfo" 
+	BEGIN 
+		VALUE "Translation", 0x409, 1200
+    END
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO DISCARDABLE 
+BEGIN
+    IDD_MUCAMEXAMPLE_DIALOG, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 313
+        TOPMARGIN, 7
+        BOTTOMMARGIN,193 
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+#endif
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+#define _AFX_NO_SPLITTER_RESOURCES
+#define _AFX_NO_OLE_RESOURCES
+#define _AFX_NO_TRACKER_RESOURCES
+#define _AFX_NO_PROPERTY_RESOURCES
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE 9, 1
+#pragma code_page(1252)
+#endif //_WIN32
+#include "res\\MUCamExample.rc2"  // non-Microsoft Visual C++ edited resources
+#include "afxres.rc"  	// Standard components
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

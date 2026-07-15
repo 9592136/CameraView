@@ -1,0 +1,22 @@
+@startuml
+title 两点标定流程 - 时序图
+
+actor "操作者" as User
+participant "CalibrationDialog" as Dialog
+participant "ImageViewport" as Viewport
+participant "CalibrationService" as Service
+participant "ObservationSession" as Session
+
+User -> Dialog: 选择标定工具
+Dialog -> Viewport: request pick two image points
+User -> Viewport: 点击标尺第一端
+User -> Viewport: 点击标尺第二端
+Viewport --> Dialog: imagePointA, imagePointB
+User -> Dialog: 输入真实长度和单位
+Dialog -> Service: createProfile(points, length, unit)
+Service --> Dialog: CalibrationProfile
+Dialog -> Session: setCalibration(profile)
+Session -> Session: recalculateMeasurements()
+
+@enduml
+

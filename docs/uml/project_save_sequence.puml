@@ -1,0 +1,44 @@
+@startuml
+title 项目保存与重新打开 - 时序图
+
+actor "操作者" as User
+participant "MainWindow" as UI
+participant "FileDialog" as Dialog
+participant "ProjectActions" as Actions
+participant "ProjectSessionMapper" as Mapper
+participant "ProjectRepository" as Repository
+participant "ProjectSessionRestorer" as Restorer
+participant "运行态状态" as Runtime
+participant "文件系统" as FS
+
+User -> UI: 保存项目
+UI -> Dialog: SaveProject()
+Dialog --> UI: selected path
+UI -> Actions: saveProject(path, calibration,\nmeasurements, dyes, channels,\nedfOptions, stitchSearchPercent)
+Actions -> Mapper: toDocument(session state)
+Mapper --> Actions: ProjectDocument
+Actions -> Repository: save(path, document)
+Repository -> FS: write *.cvproj
+FS --> Repository: ok
+Repository --> Actions: ok
+Actions --> UI: ProjectActionResult(saved)
+UI --> User: 显示保存状态
+
+User -> UI: 打开项目
+UI -> Dialog: OpenProject()
+Dialog --> UI: selected path
+UI -> Actions: loadProject(path)
+Actions -> Repository: load(path)
+Repository -> FS: read *.cvproj
+FS --> Repository: content
+Repository --> Actions: ProjectDocument
+Actions -> Mapper: fromDocument(document)
+Mapper --> Actions: ProjectSessionState
+Actions --> UI: ProjectActionResult(loaded)
+UI -> Restorer: restore(runtime, sessionState)
+Restorer -> Runtime: apply calibration, measurements,\ndyes, channels and processing settings
+Restorer -> Runtime: clear old processing queues,\nresults and retry snapshots
+Restorer --> UI: ProjectSessionRestoreResult
+UI --> User: 刷新面板、列表和预览
+
+@enduml

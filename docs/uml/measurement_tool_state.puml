@@ -1,0 +1,13 @@
+@startuml
+title 测量工具状态图
+
+[*] --> ToolIdle
+ToolIdle --> AwaitFirstPoint: select tool
+AwaitFirstPoint --> AwaitNextPoint: click first point
+AwaitNextPoint --> AwaitNextPoint: click intermediate point
+AwaitNextPoint --> Completed: double click / enough points
+AwaitNextPoint --> ToolIdle: cancel
+Completed --> ToolIdle: save entity
+
+@enduml
+

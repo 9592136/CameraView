@@ -1,0 +1,31 @@
+@startuml
+title 显微观察与测量软件 - 部署图
+
+node "Windows 工作站" as PC {
+  artifact "CameraView.exe" as App
+  artifact "MUCam32Ex.dll" as MUCamEx
+  artifact "MUCam32.dll" as MUCamLegacy
+  folder "Project Folder" as ProjectFolder {
+    artifact "*.mproj.json" as ProjectFile
+    artifact "images/*.png|*.bmp" as ImageFiles
+    artifact "exports/*.csv" as CsvFiles
+  }
+}
+
+node "Motic 显微相机" as Camera {
+  component "Sensor / USB Device" as Sensor
+}
+
+node "MUCam Driver / SDK Runtime" as Runtime {
+  component "Vendor Camera Driver" as Driver
+}
+
+App --> MUCamEx : LoadLibrary / GetProcAddress
+App --> MUCamLegacy : fallback
+MUCamEx --> Runtime
+MUCamLegacy --> Runtime
+Runtime --> Camera : USB / driver protocol
+App --> ProjectFolder : save / load / export
+
+@enduml
+

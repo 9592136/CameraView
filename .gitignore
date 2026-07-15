@@ -1,0 +1,41 @@
+# Build outputs
+/build*/
+/x64/
+/x86/
+/Debug/
+/Release/
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.ipdb
+*.iobj
+*.tlog
+*.lastbuildstate
+*.log
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Visual Studio user/local files
+.vs/
+*.user
+*.suo
+*.aps
+*.opt
+*.plg
+UpgradeLog*.XML
+
+# SDK example build outputs
+MUCamSDK/Example for C#/**/bin/
+MUCamSDK/Example for C#/**/obj/
+MUCamSDK/bin/*/MUCamExample.exe
+
+# OS/editor clutter
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak

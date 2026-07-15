@@ -1,0 +1,891 @@
+@startuml
+title 显微观察与测量软件 - 类图
+
+skinparam classAttributeIconSize 0
+
+class MainWindow {
+  +initialize()
+  +handleCommand(id)
+  +handleMouse(event)
+  +showStatus(text)
+}
+
+class WindowLayout {
+  +computeSidePanelWidth(clientRect): int
+  +previewRect(clientRect): Rect
+  +sidePanelRect(clientRect): Rect
+  +statusRect(clientRect): Rect
+}
+
+class WindowControlLayout {
+  +compute(clientRect): vector<WindowControlPlacement>
+  +sideControlIds(): vector<int>
+}
+
+class WindowControlDefinitions {
+  +all(): vector<WindowControlDefinition>
+  +find(controlId): WindowControlDefinition
+}
+
+class ControlIds {
+  +controlId: int
+}
+
+class MeasurementInteractionState {
+  +beginLength(): string
+  +beginAngle(): string
+  +beginPolygonArea(): string
+  +addPoint(point): MeasurementInteractionAction
+  +finishPolygon(): MeasurementInteractionAction
+  +pendingOverlay(): MeasurementInteractionPending
+}
+
+class MeasurementActionApplier {
+  +apply(action, measurements, calibration): MeasurementActionApplyResult
+}
+
+class MeasurementInteractionActions {
+  +addPoint(interaction, measurements, calibration, pointState): MeasurementInteractionActionResult
+  +finishPolygon(interaction, measurements, calibration): MeasurementInteractionActionResult
+}
+
+class MeasurementHitTester {
+  +findEditableHandle(measurements, viewport, frame, point): MeasurementHitTestResult
+}
+
+class MeasurementEditSession {
+  +begin(hit): void
+  +applyTo(measurements, imagePoint): MeasurementReference
+  +clear(): void
+}
+
+class MeasurementListActions {
+  +deleteSelected(measurements, selection): MeasurementListActionResult
+  +renameSelected(measurements, selection, name): MeasurementListActionResult
+}
+
+class MeasurementListSelection {
+  +indexAtSelection(selection, itemCount): size_t
+  +nextAfterDelete(deletedIndex, remainingCount): int
+}
+
+class MeasurementDisplayActions {
+  +displayUnit(calibration): MeasurementUnit
+  +listLines(measurements, calibration): vector<string>
+  +buildOverlayModel(measurements, calibration, interaction): MeasurementOverlayModel
+  +selectedMeasurement(measurements, selectedIndex): MeasurementReference
+}
+
+class MeasurementOverlayModelBuilder {
+  +build(measurements, calibration, unit, pending): MeasurementOverlayModel
+}
+
+class MeasurementToolAvailability {
+  +forCalibration(frame): MeasurementToolStartResult
+  +forMeasurement(frame): MeasurementToolStartResult
+}
+
+class MeasurementToolStartActions {
+  +beginCalibration(interaction, availability, lengthValid, length, unit): MeasurementToolStartActionResult
+  +beginLength(interaction, availability): MeasurementToolStartActionResult
+  +beginAngle(interaction, availability): MeasurementToolStartActionResult
+  +beginRectangleArea(interaction, availability): MeasurementToolStartActionResult
+  +beginPolygonArea(interaction, availability): MeasurementToolStartActionResult
+}
+
+class DyeProfileFormParser {
+  +parse(input): DyeProfileInputResult
+}
+
+class DyeProfileFormPresenter {
+  +empty(): DyeProfileFormValues
+  +fromDye(dye): DyeProfileFormValues
+}
+
+class DyeLibraryActions {
+  +save(dyes, input): DyeLibraryActionResult
+  +deleteSelected(dyes, selection): DyeLibraryActionResult
+}
+
+class FluorescenceDisplayActions {
+  +dyeLabels(dyes): vector<string>
+  +selectedDye(dyes, selectedIndex): DyeProfile
+  +selectedDyeIndex(dyes, selectedIndex): size_t
+  +channelLines(channels): vector<string>
+  +selectedChannelIndex(channels, selectedIndex): size_t
+}
+
+class FluorescenceChannelFormPresenter {
+  +empty(): FluorescenceChannelFormValues
+  +fromChannel(channel): FluorescenceChannelFormValues
+}
+
+class ImageViewport {
+  +setFrame(frame)
+  +setOverlay(measurements)
+  +setDisplayImage(frame)
+  +reset()
+  +zoomAt(point, delta)
+  +screenToImage(point): ImagePoint
+  +paint()
+}
+
+class ViewportInteractionActions {
+  +zoomAt(viewport, rect, frame, point, delta): bool
+  +formatZoomStatus(zoom): string
+  +beginPan(state, rect, frame, point, editActive): ViewportPanBeginResult
+  +continuePan(state, viewport, rect, frame, point): ViewportPanContinueResult
+  +endPan(state): bool
+}
+
+class ViewTransform {
+  -zoom: double
+  -centerX: double
+  -centerY: double
+  +fit(imageSize, viewportSize)
+  +zoomAt(screenPoint, factor)
+  +screenToImage(point): ImagePoint
+  +imageToScreen(point): ScreenPoint
+}
+
+class CameraController {
+  +refreshDevices(): vector<CameraDevice>
+  +open(deviceId)
+  +close()
+  +setExposure(ms)
+  +startPreview()
+  +stopPreview()
+}
+
+interface ICameraDriver {
+  +load(): bool
+  +enumerateDevices(): vector<CameraDevice>
+  +open(deviceId): bool
+  +getFrame(): ImageFrame
+  +close()
+}
+
+class MUCamCameraDriver {
+  -api: MUCamApi
+  -handle: Handle
+  +enumerateDevices()
+  +open(deviceId)
+  +getFrame()
+}
+
+class ObservationSession {
+  -currentFrame: ImageFrame
+  -displayFrame: ImageFrame
+  -calibration: CalibrationProfile
+  -measurements: vector<MeasurementEntity>
+  -channels: vector<FluorescenceChannel>
+  +start()
+  +stop()
+  +onFrame(frame)
+  +setDisplayFrame(frame)
+  +setCalibration(profile)
+}
+
+class MeasurementController {
+  +beginTool(type)
+  +addPoint(imagePoint)
+  +finish()
+  +remove(id)
+  +recalculateAll()
+}
+
+class MeasurementCollection {
+  +formatOrder(): vector<MeasurementEntity>
+  +addLength(name, first, second)
+  +addAngle(name, first, vertex, second)
+  +addArea(name, points)
+}
+
+class MeasurementFormatter {
+  +formatLine(measurement, calibration, unit): string
+  +formatCollection(collection, calibration, unit): vector<string>
+}
+
+class MeasurementNameFormatter {
+  +formatDefaultName(kind, index): string
+  +nextDefaultName(kind, collection): string
+}
+
+abstract class MeasurementEntity {
+  +id: string
+  +name: string
+  +points: vector<ImagePoint>
+  +calculate(profile): MeasurementResult
+}
+
+class LineMeasurement {
+  +calculate(profile): MeasurementResult
+}
+
+class AngleMeasurement {
+  +calculate(profile): MeasurementResult
+}
+
+class AreaMeasurement {
+  +calculate(profile): MeasurementResult
+}
+
+class CalibrationProfile {
+  +name: string
+  +unit: Unit
+  +micronsPerPixelX: double
+  +micronsPerPixelY: double
+  +calibrationUnitOptions(): vector<Unit>
+  +calibrationUnitAtIndex(index): Unit
+  +isValid(): bool
+}
+
+class ProjectDocument {
+  +frames: vector<ImageFrameRef>
+  +channels: vector<FluorescenceChannel>
+  +fusionRecipe: ChannelFusionRecipe
+  +dyeProfiles: vector<DyeProfile>
+  +calibration: CalibrationProfile
+  +measurements: vector<MeasurementEntity>
+  +processingHistory: vector<ProcessingJob>
+}
+
+class ProjectSessionMapper {
+  +toDocument(session): ProjectDocument
+  +fromDocument(document): ProjectSessionState
+}
+
+class ProjectSessionRestorer {
+  +restore(runtimeState, projectState): ProjectSessionRestoreResult
+}
+
+class ProjectActions {
+  +saveProject(path, calibration, measurements, dyes, channels, edfOptions, stitchSearchPercent): ProjectActionResult
+  +loadProject(path): ProjectActionResult
+}
+
+class DiagnosticReportActions {
+  +buildReport(input, measurements): string
+  +buildSdkTelemetry(diagnostics): string
+}
+
+class ExportActions {
+  +saveMeasurementsCsv(path, measurements, calibration, displayUnit): ExportActionResult
+  +saveImageBmp(path, frame, measurements): ExportActionResult
+  +saveDiagnosticReport(path, report): ExportActionResult
+}
+
+class ProjectRepository {
+  +save(path, document): bool
+  +load(path): ProjectDocument
+}
+
+class TextInputParser {
+  +trim(text): string
+  +tryParsePositiveDouble(text): double
+  +tryParsePositiveFloat(text): float
+  +tryParseByte(text): int
+  +tryParseIntegerRange(text, min, max): int
+}
+
+class FileDialog {
+  +saveCsv(owner): string
+  +saveBmp(owner): string
+  +openBmp(owner): string
+  +saveText(owner): string
+  +saveProject(owner): string
+  +openProject(owner): string
+}
+
+class CameraDeviceListFormatter {
+  +sdkUnavailable(): CameraDeviceListPresentation
+  +noCameraFound(): CameraDeviceListPresentation
+  +devices(devices): CameraDeviceListPresentation
+  +selectionToDeviceIndex(selection, deviceCount): int
+}
+
+class CameraPanelActions {
+  +sdkUnavailable(error): CameraListRefreshActionResult
+  +devicesEnumerated(devices, telemetry): CameraListRefreshActionResult
+  +selectDevice(cameraCount, selection): CameraSelectionActionResult
+  +parseExposureText(text): CameraExposureParseResult
+  +clampExposure(value, hasRange, min, max): float
+}
+
+class CameraControlStatusFormatter {
+  +formatCamerasFound(count): string
+  +formatSelectedDevice(deviceIndex): string
+  +formatCameraDisconnected(): string
+  +formatPreviewStopped(): string
+  +formatExposureSet(exposureMs): string
+}
+
+class CameraTelemetryFormatter {
+  +formatPreviewStarted(deviceIndex, openInfo): string
+  +formatPendingTelemetry(deviceIndex, openInfo): string
+  +formatFrameTelemetry(deviceIndex, openInfo, fps, timestamp): string
+}
+
+class FluorescenceFormatter {
+  +formatDefaultChannelName(dye, index): string
+  +formatDyeLabel(dye): string
+  +formatChannelLine(channel): string
+}
+
+class ImageProcessingService {
+  +applyPseudoColor(frame, lut): ImageFrame
+  +normalize(frame, range): ImageFrame
+  +renderDisplayFrame(source): ImageFrame
+  +submit(job): ProcessingJob
+}
+
+class PreviewFrameComposer {
+  +compose(source, processingResult, channels, palette): ImageFrame
+}
+
+class PreviewDisplayActions {
+  +pseudoColorLabels(): vector<string>
+  +selectPseudoColor(selection): PseudoColorSelectionResult
+  +buildPreviewFrame(source, processingFrames, channels, showFusion, palette): ImageFrame
+  +previewModeLabel(source, processingFrames, channels, showFusion, palette): string
+}
+
+class ChannelFusionService {
+  +setChannel(channel)
+  +applyRecipe(recipe): ImageFrame
+  +fuse(channels): ImageFrame
+}
+
+class DyeLibraryService {
+  +listDyes(): vector<DyeProfile>
+  +saveDye(profile)
+  +removeDye(id)
+}
+
+class DyeLibrary {
+  +defaultDyes(): vector<DyeProfile>
+  +fallbackDye(): DyeProfile
+  +findByName(dyes, name): DyeProfile
+  +indexAtSelection(selection, dyeCount): size_t
+  +upsertByName(dyes, dye): DyeLibraryUpdateResult
+  +deleteAt(dyes, index): DyeLibraryDeleteResult
+}
+
+class FluorescenceChannelFactory {
+  +createFromFrame(dye, frame, index): FluorescenceChannel
+}
+
+class FluorescenceChannelListActions {
+  +addCurrentFrame(channels, frame, dye): FluorescenceChannelListActionResult
+  +clear(channels): FluorescenceChannelListActionResult
+}
+
+class FluorescenceChannelSettings {
+  +defaults(visible): FluorescenceChannelDisplaySettings
+  +indexAtSelection(selection, channelCount): size_t
+  +fromLevels(visible, blackLevel, whiteLevel): FluorescenceChannelDisplaySettings
+  +fromChannel(channel): FluorescenceChannelDisplaySettings
+  +apply(channel, settings)
+}
+
+class FluorescenceChannelUpdater {
+  +apply(channels, selection, visible, blackLevel, whiteLevel): FluorescenceChannelUpdateResult
+}
+
+class StitchingService {
+  +addTile(frame, positionHint)
+  +createJob(project): ProcessingJob
+  +alignTiles(): StitchingProject
+  +renderMosaic(): ImageFrame
+}
+
+class EdfService {
+  +addSlice(frame, zIndex)
+  +createJob(stack): ProcessingJob
+  +alignStack(): ImageStack
+  +compose(): EdfResult
+}
+
+class ProcessingQueue {
+  +submit(job): ProcessingJob
+  +cancel(jobId)
+  +reportProgress(jobId): JobProgress
+  +onCompleted(job)
+}
+
+class ProcessingJobState {
+  +begin(): ProcessingJobLaunch
+  +publish(result)
+  +takePending(): ProcessingJobResult
+  +requestCancel()
+  +invalidateActiveJob()
+}
+
+class ProcessingJobExecutor {
+  +runStitch(jobId, tiles, searchPercent): ProcessingJobResult
+  +runEdf(jobId, stack, options): ProcessingJobResult
+}
+
+class ProcessingProgressThrottle {
+  +shouldReport(percent): bool
+}
+
+class ProcessingProgressActions {
+  +report(percent): ProcessingProgressActionResult
+}
+
+class ProcessingWorkerActions {
+  +startStitch(launch, tiles, searchPercent, status, publish): thread
+  +startEdf(launch, stack, options, status, publish): thread
+}
+
+enum ProcessingResultDisplaySource {
+  None
+  Stitch
+  EdfComposite
+  EdfFocusMap
+}
+
+class ProcessingResultFrames {
+  +apply(result): bool
+  +showEdfCompositeFrame(): bool
+  +showEdfFocusMap(): bool
+  +clear(): void
+  +isProcessingResultVisible(): bool
+  +displaySource(): ProcessingResultDisplaySource
+  +displaySourceLabel(): string
+  +displayKindLabel(): string
+}
+
+class ProcessingRetryState {
+  +rememberStitch(tiles, searchPercent): void
+  +rememberEdf(stack, options): void
+  +request(): ProcessingRetryRequest
+  +clear(): void
+}
+
+class ProcessingStatusFormatter {
+  +formatStarted(kind): string
+  +formatProgress(kind, percent): string
+  +formatReady(kind, image, relationCount): string
+  +formatFailed(kind): string
+}
+
+class DiagnosticReportBuilder {
+  +build(input): string
+  +buildSdkTelemetry(diagnostics): string
+}
+
+class MeasurementCsvExporter {
+  +save(path, measurements, calibration, displayUnit): bool
+}
+
+class ImageExporter {
+  +loadBmp(path): ImageFrame
+  +saveBmp(path, frame, lengths, angles, rectangles, polygons): bool
+}
+
+class DiagnosticReportInput {
+  +generated: Timestamp
+  +status: string
+  +previewTelemetry: string
+  +previewRunning: bool
+  +processingRunning: bool
+  +cameraDevices: vector~CameraDevice~
+  +latestFrameSource: string
+  +imageProcessing: DiagnosticImageProcessingSummary
+}
+
+class DiagnosticImageProcessingSummary {
+  +pseudoColor: PseudoColorPalette
+  +stitchTiles: size_t
+  +edfFrames: size_t
+  +processingResultVisible: bool
+  +processingResultKind: string
+  +processingResultSize: Size
+  +edfCompositeAvailable: bool
+  +edfFocusMapAvailable: bool
+}
+
+class FluorescenceChannel {
+  +name: string
+  +sourceFrame: ImageFrameRef
+  +dyeId: string
+  +color: RgbColor
+  +visible: bool
+  +intensityMin: double
+  +intensityMax: double
+}
+
+class DyeProfile {
+  +id: string
+  +name: string
+  +excitationNm: double
+  +emissionNm: double
+  +displayColor: RgbColor
+  +notes: string
+}
+
+class ChannelFusionRecipe {
+  +blendMode: BlendMode
+  +channels: vector<FluorescenceChannel>
+  +backgroundMode: BackgroundMode
+}
+
+class ImageStack {
+  +frames: vector<ImageFrameRef>
+  +zSpacing: double
+  +calibration: CalibrationProfile
+}
+
+class StitchingProject {
+  +tiles: vector<ImageFrameRef>
+  +transforms: vector<TileTransform>
+  +overlapPercent: double
+}
+
+class StitchTile {
+  +frame: ImageFrame
+  +offsetX: int
+  +offsetY: int
+}
+
+class StitchTileListActions {
+  +addCurrentFrame(tiles, frame, searchPercent): StitchTileListActionResult
+}
+
+class EdfStackListActions {
+  +addCurrentFrame(stack, frame): EdfStackListActionResult
+}
+
+class ProcessingBuildActions {
+  +prepareStitch(tiles, searchValid, searchPercent): ProcessingBuildActionResult
+  +prepareEdf(stack, radiusValid, focusRadius): ProcessingBuildActionResult
+}
+
+class ProcessingBuildInputActions {
+  +stitchSearchForNextTile(shouldParse, text, currentPercent): ProcessingIntegerInputResult
+  +prepareStitch(tiles, searchText): ProcessingBuildActionResult
+  +prepareEdf(stack, radiusText): ProcessingBuildActionResult
+}
+
+class ProcessingQueueActions {
+  +addStitchTile(tiles, frames, frame, searchText, currentPercent): ProcessingQueueActionResult
+  +addEdfFrame(stack, frames, frame): ProcessingQueueActionResult
+}
+
+class ProcessingStartActions {
+  +startStitch(state, retry, tiles, searchPercent, remember, beforeBegin): ProcessingStartActionResult
+  +startEdf(state, retry, stack, options, remember, beforeBegin): ProcessingStartActionResult
+}
+
+class ProcessingPanelActions {
+  +showEdfCompositeFrame(frames): ProcessingPanelActionResult
+  +showEdfFocusMap(frames): ProcessingPanelActionResult
+  +clear(state, stitchTiles, edfStack, retry, frames): ProcessingPanelActionResult
+}
+
+class ProcessingRetryActions {
+  +prepare(retry): ProcessingRetryActionResult
+}
+
+class ProcessingResultActions {
+  +applyPending(state, frames): ProcessingResultActionResult
+}
+
+class EdfResult {
+  +sourceStack: ImageStack
+  +compositeFrame: ImageFrame
+  +focusMap: ImageFrame
+}
+
+class ProcessingJob {
+  +id: string
+  +type: ProcessingJobType
+  +status: JobStatus
+  +progress: double
+  +cancelRequested: bool
+  +sourceRefs: vector<ImageFrameRef>
+  +resultRef: ImageFrameRef
+}
+
+class PseudoColorMapper {
+  +paletteOptions(): vector<PseudoColorPalette>
+  +paletteAtIndex(index): PseudoColorPalette
+  +map(frame, color, range): ImageFrame
+}
+
+class ChannelFusionEngine {
+  +fuse(recipe): ImageFrame
+}
+
+class ImageRegistration {
+  +estimateTranslation(reference, moving, searchX, searchY): TranslationOffset
+}
+
+class ImageStitcher {
+  +stitch(project): ImageFrame
+}
+
+class EdfProcessor {
+  +compose(stack): EdfResult
+}
+
+class ProcessingParameterRules {
+  +defaultStitchSearchPercent(): int
+  +clampStitchSearchPercent(percent): int
+  +clampEdfFocusRadius(radius): int
+  +normalizeEdfOptions(options): EdfOptions
+  +registrationSearchRadius(width, height, percent): StitchSearchRadius
+  +stitchOptimizationOptionsFor(tiles, percent): StitchOptimizationOptions
+}
+
+class StitchTilePlacementPlanner {
+  +placeNext(frame, existingTiles, searchPercent): StitchTilePlacementResult
+}
+
+ICameraDriver <|.. MUCamCameraDriver
+MainWindow --> ImageViewport
+MainWindow --> ControlIds
+MainWindow --> WindowLayout
+MainWindow --> WindowControlLayout
+MainWindow --> WindowControlDefinitions
+MainWindow --> MeasurementInteractionActions
+MainWindow --> MeasurementInteractionState
+MainWindow --> MeasurementHitTester
+MainWindow --> MeasurementEditSession
+MainWindow --> MeasurementListActions
+MainWindow --> MeasurementDisplayActions
+MainWindow --> MeasurementToolAvailability
+MainWindow --> MeasurementToolStartActions
+MainWindow --> DyeLibraryActions
+MainWindow --> DyeProfileFormPresenter
+MainWindow --> DyeProfileFormParser
+MainWindow --> FluorescenceDisplayActions
+MainWindow --> FluorescenceChannelFormPresenter
+MainWindow --> MeasurementNameFormatter
+MainWindow --> CameraController
+MainWindow --> ProjectSessionRestorer
+MainWindow --> ProjectActions
+MainWindow --> DiagnosticReportActions
+MainWindow --> ExportActions
+MainWindow --> FileDialog
+MainWindow --> TextInputParser
+MainWindow --> CameraPanelActions
+MainWindow --> ViewportInteractionActions
+MainWindow --> CameraDeviceListFormatter
+MainWindow --> CameraControlStatusFormatter
+MainWindow --> CameraTelemetryFormatter
+MainWindow --> DyeLibrary
+MainWindow --> FluorescenceChannelListActions
+MainWindow --> FluorescenceChannelUpdater
+MainWindow --> ProcessingParameterRules
+MainWindow --> ProcessingWorkerActions
+MainWindow --> PreviewDisplayActions
+MainWindow --> ProcessingResultFrames
+MainWindow --> ProcessingRetryState
+MainWindow --> ProcessingRetryActions
+MainWindow --> ProcessingResultActions
+MainWindow --> ProcessingBuildInputActions
+MainWindow --> ProcessingQueueActions
+MainWindow --> ProcessingStartActions
+MainWindow --> ProcessingPanelActions
+WindowControlLayout --> ControlIds
+WindowControlLayout --> WindowLayout
+WindowControlDefinitions --> ControlIds
+ViewportInteractionActions --> ImageViewport
+ImageViewport --> ViewTransform
+MeasurementActionApplier --> MeasurementInteractionState
+MeasurementActionApplier --> MeasurementCollection
+MeasurementActionApplier --> CalibrationProfile
+MeasurementInteractionActions --> MeasurementActionApplier
+MeasurementInteractionActions --> MeasurementInteractionState
+MeasurementInteractionActions --> MeasurementCollection
+MeasurementInteractionActions --> CalibrationProfile
+MeasurementHitTester --> ImageViewport
+MeasurementHitTester --> MeasurementCollection
+MeasurementEditSession --> MeasurementHitTester
+MeasurementEditSession --> MeasurementCollection
+MeasurementListActions --> MeasurementCollection
+MeasurementListActions --> MeasurementListSelection
+MeasurementDisplayActions --> MeasurementCollection
+MeasurementDisplayActions --> CalibrationProfile
+MeasurementDisplayActions --> MeasurementInteractionState
+MeasurementDisplayActions --> MeasurementFormatter
+MeasurementDisplayActions --> MeasurementListSelection
+MeasurementDisplayActions --> MeasurementOverlayModelBuilder
+MeasurementOverlayModelBuilder --> MeasurementCollection
+MeasurementOverlayModelBuilder --> MeasurementInteractionState
+MeasurementOverlayModelBuilder --> OverlayRenderer
+MeasurementToolAvailability --> ImageFrame
+MeasurementToolStartActions --> MeasurementToolAvailability
+MeasurementToolStartActions --> MeasurementInteractionState
+MeasurementToolStartActions --> CalibrationProfile
+DyeProfileFormParser --> TextInputParser
+DyeProfileFormParser --> DyeProfile
+DyeLibraryActions --> DyeProfileFormParser
+DyeLibraryActions --> DyeLibrary
+DyeLibraryActions --> DyeProfile
+DyeProfileFormPresenter --> DyeProfile
+FluorescenceDisplayActions --> DyeLibrary
+FluorescenceDisplayActions --> DyeProfile
+FluorescenceDisplayActions --> FluorescenceChannel
+FluorescenceDisplayActions --> FluorescenceFormatter
+FluorescenceDisplayActions --> FluorescenceChannelSettings
+FluorescenceChannelFormPresenter --> FluorescenceChannel
+CameraController --> ICameraDriver
+CameraPanelActions --> CameraDeviceListFormatter
+CameraPanelActions --> CameraControlStatusFormatter
+CameraPanelActions --> TextInputParser
+CameraDeviceListFormatter --> CameraDevice
+ObservationSession --> CameraController
+ObservationSession --> CalibrationProfile
+ObservationSession --> MeasurementEntity
+ObservationSession --> FluorescenceChannel
+ObservationSession --> ImageProcessingService
+MeasurementController --> MeasurementEntity
+MeasurementController --> MeasurementCollection
+MeasurementFormatter --> MeasurementCollection
+MeasurementFormatter --> MeasurementResult
+MeasurementNameFormatter --> MeasurementCollection
+MeasurementEntity <|-- LineMeasurement
+MeasurementEntity <|-- AngleMeasurement
+MeasurementEntity <|-- AreaMeasurement
+ProjectDocument --> CalibrationProfile
+ProjectDocument --> MeasurementEntity
+ProjectDocument --> FluorescenceChannel
+ProjectDocument --> ChannelFusionRecipe
+ProjectDocument --> DyeProfile
+ProjectDocument --> ProcessingJob
+ProjectSessionMapper --> ProjectDocument
+ProjectSessionMapper --> MeasurementCollection
+ProjectSessionMapper --> FluorescenceChannel
+ProjectSessionMapper --> DyeProfile
+ProjectSessionMapper --> ProcessingParameterRules
+ProjectSessionRestorer --> ProjectSessionMapper
+ProjectSessionRestorer --> ProcessingResultFrames
+ProjectSessionRestorer --> ProcessingRetryState
+ProjectActions --> ProjectRepository
+ProjectActions --> ProjectSessionMapper
+ProjectActions --> ProjectSessionState
+ProjectActions --> MeasurementCollection
+ProjectActions --> CalibrationProfile
+ProjectActions --> FluorescenceChannel
+ProjectActions --> DyeProfile
+ImageProcessingService --> PreviewFrameComposer
+PreviewDisplayActions --> PreviewFrameComposer
+PreviewDisplayActions --> PseudoColorMapper
+PreviewDisplayActions --> ProcessingResultFrames
+PreviewDisplayActions --> FluorescenceChannel
+PreviewFrameComposer --> PseudoColorMapper
+PreviewFrameComposer --> ChannelFusionEngine
+ImageProcessingService --> ProcessingParameterRules
+FluorescenceFormatter --> DyeProfile
+FluorescenceFormatter --> FluorescenceChannel
+ImageProcessingService --> ChannelFusionService
+ImageProcessingService --> ProcessingQueue
+ChannelFusionService --> ChannelFusionEngine
+ChannelFusionService --> FluorescenceChannel
+ChannelFusionRecipe --> FluorescenceChannel
+DyeLibraryService --> DyeLibrary
+DyeLibrary --> DyeProfile
+FluorescenceChannelFactory --> DyeProfile
+FluorescenceChannelFactory --> FluorescenceChannel
+FluorescenceChannelFactory --> FluorescenceChannelSettings
+FluorescenceChannelFactory --> FluorescenceFormatter
+FluorescenceChannelListActions --> FluorescenceChannelFactory
+FluorescenceChannelListActions --> FluorescenceChannel
+FluorescenceChannelListActions --> DyeProfile
+FluorescenceChannelSettings --> FluorescenceChannel
+FluorescenceChannelUpdater --> FluorescenceChannelSettings
+FluorescenceChannelUpdater --> FluorescenceChannel
+DyeLibraryService --> DyeProfile
+FluorescenceChannel --> DyeProfile
+StitchingService --> StitchingProject
+StitchingService --> StitchTilePlacementPlanner
+StitchingService --> ImageStitcher
+StitchingService --> ProcessingJob
+StitchTileListActions --> StitchTilePlacementPlanner
+StitchTileListActions --> StitchTile
+StitchTileListActions --> ImageFrame
+EdfStackListActions --> ImageFrame
+ProcessingBuildInputActions --> ProcessingBuildActions
+ProcessingBuildInputActions --> ProcessingParameterRules
+ProcessingBuildInputActions --> TextInputParser
+ProcessingQueueActions --> ProcessingBuildInputActions
+ProcessingQueueActions --> StitchTileListActions
+ProcessingQueueActions --> EdfStackListActions
+ProcessingQueueActions --> ProcessingResultFrames
+ProcessingBuildActions --> StitchTile
+ProcessingBuildActions --> ImageFrame
+ProcessingBuildActions --> ProcessingJob
+ProcessingBuildActions --> ImageStitcher
+ProcessingBuildActions --> EdfProcessor
+ProcessingStartActions --> ProcessingJobState
+ProcessingStartActions --> ProcessingRetryState
+ProcessingStartActions --> ProcessingStatusFormatter
+ProcessingStartActions --> StitchTile
+ProcessingStartActions --> ImageFrame
+ProcessingStartActions --> ImageStitcher
+ProcessingStartActions --> EdfProcessor
+ProcessingProgressActions --> ProcessingProgressThrottle
+ProcessingProgressActions --> ProcessingStatusFormatter
+ProcessingProgressActions --> ProcessingJob
+ProcessingWorkerActions --> ProcessingJobState
+ProcessingWorkerActions --> ProcessingJobExecutor
+ProcessingWorkerActions --> ProcessingProgressActions
+ProcessingWorkerActions --> ProcessingJob
+ProcessingWorkerActions --> StitchTile
+ProcessingWorkerActions --> ImageFrame
+ProcessingWorkerActions --> ImageStitcher
+ProcessingWorkerActions --> EdfProcessor
+StitchTilePlacementPlanner --> ImageRegistration
+StitchTilePlacementPlanner --> ProcessingParameterRules
+StitchTilePlacementPlanner --> StitchTile
+ImageStitcher --> StitchTile
+EdfService --> ImageStack
+EdfService --> EdfProcessor
+EdfService --> EdfResult
+EdfService --> ProcessingJob
+ProcessingParameterRules --> EdfProcessor
+ProcessingParameterRules --> ImageStitcher
+ProcessingQueue --> ProcessingJobState
+ProcessingJobExecutor --> ImageStitcher
+ProcessingJobExecutor --> EdfProcessor
+ProcessingJobExecutor --> ProcessingParameterRules
+ProcessingJobExecutor --> ProcessingStatusFormatter
+ProcessingJobExecutor --> ProcessingJob
+ProcessingPanelActions --> ProcessingJobState
+ProcessingPanelActions --> ProcessingRetryState
+ProcessingPanelActions --> ProcessingResultFrames
+ProcessingRetryActions --> ProcessingRetryState
+ProcessingRetryActions --> ProcessingStatusFormatter
+ProcessingResultActions --> ProcessingJobState
+ProcessingResultActions --> ProcessingResultFrames
+ProcessingJobState --> ProcessingJob
+ProcessingResultFrames --> ProcessingJobState
+ProcessingResultFrames --> ImageFrame
+ProcessingRetryState --> ProcessingJobState
+ProcessingRetryState --> ImageFrame
+ProcessingStatusFormatter --> ProcessingJob
+ExportService --> ProjectActions
+ExportService --> DiagnosticReportActions
+ExportService --> ExportActions
+ExportActions --> MeasurementCsvExporter
+ExportActions --> ImageExporter
+ExportActions --> MeasurementCollection
+ExportActions --> ImageFrame
+ExportActions --> CalibrationProfile
+DiagnosticReportActions --> DiagnosticReportBuilder
+DiagnosticReportActions --> DiagnosticReportInput
+DiagnosticReportActions --> MeasurementCollection
+DiagnosticReportActions --> ImageFrame
+DiagnosticReportActions --> CalibrationProfile
+DiagnosticReportBuilder --> DiagnosticReportInput
+DiagnosticReportInput --> DiagnosticImageProcessingSummary
+DiagnosticReportInput --> CameraDevice
+DiagnosticReportBuilder --> ImageFrame
+DiagnosticReportBuilder --> CalibrationProfile
+EdfResult --> ImageStack
+
+@enduml

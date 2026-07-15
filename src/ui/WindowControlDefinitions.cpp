@@ -1,0 +1,121 @@
+#include "WindowControlDefinitions.h"
+
+#include "ControlIds.h"
+
+#include <algorithm>
+
+namespace {
+
+constexpr DWORD kStaticStyle = WS_CHILD | WS_VISIBLE;
+constexpr DWORD kButtonStyle = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON;
+constexpr DWORD kEditStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL;
+constexpr DWORD kNumberEditStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL;
+constexpr DWORD kComboStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL;
+constexpr DWORD kCheckboxStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX;
+constexpr DWORD kListStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
+
+} // namespace
+
+const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
+{
+    static const std::vector<WindowControlDefinition> definitions = {
+        {kIdDeviceLabel, L"STATIC", L"Device", kStaticStyle},
+        {kIdDeviceCombo, L"COMBOBOX", nullptr, kComboStyle},
+        {kIdRefreshDevices, L"BUTTON", L"Refresh", kButtonStyle},
+        {kIdOpen, L"BUTTON", L"Open", kButtonStyle},
+        {kIdStop, L"BUTTON", L"Stop", kButtonStyle},
+        {kIdFitView, L"BUTTON", L"Fit", kButtonStyle},
+        {kIdExposureLabel, L"STATIC", L"Exposure", kStaticStyle},
+        {kIdExposureEdit, L"EDIT", L"10", kEditStyle},
+        {kIdExposureApply, L"BUTTON", L"Apply", kButtonStyle},
+        {kIdCalibrationLengthLabel, L"STATIC", L"Scale length", kStaticStyle},
+        {kIdCalibrationLengthEdit, L"EDIT", L"100", kEditStyle},
+        {kIdCalibrationUnitCombo, L"COMBOBOX", nullptr, kComboStyle},
+        {kIdCalibrate, L"BUTTON", L"Calibrate", kButtonStyle},
+        {kIdLengthTool, L"BUTTON", L"Length", kButtonStyle},
+        {kIdAngleTool, L"BUTTON", L"Angle", kButtonStyle},
+        {kIdRectangleAreaTool, L"BUTTON", L"Area", kButtonStyle},
+        {kIdPolygonAreaTool, L"BUTTON", L"Poly Area", kButtonStyle},
+        {kIdFinishPolygonArea, L"BUTTON", L"Finish Poly", kButtonStyle},
+        {kIdDeleteMeasurement, L"BUTTON", L"Delete Selected", kButtonStyle},
+        {kIdClearMeasurements, L"BUTTON", L"Clear", kButtonStyle},
+        {kIdExportCsv, L"BUTTON", L"Export CSV", kButtonStyle},
+        {kIdExportImage, L"BUTTON", L"Export Image", kButtonStyle},
+        {kIdOpenImage, L"BUTTON", L"Open Image", kButtonStyle},
+        {kIdSaveDiagnostics, L"BUTTON", L"Save Diagnostic", kButtonStyle},
+        {kIdOpenProject, L"BUTTON", L"Open Project", kButtonStyle},
+        {kIdSaveProject, L"BUTTON", L"Save Project", kButtonStyle},
+        {kIdCameraPanelCard, L"BUTTON", L"Camera", kButtonStyle},
+        {kIdImagePanelCard, L"BUTTON", L"Image", kButtonStyle},
+        {kIdFluorescencePanelCard, L"BUTTON", L"Fluorescence", kButtonStyle},
+        {kIdProcessingPanelCard, L"BUTTON", L"Processing", kButtonStyle},
+        {kIdMeasurementPanelCard, L"BUTTON", L"Measurement", kButtonStyle},
+        {kIdProjectPanelCard, L"BUTTON", L"Project", kButtonStyle},
+        {kIdAutoExposure, L"BUTTON", L"Auto Exposure", kButtonStyle},
+        {kIdCameraExposureLabel, L"STATIC", L"Exposure", kStaticStyle},
+        {kIdCameraExposureEdit, L"EDIT", L"10", kEditStyle},
+        {kIdCameraExposureApply, L"BUTTON", L"Apply", kButtonStyle},
+        {kIdCameraGainLabel, L"STATIC", L"Gain", kStaticStyle},
+        {kIdCameraGainEdit, L"EDIT", L"1.0", kEditStyle},
+        {kIdCameraGainApply, L"BUTTON", L"Apply", kButtonStyle},
+        {kIdWhiteBalance, L"BUTTON", L"White Balance", kButtonStyle},
+        {kIdPseudoColorLabel, L"STATIC", L"Pseudo color", kStaticStyle},
+        {kIdPseudoColorCombo, L"COMBOBOX", nullptr, kComboStyle},
+        {kIdDyeLabel, L"STATIC", L"Dye", kStaticStyle},
+        {kIdDyeCombo, L"COMBOBOX", nullptr, kComboStyle},
+        {kIdDyeNameLabel, L"STATIC", L"Name", kStaticStyle},
+        {kIdDyeNameEdit, L"EDIT", nullptr, kEditStyle},
+        {kIdDyeExcitationLabel, L"STATIC", L"Ex", kStaticStyle},
+        {kIdDyeExcitationEdit, L"EDIT", nullptr, kEditStyle},
+        {kIdDyeEmissionLabel, L"STATIC", L"Em", kStaticStyle},
+        {kIdDyeEmissionEdit, L"EDIT", nullptr, kEditStyle},
+        {kIdDyeRedLabel, L"STATIC", L"R", kStaticStyle},
+        {kIdDyeRedEdit, L"EDIT", nullptr, kNumberEditStyle},
+        {kIdDyeGreenLabel, L"STATIC", L"G", kStaticStyle},
+        {kIdDyeGreenEdit, L"EDIT", nullptr, kNumberEditStyle},
+        {kIdDyeBlueLabel, L"STATIC", L"B", kStaticStyle},
+        {kIdDyeBlueEdit, L"EDIT", nullptr, kNumberEditStyle},
+        {kIdSaveDye, L"BUTTON", L"Save Dye", kButtonStyle},
+        {kIdDeleteDye, L"BUTTON", L"Delete Dye", kButtonStyle},
+        {kIdAddChannel, L"BUTTON", L"Add Channel", kButtonStyle},
+        {kIdFusionPreview, L"BUTTON", L"Fusion Preview", kCheckboxStyle},
+        {kIdClearChannels, L"BUTTON", L"Clear Channels", kButtonStyle},
+        {kIdChannelLabel, L"STATIC", L"Channels", kStaticStyle},
+        {kIdChannelList, L"LISTBOX", nullptr, kListStyle},
+        {kIdChannelVisible, L"BUTTON", L"Visible", kCheckboxStyle},
+        {kIdChannelBlackLabel, L"STATIC", L"Black", kStaticStyle},
+        {kIdChannelBlackEdit, L"EDIT", L"0", kNumberEditStyle},
+        {kIdChannelWhiteLabel, L"STATIC", L"White", kStaticStyle},
+        {kIdChannelWhiteEdit, L"EDIT", L"255", kNumberEditStyle},
+        {kIdApplyChannel, L"BUTTON", L"Apply Channel", kButtonStyle},
+        {kIdStitchSearchLabel, L"STATIC", L"Stitch search %", kStaticStyle},
+        {kIdStitchSearchEdit, L"EDIT", L"50", kNumberEditStyle},
+        {kIdAddStitchTile, L"BUTTON", L"Add Tile", kButtonStyle},
+        {kIdBuildStitch, L"BUTTON", L"Stitch", kButtonStyle},
+        {kIdEdfRadiusLabel, L"STATIC", L"EDF radius", kStaticStyle},
+        {kIdEdfRadiusEdit, L"EDIT", L"1", kNumberEditStyle},
+        {kIdAddEdfFrame, L"BUTTON", L"Add EDF", kButtonStyle},
+        {kIdBuildEdf, L"BUTTON", L"EDF", kButtonStyle},
+        {kIdShowEdfComposite, L"BUTTON", L"EDF Image", kButtonStyle},
+        {kIdShowEdfFocusMap, L"BUTTON", L"Focus Map", kButtonStyle},
+        {kIdRetryProcessing, L"BUTTON", L"Retry", kButtonStyle},
+        {kIdClearProcessing, L"BUTTON", L"Clear Processing", kButtonStyle},
+        {kIdMeasurementNameEdit, L"EDIT", nullptr, kEditStyle},
+        {kIdRenameMeasurement, L"BUTTON", L"Rename", kButtonStyle},
+        {kIdResultsLabel, L"STATIC", L"Measurements", kStaticStyle},
+        {kIdResultsList, L"LISTBOX", nullptr, kListStyle}
+    };
+    return definitions;
+}
+
+const WindowControlDefinition* WindowControlDefinitions::Find(int control_id)
+{
+    const std::vector<WindowControlDefinition>& definitions = All();
+    const auto found = std::find_if(
+        definitions.begin(),
+        definitions.end(),
+        [&](const WindowControlDefinition& definition) {
+            return definition.control_id == control_id;
+        });
+    return found == definitions.end() ? nullptr : &*found;
+}

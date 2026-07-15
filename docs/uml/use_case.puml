@@ -1,0 +1,51 @@
+@startuml
+title 显微观察与测量软件 - 用例图
+
+left to right direction
+
+actor "操作者" as Operator
+actor "MUCam SDK" as SDK
+actor "文件系统" as FileSystem
+
+rectangle "显微观察与测量软件" {
+  usecase "枚举并选择相机" as UC_SelectCamera
+  usecase "实时观察" as UC_LiveView
+  usecase "设置曝光" as UC_Exposure
+  usecase "图像缩放/平移" as UC_ViewTransform
+  usecase "标定比例尺" as UC_Calibrate
+  usecase "创建测量" as UC_CreateMeasurement
+  usecase "编辑/删除测量" as UC_EditMeasurement
+  usecase "图像伪彩" as UC_PseudoColor
+  usecase "荧光通道融合" as UC_ChannelFusion
+  usecase "荧光染料管理" as UC_DyeManagement
+  usecase "图像拼接" as UC_Stitching
+  usecase "EDF 景深扩展" as UC_Edf
+  usecase "保存项目" as UC_SaveProject
+  usecase "导出结果" as UC_Export
+}
+
+Operator --> UC_SelectCamera
+Operator --> UC_LiveView
+Operator --> UC_Exposure
+Operator --> UC_ViewTransform
+Operator --> UC_Calibrate
+Operator --> UC_CreateMeasurement
+Operator --> UC_EditMeasurement
+Operator --> UC_PseudoColor
+Operator --> UC_ChannelFusion
+Operator --> UC_DyeManagement
+Operator --> UC_Stitching
+Operator --> UC_Edf
+Operator --> UC_SaveProject
+Operator --> UC_Export
+
+UC_SelectCamera --> SDK
+UC_LiveView --> SDK
+UC_Exposure --> SDK
+UC_DyeManagement --> FileSystem
+UC_Stitching --> FileSystem
+UC_Edf --> FileSystem
+UC_SaveProject --> FileSystem
+UC_Export --> FileSystem
+
+@enduml

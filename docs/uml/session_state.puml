@@ -1,0 +1,19 @@
+@startuml
+title 观察会话状态图
+
+[*] --> Idle
+Idle --> DeviceEnumerated: refresh devices
+DeviceEnumerated --> Previewing: open device
+Previewing --> Paused: stop preview
+Paused --> Previewing: open/start
+Previewing --> Measuring: begin measurement
+Measuring --> Previewing: finish/cancel measurement
+Previewing --> Calibrating: begin calibration
+Calibrating --> Previewing: apply/cancel calibration
+Previewing --> Error: camera disconnected / frame failure
+Error --> DeviceEnumerated: refresh devices
+Paused --> Idle: close session
+Previewing --> Idle: close session
+
+@enduml
+

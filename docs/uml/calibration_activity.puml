@@ -1,0 +1,29 @@
+@startuml
+title 两点标定 - 活动图
+
+start
+:进入标定工具;
+:显示当前实时图像;
+:选择第一点;
+:选择第二点;
+if (两点有效?) then (是)
+  :输入真实长度;
+  :选择单位;
+  if (长度和单位有效?) then (是)
+    :计算 pixels distance;
+    :计算 microns-per-pixel;
+    :生成 CalibrationProfile;
+    :应用到 ObservationSession;
+    :重新计算已有测量结果;
+    stop
+  else (否)
+    :提示输入无效;
+    :返回输入;
+  endif
+else (否)
+  :提示重新选择点;
+  :返回选点;
+endif
+
+@enduml
+

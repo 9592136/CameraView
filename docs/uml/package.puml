@@ -1,0 +1,149 @@
+@startuml
+title 显微观察与测量软件 - 包图
+
+skinparam packageStyle rectangle
+
+package "ui" as UI {
+  [MainWindow]
+  [ControlIds]
+  [WindowLayout]
+  [WindowControlLayout]
+  [WindowControlDefinitions]
+  [CameraPanelActions]
+  [MeasurementActionApplier]
+  [MeasurementDisplayActions]
+  [MeasurementInteractionActions]
+  [MeasurementInteractionState]
+  [MeasurementHitTester]
+  [MeasurementEditSession]
+  [MeasurementListActions]
+  [MeasurementListSelection]
+  [MeasurementOverlayModelBuilder]
+  [MeasurementToolAvailability]
+  [MeasurementToolStartActions]
+  [DyeLibraryActions]
+  [DyeProfileFormPresenter]
+  [DyeProfileFormParser]
+  [FluorescenceDisplayActions]
+  [FluorescenceChannelFormPresenter]
+  [ProcessingBuildInputActions]
+  [ProcessingQueueActions]
+  [ImageViewport]
+  [CameraPanel]
+  [MeasurementPanel]
+  [CalibrationDialog]
+  [ChannelPanel]
+  [ProcessingPanel]
+  [StitchingPanel]
+  [EdfPanel]
+}
+
+package "app" as APP {
+  [ObservationSession]
+  [CameraController]
+  [MeasurementController]
+  [CalibrationService]
+  [ImageProcessingService]
+  [ChannelFusionService]
+  [DyeLibraryService]
+  [StitchingService]
+  [EdfService]
+  [ProcessingQueue]
+  [ExportService]
+  [DiagnosticReportActions]
+  [ExportActions]
+  [ProjectActions]
+  [ProjectSessionRestorer]
+}
+
+package "domain" as DOMAIN {
+  [ImageFrame]
+  [ImageStack]
+  [FluorescenceChannel]
+  [DyeProfile]
+  [ChannelFusionRecipe]
+  [CalibrationProfile]
+  [MeasurementEntity]
+  [MeasurementCollection]
+  [MeasurementResult]
+  [MeasurementFormatter]
+  [MeasurementNameFormatter]
+  [StitchingProject]
+  [EdfResult]
+  [ProcessingJob]
+  [ProjectDocument]
+}
+
+package "camera" as CAMERA {
+  [ICameraDriver]
+  [MUCamCameraDriver]
+  [CameraDevice]
+  [CameraControlStatusFormatter]
+  [CameraTelemetryFormatter]
+  [FrameBuffer]
+}
+
+package "imaging" as IMAGING {
+  [ImageConverter]
+  [ViewTransform]
+  [ViewportInteractionActions]
+  [OverlayRenderer]
+  [PreviewDisplayActions]
+  [PreviewFrameComposer]
+  [PseudoColorMapper]
+  [DyeLibrary]
+  [FluorescenceChannelFactory]
+  [FluorescenceChannelListActions]
+  [FluorescenceChannelSettings]
+  [FluorescenceChannelUpdater]
+  [FluorescenceFormatter]
+  [ChannelFusionEngine]
+  [ImageRegistration]
+  [ImageStitcher]
+  [StitchTileListActions]
+  [StitchTilePlacementPlanner]
+  [EdfStackListActions]
+  [ProcessingBuildActions]
+  [ProcessingStartActions]
+  [EdfProcessor]
+  [ProcessingPanelActions]
+  [ProcessingRetryActions]
+  [ProcessingResultActions]
+  [ProcessingParameterRules]
+  [ProcessingProgressActions]
+  [ProcessingWorkerActions]
+  [ProcessingProgressThrottle]
+  [ProcessingJobExecutor]
+  [ProcessingJobState]
+  [ProcessingResultFrames]
+  [ProcessingRetryState]
+  [ProcessingStatusFormatter]
+}
+
+package "storage" as STORAGE {
+  [DyeRepository]
+  [ProjectRepository]
+  [ProjectSessionMapper]
+  [MeasurementCsvExporter]
+  [DiagnosticReportBuilder]
+  [ImageExporter]
+}
+
+package "platform" as PLATFORM {
+  [Win32Helpers]
+  [FileDialog]
+  [TextInputParser]
+}
+
+UI ..> APP
+UI ..> IMAGING
+UI ..> PLATFORM
+APP ..> DOMAIN
+APP ..> CAMERA
+APP ..> IMAGING
+APP ..> STORAGE
+CAMERA ..> DOMAIN
+IMAGING ..> DOMAIN
+STORAGE ..> DOMAIN
+
+@enduml

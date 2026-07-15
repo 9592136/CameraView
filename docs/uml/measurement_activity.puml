@@ -1,0 +1,31 @@
+@startuml
+title 创建测量对象 - 活动图
+
+start
+:选择测量工具;
+:等待图像点击;
+repeat
+  :鼠标屏幕坐标;
+  :ViewTransform 转换为图像坐标;
+  :追加测量点;
+repeat while (点数不足或继续添加?) is (是)
+
+if (测量点有效?) then (是)
+  :创建 MeasurementEntity;
+  if (存在有效标定?) then (是)
+    :按 CalibrationProfile 计算真实单位结果;
+  else (否)
+    :保存像素单位结果;
+  endif
+  :加入 ObservationSession;
+  :刷新叠加图层;
+  :刷新测量结果列表;
+  stop
+else (否)
+  :丢弃临时测量;
+  :提示重新测量;
+  stop
+endif
+
+@enduml
+
