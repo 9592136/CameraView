@@ -4463,6 +4463,46 @@ int main()
     }
     std::filesystem::remove(action_scale_png_path);
 
+    const std::filesystem::path action_label_png_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsMeasurementLabel.png";
+    std::filesystem::remove(action_label_png_path);
+    MeasurementCollection label_export_measurements;
+    label_export_measurements.AddLength(
+        L"Export Label",
+        ImagePoint{60.0, 70.0},
+        ImagePoint{260.0, 70.0});
+    const ExportActionResult label_export =
+        ExportActions::SaveImage(
+            action_label_png_path,
+            scale_export_image,
+            label_export_measurements,
+            L"",
+            &scale_export_calibration);
+    ImageFrame exported_measurement_label;
+    if (!label_export.saved ||
+        !ImageExporter::LoadRasterImage(action_label_png_path, exported_measurement_label, load_error)) {
+        std::filesystem::remove(action_label_png_path);
+        return Fail("ExportActions did not save a measurement label export image.");
+    }
+    int label_pixels = 0;
+    for (int y = 52; y < 82; ++y) {
+        const unsigned char* row = exported_measurement_label.bgr.data() +
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(exported_measurement_label.stride);
+        for (int x = 166; x < 416; ++x) {
+            const unsigned char blue = row[x * 3 + 0];
+            const unsigned char green = row[x * 3 + 1];
+            const unsigned char red = row[x * 3 + 2];
+            if (blue > 120 && green > 170 && red > 200) {
+                ++label_pixels;
+            }
+        }
+    }
+    if (label_pixels == 0) {
+        std::filesystem::remove(action_label_png_path);
+        return Fail("Image export did not draw measurement value labels.");
+    }
+    std::filesystem::remove(action_label_png_path);
+
     const std::filesystem::path action_gif_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.gif";
     const ExportActionResult unsupported_image_export =

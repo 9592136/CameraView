@@ -201,15 +201,72 @@ void DrawMeasurements(
     }
 }
 
-void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibration)
+RECT FittedTextRect(RECT rect, int frame_width, int frame_height)
 {
-    if (!calibration || !calibration->IsCalibrated()) {
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+    if (width > frame_width) {
+        width = frame_width;
+    }
+    if (height > frame_height) {
+        height = frame_height;
+    }
+
+    const int fitted_left = std::clamp(
+        static_cast<int>(rect.left),
+        0,
+        std::max(0, frame_width - width));
+    const int fitted_top = std::clamp(
+        static_cast<int>(rect.top),
+        0,
+        std::max(0, frame_height - height));
+    rect.left = fitted_left;
+    rect.top = fitted_top;
+    rect.right = std::min(frame_width, fitted_left + width);
+    rect.bottom = std::min(frame_height, fitted_top + height);
+    return rect;
+}
+
+void DrawShadowedText(HDC hdc, const std::wstring& text, RECT rect, UINT format, COLORREF color)
+{
+    RECT shadow_rect = rect;
+    OffsetRect(&shadow_rect, 1, 1);
+    SetTextColor(hdc, RGB(0, 0, 0));
+    DrawTextW(hdc, text.c_str(), -1, &shadow_rect, format);
+    SetTextColor(hdc, color);
+    DrawTextW(hdc, text.c_str(), -1, &rect, format);
+}
+
+void DrawTextOverlays(
+    ImageFrame& output_frame,
+    const std::vector<LengthMeasurement>& length_measurements,
+    const std::vector<AngleMeasurement>& angle_measurements,
+    const std::vector<RectangleAreaMeasurement>& rectangle_measurements,
+    const std::vector<PolygonAreaMeasurement>& polygon_measurements,
+    const CalibrationProfile* calibration)
+{
+    if (output_frame.width <= 0 ||
+        output_frame.height <= 0 ||
+        output_frame.bgr.empty() ||
+        output_frame.bgr.size() > static_cast<std::size_t>(0xFFFFFFFFU)) {
         return;
     }
 
-    const ScaleBarOverlay overlay =
-        OverlayRenderer::BuildScaleBarOverlay(*calibration, output_frame.width, 1.0);
-    if (!overlay.visible || output_frame.width <= 0 || output_frame.height <= 0) {
+    const CalibrationProfile fallback_calibration = CalibrationProfile::Uncalibrated();
+    const CalibrationProfile& active_calibration =
+        calibration ? *calibration : fallback_calibration;
+    const MeasurementUnit display_unit =
+        active_calibration.IsCalibrated() ? MeasurementUnit::Micrometers : MeasurementUnit::Pixels;
+    const bool has_measurement_labels =
+        !length_measurements.empty() ||
+        !angle_measurements.empty() ||
+        !rectangle_measurements.empty() ||
+        !polygon_measurements.empty();
+    const ScaleBarOverlay scale_overlay = OverlayRenderer::BuildScaleBarOverlay(
+        active_calibration,
+        output_frame.width,
+        1.0);
+    if (!has_measurement_labels && !scale_overlay.visible) {
         return;
     }
 
@@ -220,8 +277,7 @@ void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibratio
     bitmap_info.bmiHeader.biPlanes = 1;
     bitmap_info.bmiHeader.biBitCount = 24;
     bitmap_info.bmiHeader.biCompression = BI_RGB;
-    bitmap_info.bmiHeader.biSizeImage =
-        static_cast<DWORD>(output_frame.stride * output_frame.height);
+    bitmap_info.bmiHeader.biSizeImage = static_cast<DWORD>(output_frame.bgr.size());
 
     HDC screen_dc = GetDC(nullptr);
     if (!screen_dc) {
@@ -253,34 +309,89 @@ void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibratio
         static_cast<unsigned char*>(bitmap_bits));
 
     HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
+    SetBkMode(memory_dc, TRANSPARENT);
+
+    const int font_height = std::clamp(output_frame.height / 20, 14, 26);
+    const int label_width = std::clamp(output_frame.width / 2, 120, 320);
+    const int label_height = font_height + 8;
+    HFONT font = CreateFontW(
+        font_height,
+        0,
+        0,
+        0,
+        FW_SEMIBOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS,
+        L"Segoe UI");
+    HGDIOBJ old_font = font ? SelectObject(memory_dc, font) : nullptr;
+
+    auto draw_measurement_label = [&](const std::wstring& text, int left, int top) {
+        RECT rect{left, top, left + label_width, top + label_height};
+        rect = FittedTextRect(rect, output_frame.width, output_frame.height);
+        DrawShadowedText(
+            memory_dc,
+            text,
+            rect,
+            DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS,
+            RGB(255, 234, 158));
+    };
+
+    for (const LengthMeasurement& measurement : length_measurements) {
+        const ImagePoint first = measurement.First();
+        const ImagePoint second = measurement.Second();
+        draw_measurement_label(
+            OverlayRenderer::FormatLine(measurement, active_calibration, display_unit),
+            static_cast<int>(std::round((first.x + second.x) / 2.0)) + 6,
+            static_cast<int>(std::round((first.y + second.y) / 2.0)) - font_height - 2);
+    }
+    for (const AngleMeasurement& measurement : angle_measurements) {
+        const ImagePoint vertex = measurement.Vertex();
+        draw_measurement_label(
+            OverlayRenderer::FormatLine(measurement),
+            static_cast<int>(std::round(vertex.x)) + 8,
+            static_cast<int>(std::round(vertex.y)) - font_height - 2);
+    }
+    for (const RectangleAreaMeasurement& measurement : rectangle_measurements) {
+        const ImagePoint first = measurement.First();
+        const ImagePoint second = measurement.Second();
+        draw_measurement_label(
+            OverlayRenderer::FormatLine(measurement, active_calibration, display_unit),
+            static_cast<int>(std::round((first.x + second.x) / 2.0)) + 6,
+            static_cast<int>(std::round((first.y + second.y) / 2.0)) - font_height - 2);
+    }
+    for (const PolygonAreaMeasurement& measurement : polygon_measurements) {
+        const std::vector<ImagePoint>& points = measurement.Points();
+        if (points.empty()) {
+            continue;
+        }
+
+        double sum_x = 0.0;
+        double sum_y = 0.0;
+        for (const ImagePoint& point : points) {
+            sum_x += point.x;
+            sum_y += point.y;
+        }
+        draw_measurement_label(
+            OverlayRenderer::FormatLine(measurement, active_calibration, display_unit),
+            static_cast<int>(std::round(sum_x / static_cast<double>(points.size()))) + 6,
+            static_cast<int>(std::round(sum_y / static_cast<double>(points.size()))) - font_height - 2);
+    }
+
     const int margin = std::clamp(std::min(output_frame.width, output_frame.height) / 8, 12, 24);
     const int tick = std::clamp(output_frame.height / 32, 5, 9);
     const int x1 = output_frame.width - margin;
-    const int x0 = x1 - overlay.screen_length;
+    const int x0 = x1 - scale_overlay.screen_length;
     const int y = output_frame.height - margin;
-    if (x0 >= margin && y > tick) {
-        const int font_height = std::clamp(output_frame.height / 20, 14, 26);
+    if (scale_overlay.visible && x0 >= margin && y > tick) {
         HPEN shadow_pen = CreatePen(PS_SOLID, 6, RGB(0, 0, 0));
         HPEN bar_pen = CreatePen(PS_SOLID, 3, RGB(255, 255, 255));
-        HFONT font = CreateFontW(
-            font_height,
-            0,
-            0,
-            0,
-            FW_SEMIBOLD,
-            FALSE,
-            FALSE,
-            FALSE,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_SWISS,
-            L"Segoe UI");
-
         HGDIOBJ old_pen = shadow_pen ? SelectObject(memory_dc, shadow_pen) : nullptr;
-        HGDIOBJ old_font = font ? SelectObject(memory_dc, font) : nullptr;
-        SetBkMode(memory_dc, TRANSPARENT);
         MoveToEx(memory_dc, x0, y, nullptr);
         LineTo(memory_dc, x1, y);
         MoveToEx(memory_dc, x0, y - tick, nullptr);
@@ -299,21 +410,16 @@ void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibratio
         LineTo(memory_dc, x1, y + tick);
 
         RECT label_rect{x0 - 40, y - font_height - 10, x1 + 2, y - 8};
-        RECT shadow_rect = label_rect;
-        OffsetRect(&shadow_rect, 1, 1);
-        SetTextColor(memory_dc, RGB(0, 0, 0));
-        DrawTextW(memory_dc, overlay.label.c_str(), -1, &shadow_rect, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SetTextColor(memory_dc, RGB(255, 255, 255));
-        DrawTextW(memory_dc, overlay.label.c_str(), -1, &label_rect, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        label_rect = FittedTextRect(label_rect, output_frame.width, output_frame.height);
+        DrawShadowedText(
+            memory_dc,
+            scale_overlay.label,
+            label_rect,
+            DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS,
+            RGB(255, 255, 255));
 
-        if (old_font) {
-            SelectObject(memory_dc, old_font);
-        }
         if (old_pen) {
             SelectObject(memory_dc, old_pen);
-        }
-        if (font) {
-            DeleteObject(font);
         }
         if (bar_pen) {
             DeleteObject(bar_pen);
@@ -321,6 +427,13 @@ void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibratio
         if (shadow_pen) {
             DeleteObject(shadow_pen);
         }
+    }
+
+    if (old_font) {
+        SelectObject(memory_dc, old_font);
+    }
+    if (font) {
+        DeleteObject(font);
     }
 
     GdiFlush();
@@ -766,7 +879,13 @@ bool ImageExporter::SaveRasterImage(
         angle_measurements,
         rectangle_measurements,
         polygon_measurements);
-    DrawScaleBar(output_frame, calibration);
+    DrawTextOverlays(
+        output_frame,
+        length_measurements,
+        angle_measurements,
+        rectangle_measurements,
+        polygon_measurements,
+        calibration);
     return SaveWicImage(path, output_frame, *container_format, error);
 }
 
@@ -943,7 +1062,13 @@ bool ImageExporter::SaveBmp(
         angle_measurements,
         rectangle_measurements,
         polygon_measurements);
-    DrawScaleBar(output_frame, calibration);
+    DrawTextOverlays(
+        output_frame,
+        length_measurements,
+        angle_measurements,
+        rectangle_measurements,
+        polygon_measurements,
+        calibration);
 
     const std::uint32_t header_size = 14U + 40U;
     const std::uint32_t image_size =
