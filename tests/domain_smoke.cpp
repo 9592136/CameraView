@@ -1556,6 +1556,23 @@ int main()
     if (MeasurementFormatter::FormatLine(measurement, calibration, MeasurementUnit::Micrometers) != overlay_length_text) {
         return Fail("MeasurementFormatter and OverlayRenderer formatted length text differently.");
     }
+    const ScaleBarOverlay scale_bar =
+        OverlayRenderer::BuildScaleBarOverlay(calibration, 500, 2.0);
+    if (!scale_bar.visible ||
+        scale_bar.screen_length != 80 ||
+        scale_bar.label != L"20 um") {
+        return Fail("OverlayRenderer did not build the expected calibrated scale bar.");
+    }
+    const ScaleBarOverlay millimeter_scale_bar =
+        OverlayRenderer::BuildScaleBarOverlay(millimeter_calibration, 500, 1.0);
+    if (!millimeter_scale_bar.visible ||
+        millimeter_scale_bar.screen_length != 100 ||
+        millimeter_scale_bar.label != L"1 mm") {
+        return Fail("OverlayRenderer did not format a millimeter scale bar.");
+    }
+    if (OverlayRenderer::BuildScaleBarOverlay(CalibrationProfile::Uncalibrated(), 500, 2.0).visible) {
+        return Fail("OverlayRenderer should hide the scale bar without calibration.");
+    }
 
     MeasurementCollection measurement_collection;
     measurement_collection.AddLength(L"Stored Length", ImagePoint{0.0, 0.0}, ImagePoint{3.0, 4.0});

@@ -41,6 +41,12 @@ struct MeasurementOverlayModel {
     MeasurementOverlayPending pending;
 };
 
+struct ScaleBarOverlay {
+    bool visible = false;
+    int screen_length = 0;
+    std::wstring label;
+};
+
 class OverlayRenderer {
 public:
     void DrawMeasurementOverlay(
@@ -64,6 +70,17 @@ public:
         const CalibrationProfile& calibration,
         MeasurementUnit display_unit);
 
+    static ScaleBarOverlay BuildScaleBarOverlay(
+        const CalibrationProfile& calibration,
+        int viewport_width,
+        double screen_pixels_per_image_pixel);
+
 private:
     static void DrawPointHandle(HDC hdc, POINT point, int radius);
+    static void DrawScaleBar(
+        HDC hdc,
+        const RECT& viewport,
+        const ImageFrame& frame,
+        ImageViewport& image_viewport,
+        const CalibrationProfile& calibration);
 };

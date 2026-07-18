@@ -2,6 +2,11 @@
 
 #include "../domain/MeasurementFormatter.h"
 
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+
 namespace {
 
 bool HasPendingPoint(OverlayPendingKind kind)
@@ -9,6 +14,56 @@ bool HasPendingPoint(OverlayPendingKind kind)
     return kind == OverlayPendingKind::Point ||
            kind == OverlayPendingKind::Angle ||
            kind == OverlayPendingKind::Polygon;
+}
+
+double NiceLengthAtOrBelow(double target)
+{
+    if (!std::isfinite(target) || target <= 0.0) {
+        return 0.0;
+    }
+
+    const double base = std::pow(10.0, std::floor(std::log10(target)));
+    double best = base;
+    for (double multiplier : {1.0, 2.0, 5.0, 10.0}) {
+        const double candidate = base * multiplier;
+        if (candidate <= target * 1.0000001) {
+            best = candidate;
+        }
+    }
+    return best;
+}
+
+std::wstring FormatScaleValue(double value)
+{
+    std::wostringstream output;
+    if (std::abs(value - std::round(value)) < 1e-9 || value >= 100.0) {
+        output << std::fixed << std::setprecision(0) << value;
+    } else if (value >= 10.0) {
+        output << std::fixed << std::setprecision(1) << value;
+    } else {
+        output << std::fixed << std::setprecision(2) << value;
+    }
+
+    std::wstring text = output.str();
+    if (text.find(L'.') != std::wstring::npos) {
+        while (text.size() > 1U && text.back() == L'0') {
+            text.pop_back();
+        }
+        if (!text.empty() && text.back() == L'.') {
+            text.pop_back();
+        }
+    }
+    return text;
+}
+
+std::wstring FormatScaleLabel(double micrometers)
+{
+    if (micrometers >= 1000.0) {
+        return FormatScaleValue(micrometers / 1000.0) + L" " +
+            CalibrationProfile::UnitLabel(MeasurementUnit::Millimeters);
+    }
+    return FormatScaleValue(micrometers) + L" " +
+        CalibrationProfile::UnitLabel(MeasurementUnit::Micrometers);
 }
 
 } // namespace
@@ -167,6 +222,8 @@ void OverlayRenderer::DrawMeasurementOverlay(
         DeleteObject(pending_brush);
     }
 
+    DrawScaleBar(hdc, viewport, frame, image_viewport, calibration);
+
     SelectObject(hdc, old_brush);
     SelectObject(hdc, old_pen);
     DeleteObject(measurement_brush);
@@ -182,6 +239,46 @@ std::wstring OverlayRenderer::FormatLine(
     MeasurementUnit display_unit)
 {
     return MeasurementFormatter::FormatLine(measurement, calibration, display_unit);
+}
+
+ScaleBarOverlay OverlayRenderer::BuildScaleBarOverlay(
+    const CalibrationProfile& calibration,
+    int viewport_width,
+    double screen_pixels_per_image_pixel)
+{
+    ScaleBarOverlay overlay;
+    if (!calibration.IsCalibrated() ||
+        viewport_width < 80 ||
+        !std::isfinite(screen_pixels_per_image_pixel) ||
+        screen_pixels_per_image_pixel <= 0.0) {
+        return overlay;
+    }
+
+    int target_screen_length = std::clamp(viewport_width / 5, 80, 160);
+    target_screen_length = std::min(target_screen_length, viewport_width - 48);
+    if (target_screen_length < 40) {
+        return overlay;
+    }
+
+    const double target_image_pixels =
+        static_cast<double>(target_screen_length) / screen_pixels_per_image_pixel;
+    const double target_micrometers = target_image_pixels * calibration.MicronsPerPixel();
+    const double scale_micrometers = NiceLengthAtOrBelow(target_micrometers);
+    if (scale_micrometers <= 0.0) {
+        return overlay;
+    }
+
+    const int screen_length = static_cast<int>(std::round(
+        scale_micrometers / calibration.MicronsPerPixel() *
+        screen_pixels_per_image_pixel));
+    if (screen_length < 24 || screen_length > viewport_width - 48) {
+        return overlay;
+    }
+
+    overlay.visible = true;
+    overlay.screen_length = screen_length;
+    overlay.label = FormatScaleLabel(scale_micrometers);
+    return overlay;
 }
 
 std::wstring OverlayRenderer::FormatLine(const AngleMeasurement& measurement)
@@ -208,4 +305,69 @@ std::wstring OverlayRenderer::FormatLine(
 void OverlayRenderer::DrawPointHandle(HDC hdc, POINT point, int radius)
 {
     Ellipse(hdc, point.x - radius, point.y - radius, point.x + radius + 1, point.y + radius + 1);
+}
+
+void OverlayRenderer::DrawScaleBar(
+    HDC hdc,
+    const RECT& viewport,
+    const ImageFrame& frame,
+    ImageViewport& image_viewport,
+    const CalibrationProfile& calibration)
+{
+    const RECT image_rect = image_viewport.ComputeImageRect(viewport, frame);
+    const int image_screen_width = image_rect.right - image_rect.left;
+    if (image_screen_width <= 0 || frame.width <= 0) {
+        return;
+    }
+
+    const ScaleBarOverlay overlay = BuildScaleBarOverlay(
+        calibration,
+        viewport.right - viewport.left,
+        static_cast<double>(image_screen_width) / static_cast<double>(frame.width));
+    if (!overlay.visible) {
+        return;
+    }
+
+    const int saved_dc = SaveDC(hdc);
+    IntersectClipRect(hdc, viewport.left, viewport.top, viewport.right, viewport.bottom);
+    SetBkMode(hdc, TRANSPARENT);
+
+    const int margin = 24;
+    const int x1 = viewport.right - margin;
+    const int x0 = x1 - overlay.screen_length;
+    const int y = viewport.bottom - margin;
+    const int tick = 7;
+
+    HPEN shadow_pen = CreatePen(PS_SOLID, 6, RGB(0, 0, 0));
+    HPEN bar_pen = CreatePen(PS_SOLID, 3, RGB(255, 255, 255));
+    HGDIOBJ old_pen = SelectObject(hdc, shadow_pen);
+    MoveToEx(hdc, x0, y, nullptr);
+    LineTo(hdc, x1, y);
+    MoveToEx(hdc, x0, y - tick, nullptr);
+    LineTo(hdc, x0, y + tick);
+    MoveToEx(hdc, x1, y - tick, nullptr);
+    LineTo(hdc, x1, y + tick);
+
+    SelectObject(hdc, bar_pen);
+    MoveToEx(hdc, x0, y, nullptr);
+    LineTo(hdc, x1, y);
+    MoveToEx(hdc, x0, y - tick, nullptr);
+    LineTo(hdc, x0, y + tick);
+    MoveToEx(hdc, x1, y - tick, nullptr);
+    LineTo(hdc, x1, y + tick);
+
+    RECT label_rect{x0 - 40, y - 28, x1 + 2, y - 8};
+    SetTextColor(hdc, RGB(0, 0, 0));
+    RECT shadow_label = label_rect;
+    OffsetRect(&shadow_label, 1, 1);
+    DrawTextW(hdc, overlay.label.c_str(), -1, &shadow_label, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    DrawTextW(hdc, overlay.label.c_str(), -1, &label_rect, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(bar_pen);
+    DeleteObject(shadow_pen);
+    if (saved_dc) {
+        RestoreDC(hdc, saved_dc);
+    }
 }
