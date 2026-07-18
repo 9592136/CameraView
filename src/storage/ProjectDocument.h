@@ -8,7 +8,7 @@
 
 struct ProjectProcessingSettings {
     int edf_focus_radius = 1;
-    int stitch_search_percent = 50;
+    int stitch_search_percent = 85;
 };
 
 struct ProjectDocument {

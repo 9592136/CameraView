@@ -22,7 +22,7 @@ public:
     std::wstring DisplaySourceLabel() const;
     std::wstring DisplayKindLabel() const;
 
-    void Clear();
+    bool Clear();
     bool Apply(ProcessingJobResult result);
     bool ShowEdfCompositeFrame();
     bool ShowEdfFocusMap();

@@ -6,7 +6,7 @@ namespace {
 
 constexpr int kMinStitchSearchPercent = 5;
 constexpr int kMaxStitchSearchPercent = 100;
-constexpr int kDefaultStitchSearchPercent = 50;
+constexpr int kDefaultStitchSearchPercent = 85;
 constexpr int kMinEdfFocusRadius = 1;
 constexpr int kMaxEdfFocusRadius = 16;
 constexpr int kMinRegistrationSearchRadius = 8;

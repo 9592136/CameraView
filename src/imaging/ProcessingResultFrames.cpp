@@ -2,13 +2,15 @@
 
 #include <utility>
 
-void ProcessingResultFrames::Clear()
+bool ProcessingResultFrames::Clear()
 {
+    const bool was_visible = IsProcessingResultVisible();
     processing_result_ = ImageFrame();
     edf_composite_frame_ = ImageFrame();
     edf_focus_map_ = ImageFrame();
     show_processing_result_ = false;
     display_source_ = ProcessingResultDisplaySource::None;
+    return was_visible;
 }
 
 bool ProcessingResultFrames::Apply(ProcessingJobResult result)

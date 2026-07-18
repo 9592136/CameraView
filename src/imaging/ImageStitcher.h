@@ -10,6 +10,7 @@ struct StitchTile {
     ImageFrame frame;
     int offset_x = 0;
     int offset_y = 0;
+    bool estimated_position = false;
 };
 
 struct StitchOptimizationOptions {

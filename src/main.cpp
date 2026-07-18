@@ -39,6 +39,7 @@
 #include "imaging/ProcessingResultFrames.h"
 #include "imaging/ProcessingRetryState.h"
 #include "imaging/ProcessingWorkerActions.h"
+#include "imaging/StitchTileListActions.h"
 #include "imaging/ViewportInteractionActions.h"
 #include "platform/FileDialog.h"
 #include "storage/ImageExporter.h"
@@ -59,13 +60,16 @@
 #include "ui/MeasurementToolStartActions.h"
 #include "ui/ProcessingBuildInputActions.h"
 #include "ui/ProcessingQueueActions.h"
+#include "ui/StitchTileDisplayActions.h"
 #include "ui/WindowControlDefinitions.h"
 #include "ui/WindowControlLayout.h"
 #include "ui/WindowLayout.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -80,6 +84,13 @@ namespace {
 constexpr UINT kMsgFrameReady = WM_APP + 1;
 constexpr UINT kMsgStatusChanged = WM_APP + 2;
 constexpr UINT kMsgProcessingFinished = WM_APP + 3;
+constexpr int kPanelTitleHeight = 34;
+constexpr const wchar_t* kFunctionPanelVisibleProperty = L"CameraViewFunctionPanelVisible";
+constexpr const wchar_t* kFunctionPanelDockLeftProperty = L"CameraViewFunctionPanelDockLeft";
+constexpr INT_PTR kFunctionPanelVisibleValue = 1;
+constexpr INT_PTR kFunctionPanelHiddenValue = 2;
+constexpr INT_PTR kFunctionPanelDockLeftValue = 1;
+constexpr INT_PTR kFunctionPanelDockRightValue = 2;
 
 enum class PreviewFrameCacheKind {
     None,
@@ -87,18 +98,144 @@ enum class PreviewFrameCacheKind {
     Fusion
 };
 
+bool IsFunctionPanelVisible(HWND hwnd)
+{
+    const HANDLE value = GetPropW(hwnd, kFunctionPanelVisibleProperty);
+    if (!value) {
+        return true;
+    }
+    return value == reinterpret_cast<HANDLE>(kFunctionPanelVisibleValue);
+}
+
+bool IsFunctionPanelDockedLeft(HWND hwnd)
+{
+    const HANDLE value = GetPropW(hwnd, kFunctionPanelDockLeftProperty);
+    if (!value) {
+        return true;
+    }
+    return value == reinterpret_cast<HANDLE>(kFunctionPanelDockLeftValue);
+}
+
+void SetFunctionPanelVisibleProperty(HWND hwnd, bool visible)
+{
+    SetPropW(
+        hwnd,
+        kFunctionPanelVisibleProperty,
+        reinterpret_cast<HANDLE>(visible ? kFunctionPanelVisibleValue : kFunctionPanelHiddenValue));
+}
+
+void SetFunctionPanelDockLeftProperty(HWND hwnd, bool dock_left)
+{
+    SetPropW(
+        hwnd,
+        kFunctionPanelDockLeftProperty,
+        reinterpret_cast<HANDLE>(dock_left ? kFunctionPanelDockLeftValue : kFunctionPanelDockRightValue));
+}
+
+void RemoveFunctionPanelVisibleProperty(HWND hwnd)
+{
+    RemovePropW(hwnd, kFunctionPanelVisibleProperty);
+}
+
+void RemoveFunctionPanelDockLeftProperty(HWND hwnd)
+{
+    RemovePropW(hwnd, kFunctionPanelDockLeftProperty);
+}
+
+HMENU CreateMainMenu()
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU view_menu = CreatePopupMenu();
+    HMENU camera_menu = CreatePopupMenu();
+    HMENU processing_menu = CreatePopupMenu();
+    HMENU measurement_menu = CreatePopupMenu();
+
+    AppendMenuW(file_menu, MF_STRING, kIdOpenImage, L"Open Image...");
+    AppendMenuW(file_menu, MF_STRING, kIdExportImage, L"Export Image...");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file_menu, MF_STRING, kIdOpenProject, L"Open Project...");
+    AppendMenuW(file_menu, MF_STRING, kIdSaveProject, L"Save Project...");
+    AppendMenuW(file_menu, MF_STRING, kIdSaveDiagnostics, L"Save Diagnostic...");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file_menu, MF_STRING, kIdExit, L"Exit");
+
+    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdToggleFunctionPanel, L"Function Panel");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdDockFunctionPanelLeft, L"Dock Left");
+    AppendMenuW(view_menu, MF_STRING, kIdDockFunctionPanelRight, L"Dock Right");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view_menu, MF_STRING, kIdFitView, L"Fit Image");
+
+    AppendMenuW(camera_menu, MF_STRING, kIdRefreshDevices, L"Refresh Devices");
+    AppendMenuW(camera_menu, MF_STRING, kIdOpen, L"Open Camera");
+    AppendMenuW(camera_menu, MF_STRING, kIdStop, L"Stop Camera");
+    AppendMenuW(camera_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(camera_menu, MF_STRING, kIdAutoExposure, L"Auto Exposure");
+    AppendMenuW(camera_menu, MF_STRING, kIdWhiteBalance, L"White Balance");
+
+    AppendMenuW(processing_menu, MF_STRING, kIdAddStitchTile, L"Add Tile");
+    AppendMenuW(processing_menu, MF_STRING, kIdBuildStitch, L"Stitch");
+    AppendMenuW(processing_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(processing_menu, MF_STRING, kIdAddEdfFrame, L"Add EDF Frame");
+    AppendMenuW(processing_menu, MF_STRING, kIdBuildEdf, L"Build EDF");
+    AppendMenuW(processing_menu, MF_STRING, kIdClearProcessing, L"Clear Processing");
+
+    AppendMenuW(measurement_menu, MF_STRING, kIdCalibrate, L"Calibrate");
+    AppendMenuW(measurement_menu, MF_STRING, kIdLengthTool, L"Length");
+    AppendMenuW(measurement_menu, MF_STRING, kIdAngleTool, L"Angle");
+    AppendMenuW(measurement_menu, MF_STRING, kIdRectangleAreaTool, L"Rectangle Area");
+    AppendMenuW(measurement_menu, MF_STRING, kIdPolygonAreaTool, L"Polygon Area");
+    AppendMenuW(measurement_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(measurement_menu, MF_STRING, kIdExportCsv, L"Export CSV...");
+
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"File");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"View");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(camera_menu), L"Camera");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(processing_menu), L"Processing");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(measurement_menu), L"Measurement");
+    return menu;
+}
+
+void SyncMainMenu(HWND hwnd)
+{
+    HMENU menu = GetMenu(hwnd);
+    if (!menu) {
+        return;
+    }
+    CheckMenuItem(
+        menu,
+        kIdToggleFunctionPanel,
+        MF_BYCOMMAND | (IsFunctionPanelVisible(hwnd) ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(
+        menu,
+        kIdDockFunctionPanelLeft,
+        MF_BYCOMMAND | (IsFunctionPanelDockedLeft(hwnd) ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(
+        menu,
+        kIdDockFunctionPanelRight,
+        MF_BYCOMMAND | (IsFunctionPanelDockedLeft(hwnd) ? MF_UNCHECKED : MF_CHECKED));
+    DrawMenuBar(hwnd);
+}
+
 RECT GetPreviewRect(HWND hwnd)
 {
     RECT rect = {};
     GetClientRect(hwnd, &rect);
-    return WindowLayout::PreviewRect(rect);
+    return WindowLayout::PreviewRect(
+        rect,
+        IsFunctionPanelVisible(hwnd),
+        IsFunctionPanelDockedLeft(hwnd));
 }
 
 RECT GetSidePanelRect(HWND hwnd)
 {
     RECT rect = {};
     GetClientRect(hwnd, &rect);
-    return WindowLayout::SidePanelRect(rect);
+    return WindowLayout::SidePanelRect(
+        rect,
+        IsFunctionPanelVisible(hwnd),
+        IsFunctionPanelDockedLeft(hwnd));
 }
 
 RECT GetStatusRect(HWND hwnd)
@@ -122,15 +259,23 @@ void InvalidateStatus(HWND hwnd)
 
 } // namespace
 
+void LayoutControls(HWND hwnd, bool repaint_children = true);
+
 class CameraPreviewApp {
 public:
-    explicit CameraPreviewApp(HWND hwnd) : hwnd_(hwnd) {}
+    explicit CameraPreviewApp(HWND hwnd) : hwnd_(hwnd)
+    {
+        SetFunctionPanelVisibleProperty(hwnd_, function_panel_visible_);
+        SetFunctionPanelDockLeftProperty(hwnd_, function_panel_docked_left_);
+    }
     ~CameraPreviewApp()
     {
         Stop();
         RequestProcessingCancel();
         WaitForProcessingWorker();
         ReleasePaintBuffer();
+        RemoveFunctionPanelVisibleProperty(hwnd_);
+        RemoveFunctionPanelDockLeftProperty(hwnd_);
     }
 
     void Start()
@@ -308,15 +453,15 @@ public:
             if (!button) {
                 continue;
             }
-            const std::wstring text =
-                (static_cast<int>(i) == panel_category_ ? L"[-] " : L"[+] ") + labels[i];
-            SetWindowTextW(button, text.c_str());
+            SetWindowTextW(button, labels[i].c_str());
+            InvalidateRect(button, nullptr, TRUE);
         }
     }
 
     void ShowPanelCategory(int panel_category)
     {
         panel_category_ = WindowControlLayout::NormalizePanelCategory(panel_category);
+        panel_scroll_offset_ = 0;
         SyncPanelCardButtons();
         SetStatus(L"Function card: " + WindowControlLayout::PanelCategoryLabels()[static_cast<std::size_t>(panel_category_)] + L".");
     }
@@ -324,6 +469,210 @@ public:
     int PanelCategory() const
     {
         return panel_category_;
+    }
+
+    bool FunctionPanelVisible() const
+    {
+        return function_panel_visible_;
+    }
+
+    bool FunctionPanelDockedLeft() const
+    {
+        return function_panel_docked_left_;
+    }
+
+    void SyncFunctionPanelChrome() const
+    {
+        HWND toggle_button = GetDlgItem(hwnd_, kIdToggleFunctionPanel);
+        if (toggle_button) {
+            SetWindowTextW(toggle_button, function_panel_visible_ ? L"Hide Panel" : L"Show Panel");
+        }
+        HWND dock_button = GetDlgItem(hwnd_, kIdTogglePanelDock);
+        if (dock_button) {
+            SetWindowTextW(dock_button, function_panel_docked_left_ ? L"Dock Right" : L"Dock Left");
+        }
+        SyncMainMenu(hwnd_);
+    }
+
+    void SetFunctionPanelVisible(bool visible)
+    {
+        if (function_panel_visible_ == visible) {
+            SyncFunctionPanelChrome();
+            return;
+        }
+
+        function_panel_visible_ = visible;
+        SetFunctionPanelVisibleProperty(hwnd_, function_panel_visible_);
+        if (!function_panel_visible_) {
+            panel_scroll_offset_ = 0;
+        }
+        SyncFunctionPanelChrome();
+        LayoutControls(hwnd_);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        SetStatus(function_panel_visible_ ? L"Function panel shown." : L"Function panel hidden.");
+    }
+
+    void ToggleFunctionPanel()
+    {
+        SetFunctionPanelVisible(!function_panel_visible_);
+    }
+
+    void SetFunctionPanelDockedLeft(bool dock_left)
+    {
+        if (function_panel_docked_left_ == dock_left) {
+            SyncFunctionPanelChrome();
+            return;
+        }
+
+        function_panel_docked_left_ = dock_left;
+        SetFunctionPanelDockLeftProperty(hwnd_, function_panel_docked_left_);
+        SyncFunctionPanelChrome();
+        LayoutControls(hwnd_);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+    }
+
+    void ToggleFunctionPanelDock()
+    {
+        SetFunctionPanelDockedLeft(!function_panel_docked_left_);
+    }
+
+    int PanelScrollOffset() const
+    {
+        return panel_scroll_offset_;
+    }
+
+    void ClampPanelScroll()
+    {
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        if (!function_panel_visible_) {
+            panel_scroll_offset_ = 0;
+            return;
+        }
+        panel_scroll_offset_ = std::clamp(
+            panel_scroll_offset_,
+            0,
+            WindowControlLayout::PanelScrollMax(
+                client,
+                panel_category_,
+                function_panel_visible_,
+                function_panel_docked_left_));
+    }
+
+    void SyncPanelScrollBar()
+    {
+        HWND scroll_bar = GetDlgItem(hwnd_, kIdPanelScrollBar);
+        if (!scroll_bar) {
+            return;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        const int max_scroll =
+            WindowControlLayout::PanelScrollMax(
+                client,
+                panel_category_,
+                function_panel_visible_,
+                function_panel_docked_left_);
+        if (max_scroll <= 0) {
+            SCROLLINFO info = {};
+            info.cbSize = sizeof(info);
+            info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+            info.nMin = 0;
+            info.nMax = 0;
+            info.nPage = 1;
+            info.nPos = 0;
+            SetScrollInfo(scroll_bar, SB_CTL, &info, TRUE);
+            return;
+        }
+
+        const int page_size = std::max(
+            1,
+            WindowControlLayout::PanelScrollPage(
+                client,
+                function_panel_visible_,
+                function_panel_docked_left_));
+        SCROLLINFO info = {};
+        info.cbSize = sizeof(info);
+        info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        info.nMin = 0;
+        info.nMax = max_scroll + page_size - 1;
+        info.nPage = static_cast<UINT>(page_size);
+        info.nPos = panel_scroll_offset_;
+        SetScrollInfo(scroll_bar, SB_CTL, &info, TRUE);
+    }
+
+    bool DrawPanelCategoryButton(const DRAWITEMSTRUCT& item) const
+    {
+        const int category = WindowControlLayout::PanelCategoryFromCardControl(static_cast<int>(item.CtlID));
+        if (category < 0) {
+            return false;
+        }
+
+        RECT rect = item.rcItem;
+        const bool selected = category == panel_category_;
+        FillSolidRect(item.hDC, rect, selected ? RGB(232, 235, 238) : RGB(205, 207, 209));
+
+        RECT top_line = rect;
+        top_line.bottom = top_line.top + 1;
+        FillSolidRect(item.hDC, top_line, RGB(242, 243, 244));
+        RECT bottom_line = rect;
+        bottom_line.top = bottom_line.bottom - 2;
+        FillSolidRect(item.hDC, bottom_line, RGB(150, 153, 156));
+
+        RECT accent = rect;
+        accent.left += 4;
+        accent.top += 6;
+        accent.right = accent.left + 18;
+        accent.bottom -= 6;
+        FillSolidRect(item.hDC, accent, selected ? RGB(0, 145, 210) : RGB(0, 160, 210));
+
+        RECT text_rect = rect;
+        text_rect.left += 30;
+        text_rect.right -= 30;
+        SetBkMode(item.hDC, TRANSPARENT);
+        SetTextColor(item.hDC, RGB(0, 128, 210));
+        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        HGDIOBJ old_font = SelectObject(item.hDC, font);
+        const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
+        const std::wstring& label = labels[static_cast<std::size_t>(category)];
+        DrawTextW(
+            item.hDC,
+            label.c_str(),
+            -1,
+            &text_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (old_font) {
+            SelectObject(item.hDC, old_font);
+        }
+
+        HPEN arrow_pen = CreatePen(PS_SOLID, 2, RGB(104, 108, 112));
+        HGDIOBJ old_pen = SelectObject(item.hDC, arrow_pen);
+        const int center_x = rect.right - 18;
+        const int center_y = rect.top + (rect.bottom - rect.top) / 2;
+        POINT points[3] = {};
+        if (selected) {
+            points[0] = POINT{center_x - 4, center_y - 2};
+            points[1] = POINT{center_x, center_y + 3};
+            points[2] = POINT{center_x + 4, center_y - 2};
+        } else {
+            points[0] = POINT{center_x - 2, center_y - 4};
+            points[1] = POINT{center_x + 3, center_y};
+            points[2] = POINT{center_x - 2, center_y + 4};
+        }
+        Polyline(item.hDC, points, 3);
+        if (old_pen) {
+            SelectObject(item.hDC, old_pen);
+        }
+        DeleteObject(arrow_pen);
+
+        if ((item.itemState & ODS_FOCUS) != 0) {
+            RECT focus = rect;
+            InflateRect(&focus, -2, -2);
+            DrawFocusRect(item.hDC, &focus);
+        }
+        return true;
     }
 
     void InitializeDyeCombo(HWND combo)
@@ -526,18 +875,66 @@ public:
 
     void AddCurrentFrameAsStitchTile()
     {
+        const auto add_tile_start = std::chrono::steady_clock::now();
+        ImageFrame frame = frame_buffer_.Snapshot();
         const ProcessingQueueActionResult result =
             ProcessingQueueActions::AddStitchTile(
                 stitch_tiles_,
                 processing_frames_,
-                frame_buffer_.Snapshot(),
+                std::move(frame),
                 ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
                 stitch_search_percent_);
+        const auto add_tile_elapsed = std::chrono::steady_clock::now() - add_tile_start;
+        const long long add_tile_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(add_tile_elapsed).count();
         stitch_search_percent_ = result.stitch_search_percent;
         if (result.preview_changed) {
             InvalidatePreviewFrameCache();
             InvalidatePreview(hwnd_);
         }
+        if (result.changed) {
+            HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList);
+            AppendStitchTileListItem(stitch_tile_list);
+            if (stitch_tile_list && result.stitch_tile_count > 0) {
+                SendMessageW(stitch_tile_list, LB_SETCURSEL, result.stitch_tile_count - 1, 0);
+            }
+        }
+        SetStatus(L"Add Tile " + std::to_wstring(add_tile_ms) + L" ms. " + result.message);
+    }
+
+    void DeleteSelectedStitchTile()
+    {
+        HWND list = GetDlgItem(hwnd_, kIdStitchTileList);
+        const LRESULT selection = list ? SendMessageW(list, LB_GETCURSEL, 0, 0) : LB_ERR;
+        const StitchTileListActionResult result =
+            StitchTileListActions::DeleteSelected(stitch_tiles_, static_cast<int>(selection));
+        if (!result.changed) {
+            SetStatus(result.message);
+            return;
+        }
+
+        processing_frames_.Clear();
+        RefreshStitchTileList(list);
+        if (list && result.next_selection) {
+            SendMessageW(list, LB_SETCURSEL, static_cast<WPARAM>(*result.next_selection), 0);
+        }
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+        SetStatus(result.message);
+    }
+
+    void ClearStitchTiles()
+    {
+        const StitchTileListActionResult result = StitchTileListActions::Clear(stitch_tiles_);
+        if (!result.changed) {
+            SetStatus(result.message);
+            return;
+        }
+
+        processing_frames_.Clear();
+        RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
         SetStatus(result.message);
     }
 
@@ -610,6 +1007,7 @@ public:
             edf_stack_,
             processing_retry_,
             processing_frames_);
+        RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
         SetStatus(result.message);
@@ -660,10 +1058,36 @@ public:
 
         RECT side_panel = GetSidePanelRect(hwnd_);
         if (side_panel.right > side_panel.left) {
-            FillSolidRect(hdc, side_panel, RGB(250, 251, 253));
+            FillSolidRect(hdc, side_panel, RGB(232, 235, 238));
+            RECT panel_title = side_panel;
+            panel_title.bottom = std::min(panel_title.bottom, panel_title.top + kPanelTitleHeight);
+            FillSolidRect(hdc, panel_title, RGB(214, 224, 234));
+            RECT panel_title_line = panel_title;
+            panel_title_line.top = panel_title_line.bottom - 1;
+            FillSolidRect(hdc, panel_title_line, RGB(166, 176, 186));
+
+            RECT title_text = panel_title;
+            title_text.left += 8;
+            title_text.right -= 8;
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(22, 48, 72));
+            const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
+            const std::wstring panel_label =
+                L"Functions - " + labels[static_cast<std::size_t>(WindowControlLayout::NormalizePanelCategory(panel_category_))];
+            DrawTextW(
+                hdc,
+                panel_label.c_str(),
+                -1,
+                &title_text,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
             RECT separator = side_panel;
-            separator.right = separator.left + 1;
-            FillSolidRect(hdc, separator, RGB(218, 224, 232));
+            if (function_panel_docked_left_) {
+                separator.left = separator.right - 2;
+            } else {
+                separator.right = separator.left + 2;
+            }
+            FillSolidRect(hdc, separator, RGB(168, 174, 181));
         }
 
         const ImageFrame& display_frame = CurrentPreviewFrame();
@@ -748,6 +1172,11 @@ public:
         POINT point = screen_point;
         ScreenToClient(hwnd_, &point);
 
+        const RECT side_panel = GetSidePanelRect(hwnd_);
+        if (PtInRect(&side_panel, point)) {
+            return ScrollPanel(wheel_delta);
+        }
+
         const RECT preview = GetPreviewRect(hwnd_);
         if (!PtInRect(&preview, point) || wheel_delta == 0) {
             return false;
@@ -760,6 +1189,109 @@ public:
             return true;
         }
         return false;
+    }
+
+    bool ScrollPanel(short wheel_delta)
+    {
+        if (wheel_delta == 0) {
+            return false;
+        }
+
+        const int direction = wheel_delta > 0 ? -1 : 1;
+        return ScrollPanelTo(panel_scroll_offset_ + direction * 54);
+    }
+
+    bool HandlePanelScrollCommand(WORD scroll_request)
+    {
+        if (!function_panel_visible_) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        const int max_scroll =
+            WindowControlLayout::PanelScrollMax(
+                client,
+                panel_category_,
+                function_panel_visible_,
+                function_panel_docked_left_);
+        if (max_scroll <= 0) {
+            return ScrollPanelTo(0);
+        }
+
+        const int page_size =
+            std::max(
+                54,
+                WindowControlLayout::PanelScrollPage(
+                    client,
+                    function_panel_visible_,
+                    function_panel_docked_left_) - 24);
+        int target_offset = panel_scroll_offset_;
+        switch (scroll_request) {
+        case SB_LINEUP:
+            target_offset -= 32;
+            break;
+        case SB_LINEDOWN:
+            target_offset += 32;
+            break;
+        case SB_PAGEUP:
+            target_offset -= page_size;
+            break;
+        case SB_PAGEDOWN:
+            target_offset += page_size;
+            break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK: {
+            SCROLLINFO info = {};
+            info.cbSize = sizeof(info);
+            info.fMask = SIF_TRACKPOS;
+            if (GetScrollInfo(GetDlgItem(hwnd_, kIdPanelScrollBar), SB_CTL, &info)) {
+                target_offset = info.nTrackPos;
+            }
+            break;
+        }
+        case SB_TOP:
+            target_offset = 0;
+            break;
+        case SB_BOTTOM:
+            target_offset = max_scroll;
+            break;
+        default:
+            return false;
+        }
+
+        return ScrollPanelTo(target_offset);
+    }
+
+    bool ScrollPanelTo(int target_offset)
+    {
+        if (!function_panel_visible_) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        const int max_scroll =
+            WindowControlLayout::PanelScrollMax(
+                client,
+                panel_category_,
+                function_panel_visible_,
+                function_panel_docked_left_);
+        const int old_offset = panel_scroll_offset_;
+        panel_scroll_offset_ = std::clamp(target_offset, 0, max_scroll);
+        if (panel_scroll_offset_ == old_offset) {
+            SyncPanelScrollBar();
+            return false;
+        }
+
+        const RECT side_panel = GetSidePanelRect(hwnd_);
+        LayoutControls(hwnd_);
+        RedrawWindow(
+            hwnd_,
+            &side_panel,
+            nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        return true;
     }
 
     void FitView()
@@ -1067,12 +1599,12 @@ public:
         }
 
         std::wstring file_name;
-        if (!FileDialog::SaveBmp(hwnd_, file_name)) {
+        if (!FileDialog::SaveImage(hwnd_, file_name)) {
             SetStatus(L"Image export canceled.");
             return;
         }
 
-        const ExportActionResult result = ExportActions::SaveImageBmp(
+        const ExportActionResult result = ExportActions::SaveImage(
                 std::filesystem::path(file_name),
                 export_frame,
                 measurements_,
@@ -1083,14 +1615,14 @@ public:
     void OpenImage()
     {
         std::wstring file_name;
-        if (!FileDialog::OpenBmp(hwnd_, file_name)) {
+        if (!FileDialog::OpenImage(hwnd_, file_name)) {
             SetStatus(L"Image open canceled.");
             return;
         }
 
         ImageFrame loaded;
         std::wstring error;
-        if (!ImageExporter::LoadBmp(std::filesystem::path(file_name), loaded, error)) {
+        if (!ImageExporter::LoadRasterImage(std::filesystem::path(file_name), loaded, error)) {
             SetStatus(error.empty() ? L"Failed to open image." : error);
             return;
         }
@@ -1105,7 +1637,7 @@ public:
         InvalidatePreviewFrameCache();
         SetLatestFrameSource(L"Image file: " + file_name);
         image_viewport_.Reset();
-        SetPreviewTelemetry(L"Loaded BMP image | " + image_size);
+        SetPreviewTelemetry(L"Loaded image | " + image_size);
         InvalidatePreview(hwnd_);
         SetStatus(L"Image opened: " + image_size + L".");
     }
@@ -1198,6 +1730,7 @@ public:
         }
         RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
         RefreshChannelList(GetDlgItem(hwnd_, kIdChannelList));
+        RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         SyncSelectedChannelControls(
             GetDlgItem(hwnd_, kIdChannelList),
             GetDlgItem(hwnd_, kIdChannelVisible),
@@ -1344,14 +1877,128 @@ public:
         if (!result.handled) {
             return;
         }
+        std::wstring status_message = result.message;
         if (result.changed) {
+            image_viewport_.Reset();
             InvalidatePreviewFrameCache();
             InvalidatePreview(hwnd_);
+            const ProcessingResultDisplaySource display_source = processing_frames_.DisplaySource();
+            if (display_source == ProcessingResultDisplaySource::Stitch) {
+                const std::wstring save_message =
+                    SaveVisibleProcessingResult(L"stitch", L"stitch", L"Stitch result");
+                if (!save_message.empty()) {
+                    status_message += L" " + save_message;
+                }
+            } else if (display_source == ProcessingResultDisplaySource::EdfComposite) {
+                const std::wstring save_message =
+                    SaveVisibleProcessingResult(L"edf", L"edf", L"EDF image");
+                if (!save_message.empty()) {
+                    status_message += L" " + save_message;
+                }
+            }
         }
-        SetStatus(result.message);
+        SetStatus(status_message);
     }
 
 private:
+    static std::filesystem::path ApplicationDirectory()
+    {
+        wchar_t module_path[MAX_PATH] = {};
+        const DWORD length = GetModuleFileNameW(nullptr, module_path, MAX_PATH);
+        if (length > 0 && length < MAX_PATH) {
+            return std::filesystem::path(module_path).parent_path();
+        }
+
+        std::error_code error;
+        std::filesystem::path base = std::filesystem::current_path(error);
+        if (error) {
+            base = L".";
+        }
+        return base;
+    }
+
+    static std::filesystem::path ProcessingOutputDirectory(const wchar_t* subdirectory)
+    {
+        return ApplicationDirectory() / L"exports" / subdirectory;
+    }
+
+    static std::filesystem::path NextProcessingOutputPath(
+        const wchar_t* subdirectory,
+        const wchar_t* file_prefix)
+    {
+        SYSTEMTIME now = {};
+        GetLocalTime(&now);
+        wchar_t file_name[96] = {};
+        swprintf_s(
+            file_name,
+            L"%s_%04u%02u%02u_%02u%02u%02u.bmp",
+            file_prefix,
+            static_cast<unsigned int>(now.wYear),
+            static_cast<unsigned int>(now.wMonth),
+            static_cast<unsigned int>(now.wDay),
+            static_cast<unsigned int>(now.wHour),
+            static_cast<unsigned int>(now.wMinute),
+            static_cast<unsigned int>(now.wSecond));
+
+        const std::filesystem::path directory = ProcessingOutputDirectory(subdirectory);
+        std::filesystem::path path = directory / file_name;
+        if (!std::filesystem::exists(path)) {
+            return path;
+        }
+
+        for (int index = 1; index < 1000; ++index) {
+            wchar_t indexed_name[112] = {};
+            swprintf_s(
+                indexed_name,
+                L"%s_%04u%02u%02u_%02u%02u%02u_%03d.bmp",
+                file_prefix,
+                static_cast<unsigned int>(now.wYear),
+                static_cast<unsigned int>(now.wMonth),
+                static_cast<unsigned int>(now.wDay),
+                static_cast<unsigned int>(now.wHour),
+                static_cast<unsigned int>(now.wMinute),
+                static_cast<unsigned int>(now.wSecond),
+                index);
+            path = directory / indexed_name;
+            if (!std::filesystem::exists(path)) {
+                return path;
+            }
+        }
+
+        return directory / (std::wstring(file_prefix) + L"_latest.bmp");
+    }
+
+    std::wstring SaveVisibleProcessingResult(
+        const wchar_t* subdirectory,
+        const wchar_t* file_prefix,
+        const std::wstring& display_mode) const
+    {
+        const ImageFrame& frame = processing_frames_.ProcessingResult();
+        if (!frame.IsValid()) {
+            return {};
+        }
+
+        const std::filesystem::path path = NextProcessingOutputPath(subdirectory, file_prefix);
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        if (error) {
+            return L"Auto-save failed: could not create " + path.parent_path().wstring() + L".";
+        }
+
+        const ExportActionResult save_result =
+            ExportActions::SaveImage(path, frame, MeasurementCollection(), display_mode);
+        if (!save_result.saved) {
+            return L"Auto-save failed: " + save_result.message;
+        }
+
+        std::error_code absolute_error;
+        std::filesystem::path absolute_path = std::filesystem::absolute(path, absolute_error);
+        if (absolute_error) {
+            absolute_path = path;
+        }
+        return L"Saved to: " + absolute_path.wstring();
+    }
+
     static std::wstring ReadEditText(HWND edit, int max_chars)
     {
         std::wstring text(static_cast<std::size_t>(std::max(1, max_chars)), L'\0');
@@ -1568,6 +2215,39 @@ private:
         for (const std::wstring& text : FluorescenceDisplayActions::ChannelLines(fluorescence_channels_)) {
             SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
         }
+    }
+
+    void RefreshStitchTileList(HWND list)
+    {
+        if (!list) {
+            return;
+        }
+
+        SendMessageW(list, WM_SETREDRAW, FALSE, 0);
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        for (const std::wstring& text : StitchTileDisplayActions::TileLines(stitch_tiles_)) {
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        }
+        SendMessageW(list, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(list, nullptr, TRUE);
+    }
+
+    void AppendStitchTileListItem(HWND list)
+    {
+        if (!list || stitch_tiles_.empty()) {
+            return;
+        }
+
+        const LRESULT list_count = SendMessageW(list, LB_GETCOUNT, 0, 0);
+        const std::size_t expected_previous_count = stitch_tiles_.size() - 1U;
+        if (list_count != static_cast<LRESULT>(expected_previous_count)) {
+            RefreshStitchTileList(list);
+            return;
+        }
+
+        const std::wstring text =
+            StitchTileDisplayActions::TileLine(stitch_tiles_.back(), expected_previous_count);
+        SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
     }
 
     void ClearLatestFrame()
@@ -1879,7 +2559,10 @@ private:
     double pending_calibration_length_ = 100.0;
     MeasurementUnit pending_calibration_unit_ = MeasurementUnit::Micrometers;
     bool show_fusion_preview_ = false;
+    bool function_panel_visible_ = true;
+    bool function_panel_docked_left_ = true;
     int panel_category_ = 0;
+    int panel_scroll_offset_ = 0;
     ViewportPanState viewport_pan_;
     HDC paint_buffer_dc_ = nullptr;
     HBITMAP paint_buffer_bitmap_ = nullptr;
@@ -1893,29 +2576,105 @@ CameraPreviewApp* GetApp(HWND hwnd)
     return reinterpret_cast<CameraPreviewApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 }
 
-void LayoutControls(HWND hwnd)
+void LayoutControls(HWND hwnd, bool repaint_children)
 {
     RECT client = {};
     GetClientRect(hwnd, &client);
 
-    const CameraPreviewApp* app = GetApp(hwnd);
+    CameraPreviewApp* app = GetApp(hwnd);
     const int panel_category = app ? app->PanelCategory() : 0;
-    for (const WindowControlPlacement& placement : WindowControlLayout::Compute(client, panel_category)) {
+    const bool function_panel_visible =
+        app ? app->FunctionPanelVisible() : IsFunctionPanelVisible(hwnd);
+    const bool function_panel_docked_left =
+        app ? app->FunctionPanelDockedLeft() : IsFunctionPanelDockedLeft(hwnd);
+    if (app) {
+        app->ClampPanelScroll();
+    }
+    const int panel_scroll_offset = app ? app->PanelScrollOffset() : 0;
+    const std::vector<WindowControlPlacement> placements =
+        WindowControlLayout::Compute(
+            client,
+            panel_category,
+            panel_scroll_offset,
+            function_panel_visible,
+            function_panel_docked_left);
+    std::vector<HWND> paused_redraw_controls;
+    if (!repaint_children) {
+        paused_redraw_controls.reserve(placements.size());
+        for (const WindowControlPlacement& placement : placements) {
+            HWND control = GetDlgItem(hwnd, placement.control_id);
+            if (control) {
+                SendMessageW(control, WM_SETREDRAW, FALSE, 0);
+                paused_redraw_controls.push_back(control);
+            }
+        }
+    }
+
+    HDWP deferred = BeginDeferWindowPos(static_cast<int>(placements.size()));
+    for (const WindowControlPlacement& placement : placements) {
         HWND control = GetDlgItem(hwnd, placement.control_id);
         if (!control) {
             continue;
         }
 
-        ShowWindow(control, placement.visible ? SW_SHOW : SW_HIDE);
+        UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_DEFERERASE;
         if (placement.visible) {
-            MoveWindow(
+            flags |= SWP_SHOWWINDOW;
+            if (deferred) {
+                HDWP next_deferred = DeferWindowPos(
+                    deferred,
+                    control,
+                    nullptr,
+                    placement.bounds.left,
+                    placement.bounds.top,
+                    placement.bounds.right - placement.bounds.left,
+                    placement.bounds.bottom - placement.bounds.top,
+                    flags);
+                if (next_deferred) {
+                    deferred = next_deferred;
+                    continue;
+                }
+                EndDeferWindowPos(deferred);
+                deferred = nullptr;
+            }
+            SetWindowPos(
                 control,
+                nullptr,
                 placement.bounds.left,
                 placement.bounds.top,
                 placement.bounds.right - placement.bounds.left,
                 placement.bounds.bottom - placement.bounds.top,
-                TRUE);
+                flags);
+        } else {
+            flags |= SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE;
+            if (deferred) {
+                HDWP next_deferred = DeferWindowPos(
+                    deferred,
+                    control,
+                    nullptr,
+                    0,
+                    0,
+                    0,
+                    0,
+                    flags);
+                if (next_deferred) {
+                    deferred = next_deferred;
+                    continue;
+                }
+                EndDeferWindowPos(deferred);
+                deferred = nullptr;
+            }
+            SetWindowPos(control, nullptr, 0, 0, 0, 0, flags);
         }
+    }
+    if (deferred) {
+        EndDeferWindowPos(deferred);
+    }
+    for (HWND control : paused_redraw_controls) {
+        SendMessageW(control, WM_SETREDRAW, TRUE, 0);
+    }
+    if (app) {
+        app->SyncPanelScrollBar();
     }
 }
 
@@ -1966,6 +2725,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         SendMessageW(pseudo_color_combo, CB_SETCURSEL, 0, 0);
         app->SyncPanelCardButtons();
+        app->SyncFunctionPanelChrome();
         app->InitializeDyeCombo(dye_combo);
         app->SyncSelectedDyeControls(
             dye_combo,
@@ -1986,6 +2746,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         LayoutControls(hwnd);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_DRAWITEM: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+        if (app && item && app->DrawPanelCategoryButton(*item)) {
+            return TRUE;
+        }
+        break;
+    }
+    case WM_VSCROLL: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        if (app && reinterpret_cast<HWND>(lparam) == GetDlgItem(hwnd, kIdPanelScrollBar)) {
+            app->HandlePanelScrollCommand(LOWORD(wparam));
+            return 0;
+        }
+        break;
+    }
     case WM_COMMAND: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (!app) {
@@ -2032,6 +2808,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         }
         switch (LOWORD(wparam)) {
+        case kIdToggleFunctionPanel:
+            app->ToggleFunctionPanel();
+            return 0;
+        case kIdTogglePanelDock:
+            app->ToggleFunctionPanelDock();
+            return 0;
+        case kIdDockFunctionPanelLeft:
+            app->SetFunctionPanelDockedLeft(true);
+            return 0;
+        case kIdDockFunctionPanelRight:
+            app->SetFunctionPanelDockedLeft(false);
+            return 0;
+        case kIdExit:
+            DestroyWindow(hwnd);
+            return 0;
         case kIdOpen:
             app->UpdateSelectedCamera(GetDlgItem(hwnd, kIdDeviceCombo));
             app->Start();
@@ -2151,6 +2942,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdBuildStitch:
             app->BuildStitchPreview();
+            return 0;
+        case kIdDeleteStitchTile:
+            app->DeleteSelectedStitchTile();
+            return 0;
+        case kIdClearStitchTiles:
+            app->ClearStitchTiles();
             return 0;
         case kIdAddEdfFrame:
             app->AddCurrentFrameAsEdfFrame();
@@ -2324,21 +3121,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command)
         return 1;
     }
 
+    HMENU main_menu = CreateMainMenu();
     HWND hwnd = CreateWindowExW(
         0,
         class_name,
         L"CameraView - MUCam Preview",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         1100,
         760,
         nullptr,
-        nullptr,
+        main_menu,
         instance,
         nullptr);
 
     if (!hwnd) {
+        DestroyMenu(main_menu);
         MessageBoxW(nullptr, L"Failed to create main window.", L"CameraView", MB_ICONERROR | MB_OK);
         return 1;
     }

@@ -12,8 +12,14 @@ class WindowLayout {
 public:
     static int ToolbarHeight();
     static int StatusHeight();
-    static int ComputeSidePanelWidth(const RECT& client_rect);
-    static RECT PreviewRect(const RECT& client_rect);
-    static RECT SidePanelRect(const RECT& client_rect);
+    static int ComputeSidePanelWidth(const RECT& client_rect, bool show_side_panel = true);
+    static RECT PreviewRect(
+        const RECT& client_rect,
+        bool show_side_panel = true,
+        bool dock_panel_left = true);
+    static RECT SidePanelRect(
+        const RECT& client_rect,
+        bool show_side_panel = true,
+        bool dock_panel_left = true);
     static RECT StatusRect(const RECT& client_rect);
 };

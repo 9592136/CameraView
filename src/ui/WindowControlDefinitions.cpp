@@ -6,13 +6,16 @@
 
 namespace {
 
-constexpr DWORD kStaticStyle = WS_CHILD | WS_VISIBLE;
-constexpr DWORD kButtonStyle = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON;
-constexpr DWORD kEditStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL;
-constexpr DWORD kNumberEditStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL;
-constexpr DWORD kComboStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL;
-constexpr DWORD kCheckboxStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX;
-constexpr DWORD kListStyle = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
+constexpr DWORD kChildStyle = WS_CHILD | WS_VISIBLE;
+constexpr DWORD kStaticStyle = kChildStyle;
+constexpr DWORD kButtonStyle = kChildStyle | BS_PUSHBUTTON;
+constexpr DWORD kPanelHeaderStyle = kChildStyle | BS_OWNERDRAW;
+constexpr DWORD kEditStyle = kChildStyle | WS_BORDER | ES_AUTOHSCROLL;
+constexpr DWORD kNumberEditStyle = kChildStyle | WS_BORDER | ES_NUMBER | ES_AUTOHSCROLL;
+constexpr DWORD kComboStyle = kChildStyle | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL;
+constexpr DWORD kCheckboxStyle = kChildStyle | WS_TABSTOP | BS_AUTOCHECKBOX;
+constexpr DWORD kListStyle = kChildStyle | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
+constexpr DWORD kPanelScrollStyle = kChildStyle | SBS_VERT;
 
 } // namespace
 
@@ -42,15 +45,17 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdExportCsv, L"BUTTON", L"Export CSV", kButtonStyle},
         {kIdExportImage, L"BUTTON", L"Export Image", kButtonStyle},
         {kIdOpenImage, L"BUTTON", L"Open Image", kButtonStyle},
+        {kIdToggleFunctionPanel, L"BUTTON", L"Hide Panel", kButtonStyle},
+        {kIdTogglePanelDock, L"BUTTON", L"Dock Right", kButtonStyle},
         {kIdSaveDiagnostics, L"BUTTON", L"Save Diagnostic", kButtonStyle},
         {kIdOpenProject, L"BUTTON", L"Open Project", kButtonStyle},
         {kIdSaveProject, L"BUTTON", L"Save Project", kButtonStyle},
-        {kIdCameraPanelCard, L"BUTTON", L"Camera", kButtonStyle},
-        {kIdImagePanelCard, L"BUTTON", L"Image", kButtonStyle},
-        {kIdFluorescencePanelCard, L"BUTTON", L"Fluorescence", kButtonStyle},
-        {kIdProcessingPanelCard, L"BUTTON", L"Processing", kButtonStyle},
-        {kIdMeasurementPanelCard, L"BUTTON", L"Measurement", kButtonStyle},
-        {kIdProjectPanelCard, L"BUTTON", L"Project", kButtonStyle},
+        {kIdCameraPanelCard, L"BUTTON", L"Camera", kPanelHeaderStyle},
+        {kIdImagePanelCard, L"BUTTON", L"Image", kPanelHeaderStyle},
+        {kIdFluorescencePanelCard, L"BUTTON", L"Fluorescence", kPanelHeaderStyle},
+        {kIdProcessingPanelCard, L"BUTTON", L"Processing", kPanelHeaderStyle},
+        {kIdMeasurementPanelCard, L"BUTTON", L"Measurement", kPanelHeaderStyle},
+        {kIdProjectPanelCard, L"BUTTON", L"Project", kPanelHeaderStyle},
         {kIdAutoExposure, L"BUTTON", L"Auto Exposure", kButtonStyle},
         {kIdCameraExposureLabel, L"STATIC", L"Exposure", kStaticStyle},
         {kIdCameraExposureEdit, L"EDIT", L"10", kEditStyle},
@@ -89,9 +94,13 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdChannelWhiteEdit, L"EDIT", L"255", kNumberEditStyle},
         {kIdApplyChannel, L"BUTTON", L"Apply Channel", kButtonStyle},
         {kIdStitchSearchLabel, L"STATIC", L"Stitch search %", kStaticStyle},
-        {kIdStitchSearchEdit, L"EDIT", L"50", kNumberEditStyle},
+        {kIdStitchSearchEdit, L"EDIT", L"85", kNumberEditStyle},
         {kIdAddStitchTile, L"BUTTON", L"Add Tile", kButtonStyle},
         {kIdBuildStitch, L"BUTTON", L"Stitch", kButtonStyle},
+        {kIdStitchTileLabel, L"STATIC", L"Stitch tiles", kStaticStyle},
+        {kIdStitchTileList, L"LISTBOX", nullptr, kListStyle},
+        {kIdDeleteStitchTile, L"BUTTON", L"Delete Tile", kButtonStyle},
+        {kIdClearStitchTiles, L"BUTTON", L"Clear Tiles", kButtonStyle},
         {kIdEdfRadiusLabel, L"STATIC", L"EDF radius", kStaticStyle},
         {kIdEdfRadiusEdit, L"EDIT", L"1", kNumberEditStyle},
         {kIdAddEdfFrame, L"BUTTON", L"Add EDF", kButtonStyle},
@@ -103,7 +112,8 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdMeasurementNameEdit, L"EDIT", nullptr, kEditStyle},
         {kIdRenameMeasurement, L"BUTTON", L"Rename", kButtonStyle},
         {kIdResultsLabel, L"STATIC", L"Measurements", kStaticStyle},
-        {kIdResultsList, L"LISTBOX", nullptr, kListStyle}
+        {kIdResultsList, L"LISTBOX", nullptr, kListStyle},
+        {kIdPanelScrollBar, L"SCROLLBAR", nullptr, kPanelScrollStyle}
     };
     return definitions;
 }

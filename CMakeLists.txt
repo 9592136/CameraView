@@ -161,6 +161,8 @@ add_executable(CameraView WIN32
     src/ui/ProcessingBuildInputActions.h
     src/ui/ProcessingQueueActions.cpp
     src/ui/ProcessingQueueActions.h
+    src/ui/StitchTileDisplayActions.cpp
+    src/ui/StitchTileDisplayActions.h
     src/ui/WindowControlDefinitions.cpp
     src/ui/WindowControlDefinitions.h
     src/ui/WindowControlLayout.cpp
@@ -177,7 +179,7 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32)
+target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs)
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(MUCAM_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/MUCamSDK/bin/x64")
@@ -348,6 +350,8 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/ui/ProcessingBuildInputActions.h
         src/ui/ProcessingQueueActions.cpp
         src/ui/ProcessingQueueActions.h
+        src/ui/StitchTileDisplayActions.cpp
+        src/ui/StitchTileDisplayActions.h
         src/ui/WindowControlDefinitions.cpp
         src/ui/WindowControlDefinitions.h
         src/ui/WindowControlLayout.cpp
@@ -362,5 +366,6 @@ if(CAMERAVIEW_BUILD_TESTS)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
+    target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs)
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
 endif()

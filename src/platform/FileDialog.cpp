@@ -7,6 +7,20 @@
 namespace {
 constexpr wchar_t kCsvFilter[] = L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0";
 constexpr wchar_t kBmpFilter[] = L"BMP Files (*.bmp)\0*.bmp\0All Files (*.*)\0*.*\0";
+constexpr wchar_t kImageSaveFilter[] =
+    L"Image Files (*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff)\0*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff\0"
+    L"BMP Files (*.bmp)\0*.bmp\0"
+    L"JPEG Files (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0"
+    L"PNG Files (*.png)\0*.png\0"
+    L"TIFF Files (*.tif;*.tiff)\0*.tif;*.tiff\0"
+    L"All Files (*.*)\0*.*\0";
+constexpr wchar_t kImageOpenFilter[] =
+    L"Image Files (*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff)\0*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff\0"
+    L"BMP Files (*.bmp)\0*.bmp\0"
+    L"JPEG Files (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0"
+    L"PNG Files (*.png)\0*.png\0"
+    L"TIFF Files (*.tif;*.tiff)\0*.tif;*.tiff\0"
+    L"All Files (*.*)\0*.*\0";
 constexpr wchar_t kTextFilter[] = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
 constexpr wchar_t kProjectFilter[] =
     L"CameraView Project (*.cvproj)\0*.cvproj\0JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
@@ -77,13 +91,25 @@ bool FileDialog::SaveBmp(HWND owner, std::wstring& selected_path)
         selected_path);
 }
 
-bool FileDialog::OpenBmp(HWND owner, std::wstring& selected_path)
+bool FileDialog::SaveImage(HWND owner, std::wstring& selected_path)
+{
+    return ShowFileDialog(
+        owner,
+        L"CameraViewImage.bmp",
+        kImageSaveFilter,
+        L"bmp",
+        OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        true,
+        selected_path);
+}
+
+bool FileDialog::OpenImage(HWND owner, std::wstring& selected_path)
 {
     return ShowFileDialog(
         owner,
         nullptr,
-        kBmpFilter,
-        L"bmp",
+        kImageOpenFilter,
+        nullptr,
         OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
         false,
         selected_path);

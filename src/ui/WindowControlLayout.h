@@ -19,7 +19,21 @@ struct WindowControlPlacement {
 
 class WindowControlLayout {
 public:
-    static std::vector<WindowControlPlacement> Compute(const RECT& client_rect, int panel_category = 0);
+    static std::vector<WindowControlPlacement> Compute(
+        const RECT& client_rect,
+        int panel_category = 0,
+        int panel_scroll_offset = 0,
+        bool show_side_panel = true,
+        bool dock_panel_left = true);
+    static int PanelScrollMax(
+        const RECT& client_rect,
+        int panel_category = 0,
+        bool show_side_panel = true,
+        bool dock_panel_left = true);
+    static int PanelScrollPage(
+        const RECT& client_rect,
+        bool show_side_panel = true,
+        bool dock_panel_left = true);
     static const std::vector<std::wstring>& PanelCategoryLabels();
     static int NormalizePanelCategory(int panel_category);
     static int PanelCategoryFromCardControl(int control_id);

@@ -41,12 +41,21 @@ ExportActionResult ExportActions::SaveImageBmp(
     const MeasurementCollection& measurements,
     const std::wstring& display_mode)
 {
+    return SaveImage(path, frame, measurements, display_mode);
+}
+
+ExportActionResult ExportActions::SaveImage(
+    const std::filesystem::path& path,
+    const ImageFrame& frame,
+    const MeasurementCollection& measurements,
+    const std::wstring& display_mode)
+{
     if (!frame.IsValid()) {
         return {false, ExportActionStatus::NoImageFrame, L"No image frame to export."};
     }
 
     std::wstring error;
-    if (!ImageExporter::SaveBmp(
+    if (!ImageExporter::SaveRasterImage(
             path,
             frame,
             measurements.Lengths(),

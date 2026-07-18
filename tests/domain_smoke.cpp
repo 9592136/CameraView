@@ -71,13 +71,19 @@
 #include "../src/ui/MeasurementToolStartActions.h"
 #include "../src/ui/ProcessingBuildInputActions.h"
 #include "../src/ui/ProcessingQueueActions.h"
+#include "../src/ui/StitchTileDisplayActions.h"
 #include "../src/ui/WindowControlDefinitions.h"
 #include "../src/ui/WindowControlLayout.h"
 #include "../src/ui/WindowLayout.h"
 
+#include <wincodec.h>
+#include <wrl/client.h>
+
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -89,6 +95,8 @@
 
 namespace {
 
+using Microsoft::WRL::ComPtr;
+
 bool Near(double actual, double expected, double tolerance = 0.01)
 {
     return std::fabs(actual - expected) <= tolerance;
@@ -99,6 +107,32 @@ int Fail(const std::string& message)
     std::cerr << message << '\n';
     return 1;
 }
+
+class ScopedComInitializer {
+public:
+    ScopedComInitializer()
+    {
+        const HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        initialized_ = result == S_OK || result == S_FALSE;
+        failed_ = FAILED(result) && result != RPC_E_CHANGED_MODE;
+    }
+
+    ~ScopedComInitializer()
+    {
+        if (initialized_) {
+            CoUninitialize();
+        }
+    }
+
+    bool Failed() const
+    {
+        return failed_;
+    }
+
+private:
+    bool initialized_ = false;
+    bool failed_ = false;
+};
 
 ImageFrame MakeSolidImage(int width, int height, unsigned char blue, unsigned char green, unsigned char red)
 {
@@ -116,6 +150,152 @@ ImageFrame MakeSolidImage(int width, int height, unsigned char blue, unsigned ch
         }
     }
     return image;
+}
+
+bool SaveWicTestImage(
+    const std::filesystem::path& path,
+    REFGUID container_format,
+    const ImageFrame& frame)
+{
+    ScopedComInitializer com;
+    if (com.Failed()) {
+        return false;
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT result = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (FAILED(result)) {
+        return false;
+    }
+
+    ComPtr<IWICStream> stream;
+    result = factory->CreateStream(&stream);
+    if (SUCCEEDED(result)) {
+        result = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    if (SUCCEEDED(result)) {
+        result = factory->CreateEncoder(container_format, nullptr, &encoder);
+    }
+    if (SUCCEEDED(result)) {
+        result = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame_encoder;
+    if (SUCCEEDED(result)) {
+        result = encoder->CreateNewFrame(&frame_encoder, nullptr);
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->Initialize(nullptr);
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->SetSize(frame.width, frame.height);
+    }
+    WICPixelFormatGUID pixel_format = GUID_WICPixelFormat24bppBGR;
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->SetPixelFormat(&pixel_format);
+    }
+    if (SUCCEEDED(result) && !IsEqualGUID(pixel_format, GUID_WICPixelFormat24bppBGR)) {
+        result = E_FAIL;
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->WritePixels(
+            frame.height,
+            static_cast<UINT>(frame.stride),
+            static_cast<UINT>(frame.bgr.size()),
+            const_cast<BYTE*>(frame.bgr.data()));
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->Commit();
+    }
+    if (SUCCEEDED(result)) {
+        result = encoder->Commit();
+    }
+
+    return SUCCEEDED(result);
+}
+
+bool SaveWicGray16TestImage(
+    const std::filesystem::path& path,
+    REFGUID container_format,
+    int width,
+    int height,
+    const std::vector<std::uint16_t>& gray16)
+{
+    if (width <= 0 ||
+        height <= 0 ||
+        gray16.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) {
+        return false;
+    }
+
+    ScopedComInitializer com;
+    if (com.Failed()) {
+        return false;
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT result = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (FAILED(result)) {
+        return false;
+    }
+
+    ComPtr<IWICStream> stream;
+    result = factory->CreateStream(&stream);
+    if (SUCCEEDED(result)) {
+        result = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    if (SUCCEEDED(result)) {
+        result = factory->CreateEncoder(container_format, nullptr, &encoder);
+    }
+    if (SUCCEEDED(result)) {
+        result = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame_encoder;
+    if (SUCCEEDED(result)) {
+        result = encoder->CreateNewFrame(&frame_encoder, nullptr);
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->Initialize(nullptr);
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->SetSize(static_cast<UINT>(width), static_cast<UINT>(height));
+    }
+
+    WICPixelFormatGUID pixel_format = GUID_WICPixelFormat16bppGray;
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->SetPixelFormat(&pixel_format);
+    }
+    if (SUCCEEDED(result) && !IsEqualGUID(pixel_format, GUID_WICPixelFormat16bppGray)) {
+        result = E_FAIL;
+    }
+    if (SUCCEEDED(result)) {
+        const UINT stride = static_cast<UINT>(width * static_cast<int>(sizeof(std::uint16_t)));
+        result = frame_encoder->WritePixels(
+            static_cast<UINT>(height),
+            stride,
+            static_cast<UINT>(gray16.size() * sizeof(std::uint16_t)),
+            const_cast<BYTE*>(reinterpret_cast<const BYTE*>(gray16.data())));
+    }
+    if (SUCCEEDED(result)) {
+        result = frame_encoder->Commit();
+    }
+    if (SUCCEEDED(result)) {
+        result = encoder->Commit();
+    }
+
+    return SUCCEEDED(result);
 }
 
 ImageFrame MakePatternImage(int width, int height)
@@ -150,6 +330,20 @@ ImageFrame CropImage(const ImageFrame& source, int x0, int y0, int width, int he
             static_cast<std::size_t>(x0) * 3U;
         unsigned char* dst = image.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.stride);
         std::copy(src, src + width * 3, dst);
+    }
+    return image;
+}
+
+ImageFrame AdjustBrightness(ImageFrame image, int delta)
+{
+    for (int y = 0; y < image.height; ++y) {
+        unsigned char* row = image.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.stride);
+        for (int x = 0; x < image.width; ++x) {
+            for (int channel = 0; channel < 3; ++channel) {
+                row[x * 3 + channel] = static_cast<unsigned char>(
+                    std::clamp(static_cast<int>(row[x * 3 + channel]) + delta, 0, 255));
+            }
+        }
     }
     return image;
 }
@@ -191,11 +385,34 @@ int main()
     const RECT wide_preview = WindowLayout::PreviewRect(wide_client);
     const RECT wide_panel = WindowLayout::SidePanelRect(wide_client);
     const RECT wide_status = WindowLayout::StatusRect(wide_client);
+    const RECT hidden_panel_preview = WindowLayout::PreviewRect(wide_client, false);
+    const RECT hidden_panel = WindowLayout::SidePanelRect(wide_client, false);
+    const RECT right_docked_preview = WindowLayout::PreviewRect(wide_client, true, false);
+    const RECT right_docked_panel = WindowLayout::SidePanelRect(wide_client, true, false);
     if (WindowLayout::ComputeSidePanelWidth(wide_client) != 400 ||
-        wide_preview.left != 0 || wide_preview.top != 48 || wide_preview.right != 800 || wide_preview.bottom != 772 ||
-        wide_panel.left != 800 || wide_panel.top != 48 || wide_panel.right != 1200 || wide_panel.bottom != 772 ||
+        wide_preview.left != 400 || wide_preview.top != 48 || wide_preview.right != 1200 || wide_preview.bottom != 772 ||
+        wide_panel.left != 0 || wide_panel.top != 48 || wide_panel.right != 400 || wide_panel.bottom != 772 ||
         wide_status.left != 0 || wide_status.top != 772 || wide_status.right != 1200 || wide_status.bottom != 800) {
         return Fail("WindowLayout did not produce the expected wide-window regions.");
+    }
+    if (WindowLayout::ComputeSidePanelWidth(wide_client, false) != 0 ||
+        hidden_panel_preview.left != 0 ||
+        hidden_panel_preview.top != 48 ||
+        hidden_panel_preview.right != 1200 ||
+        hidden_panel_preview.bottom != 772 ||
+        hidden_panel.left != 0 ||
+        hidden_panel.right != 0) {
+        return Fail("WindowLayout did not expand the preview when the function panel is hidden.");
+    }
+    if (right_docked_preview.left != 0 ||
+        right_docked_preview.right != 800 ||
+        right_docked_preview.top != 48 ||
+        right_docked_preview.bottom != 772 ||
+        right_docked_panel.left != 800 ||
+        right_docked_panel.right != 1200 ||
+        right_docked_panel.top != 48 ||
+        right_docked_panel.bottom != 772) {
+        return Fail("WindowLayout did not dock the function panel on the right.");
     }
 
     const RECT narrow_client{0, 0, 600, 500};
@@ -203,7 +420,7 @@ int main()
     const RECT narrow_panel = WindowLayout::SidePanelRect(narrow_client);
     if (WindowLayout::ComputeSidePanelWidth(narrow_client) != 0 ||
         narrow_preview.left != 0 || narrow_preview.top != 48 || narrow_preview.right != 600 || narrow_preview.bottom != 472 ||
-        narrow_panel.left != 600 || narrow_panel.right != 600) {
+        narrow_panel.left != 0 || narrow_panel.right != 0) {
         return Fail("WindowLayout did not collapse the side panel for narrow windows.");
     }
 
@@ -211,6 +428,10 @@ int main()
         WindowControlLayout::Compute(wide_client);
     const WindowControlPlacement* device_combo = FindPlacement(wide_control_layout, kIdDeviceCombo);
     const WindowControlPlacement* fit_view_button = FindPlacement(wide_control_layout, kIdFitView);
+    const WindowControlPlacement* toggle_panel_button =
+        FindPlacement(wide_control_layout, kIdToggleFunctionPanel);
+    const WindowControlPlacement* toggle_panel_dock_button =
+        FindPlacement(wide_control_layout, kIdTogglePanelDock);
     const WindowControlPlacement* camera_card = FindPlacement(wide_control_layout, kIdCameraPanelCard);
     const WindowControlPlacement* image_card = FindPlacement(wide_control_layout, kIdImagePanelCard);
     const WindowControlPlacement* auto_exposure_button = FindPlacement(wide_control_layout, kIdAutoExposure);
@@ -228,30 +449,64 @@ int main()
         FindPlacement(measurement_control_layout, kIdExportCsv);
     const WindowControlPlacement* measurement_results_list =
         FindPlacement(measurement_control_layout, kIdResultsList);
-    if (wide_control_layout.size() != 9 + WindowControlLayout::SideControlIds().size()) {
+    const std::vector<WindowControlPlacement> processing_control_layout =
+        WindowControlLayout::Compute(wide_client, 3);
+    const WindowControlPlacement* processing_stitch_tile_label =
+        FindPlacement(processing_control_layout, kIdStitchTileLabel);
+    const WindowControlPlacement* processing_stitch_tile_list =
+        FindPlacement(processing_control_layout, kIdStitchTileList);
+    const WindowControlPlacement* processing_delete_stitch_tile =
+        FindPlacement(processing_control_layout, kIdDeleteStitchTile);
+    const WindowControlPlacement* processing_clear_stitch_tiles =
+        FindPlacement(processing_control_layout, kIdClearStitchTiles);
+    const std::vector<WindowControlPlacement> right_docked_control_layout =
+        WindowControlLayout::Compute(wide_client, 0, 0, true, false);
+    const WindowControlPlacement* right_docked_camera_card =
+        FindPlacement(right_docked_control_layout, kIdCameraPanelCard);
+    const WindowControlPlacement* right_docked_device_combo =
+        FindPlacement(right_docked_control_layout, kIdDeviceCombo);
+    if (wide_control_layout.size() != 3 + WindowControlLayout::SideControlIds().size()) {
         return Fail("WindowControlLayout did not return the expected number of placements.");
     }
-    if (!device_combo || !device_combo->visible || !RectEquals(device_combo->bounds, 73, 10, 293, 170)) {
-        return Fail("WindowControlLayout did not compute the expected toolbar combo placement.");
+    if (!device_combo || !device_combo->visible || !RectEquals(device_combo->bounds, 12, 149, 388, 289)) {
+        return Fail("WindowControlLayout did not compute the expected camera-panel combo placement.");
     }
-    if (!fit_view_button || !fit_view_button->visible || !RectEquals(fit_view_button->bounds, 573, 10, 629, 38)) {
+    if (!fit_view_button || !fit_view_button->visible || !RectEquals(fit_view_button->bounds, 10, 10, 66, 38)) {
         return Fail("WindowControlLayout did not compute the expected fit-view button placement.");
     }
-    if (!camera_card || !camera_card->visible || !RectEquals(camera_card->bounds, 812, 60, 996, 88) ||
-        !image_card || !image_card->visible || !RectEquals(image_card->bounds, 1004, 60, 1188, 88)) {
-        return Fail("WindowControlLayout did not compute the expected function card placement.");
+    if (!toggle_panel_button ||
+        !toggle_panel_button->visible ||
+        !RectEquals(toggle_panel_button->bounds, 74, 10, 170, 38)) {
+        return Fail("WindowControlLayout did not compute the expected function-panel toolbar button placement.");
+    }
+    if (!toggle_panel_dock_button ||
+        !toggle_panel_dock_button->visible ||
+        !RectEquals(toggle_panel_dock_button->bounds, 178, 10, 266, 38)) {
+        return Fail("WindowControlLayout did not compute the expected panel-dock toolbar button placement.");
+    }
+    if (!camera_card || !camera_card->visible || !RectEquals(camera_card->bounds, 4, 87, 396, 117) ||
+        !image_card || !image_card->visible || !RectEquals(image_card->bounds, 4, 365, 396, 395)) {
+        return Fail("WindowControlLayout did not compute the expected function header placement.");
     }
     if (!auto_exposure_button ||
         !auto_exposure_button->visible ||
-        !RectEquals(auto_exposure_button->bounds, 812, 176, 1188, 204)) {
+        !RectEquals(auto_exposure_button->bounds, 204, 221, 388, 249)) {
         return Fail("WindowControlLayout did not compute the expected camera parameter placement.");
+    }
+    if (!right_docked_camera_card ||
+        !right_docked_camera_card->visible ||
+        !RectEquals(right_docked_camera_card->bounds, 804, 87, 1196, 117) ||
+        !right_docked_device_combo ||
+        !right_docked_device_combo->visible ||
+        !RectEquals(right_docked_device_combo->bounds, 812, 149, 1188, 289)) {
+        return Fail("WindowControlLayout did not move function-panel controls when docked right.");
     }
     if (!pseudo_label || pseudo_label->visible || !RectEquals(pseudo_label->bounds, 0, 0, 0, 0)) {
         return Fail("WindowControlLayout should hide image controls in the camera category.");
     }
     if (!image_pseudo_label ||
         !image_pseudo_label->visible ||
-        !RectEquals(image_pseudo_label->bounds, 812, 176, 1188, 196)) {
+        !RectEquals(image_pseudo_label->bounds, 12, 158, 388, 178)) {
         return Fail("WindowControlLayout did not compute the expected pseudo-color label placement.");
     }
     if (!results_list || results_list->visible || !RectEquals(results_list->bounds, 0, 0, 0, 0)) {
@@ -263,10 +518,51 @@ int main()
         !measurement_export_csv->visible ||
         !measurement_results_list ||
         !measurement_results_list->visible ||
-        measurement_results_list->bounds.left != 812 ||
-        measurement_results_list->bounds.right != 1188 ||
+        measurement_results_list->bounds.left != 12 ||
+        measurement_results_list->bounds.right != 370 ||
         measurement_results_list->bounds.bottom < measurement_results_list->bounds.top) {
         return Fail("WindowControlLayout did not compute the expected measurement category placement.");
+    }
+    if (!processing_stitch_tile_label ||
+        !processing_stitch_tile_label->visible ||
+        !processing_stitch_tile_list ||
+        !processing_stitch_tile_list->visible ||
+        !processing_delete_stitch_tile ||
+        !processing_delete_stitch_tile->visible ||
+        !processing_clear_stitch_tiles ||
+        !processing_clear_stitch_tiles->visible ||
+        processing_stitch_tile_list->bounds.bottom <= processing_stitch_tile_list->bounds.top) {
+        return Fail("WindowControlLayout did not expose the stitch tile gallery controls.");
+    }
+    const RECT compact_client{0, 0, 900, 420};
+    const int compact_processing_scroll =
+        WindowControlLayout::PanelScrollMax(compact_client, 3);
+    const std::vector<WindowControlPlacement> compact_processing_layout =
+        WindowControlLayout::Compute(compact_client, 3);
+    const std::vector<WindowControlPlacement> scrolled_compact_processing_layout =
+        WindowControlLayout::Compute(compact_client, 3, std::min(54, compact_processing_scroll));
+    const WindowControlPlacement* compact_stitch_search =
+        FindPlacement(compact_processing_layout, kIdStitchSearchLabel);
+    const WindowControlPlacement* scrolled_compact_stitch_search =
+        FindPlacement(scrolled_compact_processing_layout, kIdStitchSearchLabel);
+    const WindowControlPlacement* compact_panel_scroll_bar =
+        FindPlacement(compact_processing_layout, kIdPanelScrollBar);
+    const RECT compact_panel = WindowLayout::SidePanelRect(compact_client);
+    if (compact_processing_scroll <= 0 ||
+        !compact_stitch_search ||
+        !compact_stitch_search->visible ||
+        !scrolled_compact_stitch_search ||
+        !scrolled_compact_stitch_search->visible ||
+        scrolled_compact_stitch_search->bounds.top >= compact_stitch_search->bounds.top) {
+        return Fail("WindowControlLayout did not scroll compact side-panel content.");
+    }
+    if (!compact_panel_scroll_bar ||
+        !compact_panel_scroll_bar->visible ||
+        compact_panel_scroll_bar->bounds.right != compact_panel.right ||
+        compact_panel_scroll_bar->bounds.left > compact_panel_scroll_bar->bounds.right - 16 ||
+        compact_panel_scroll_bar->bounds.top <= compact_panel.top ||
+        compact_panel_scroll_bar->bounds.bottom != compact_panel.bottom) {
+        return Fail("WindowControlLayout did not expose a full-height side-panel scrollbar.");
     }
     const std::vector<std::wstring>& panel_categories = WindowControlLayout::PanelCategoryLabels();
     if (panel_categories.size() != 6 ||
@@ -284,13 +580,38 @@ int main()
     const std::vector<WindowControlPlacement> narrow_control_layout =
         WindowControlLayout::Compute(narrow_client);
     const WindowControlPlacement* narrow_device_combo = FindPlacement(narrow_control_layout, kIdDeviceCombo);
+    const WindowControlPlacement* narrow_fit_view = FindPlacement(narrow_control_layout, kIdFitView);
     const WindowControlPlacement* narrow_pseudo_label = FindPlacement(narrow_control_layout, kIdPseudoColorLabel);
-    if (!narrow_device_combo ||
-        !narrow_device_combo->visible ||
+    if (!narrow_fit_view ||
+        !narrow_fit_view->visible ||
+        !narrow_device_combo ||
+        narrow_device_combo->visible ||
         !narrow_pseudo_label ||
         narrow_pseudo_label->visible ||
         !RectEquals(narrow_pseudo_label->bounds, 0, 0, 0, 0)) {
         return Fail("WindowControlLayout did not hide side-panel controls for narrow windows.");
+    }
+    const std::vector<WindowControlPlacement> hidden_panel_layout =
+        WindowControlLayout::Compute(wide_client, 0, 0, false);
+    const WindowControlPlacement* hidden_toggle_panel_button =
+        FindPlacement(hidden_panel_layout, kIdToggleFunctionPanel);
+    const WindowControlPlacement* hidden_toggle_panel_dock_button =
+        FindPlacement(hidden_panel_layout, kIdTogglePanelDock);
+    const WindowControlPlacement* hidden_camera_card =
+        FindPlacement(hidden_panel_layout, kIdCameraPanelCard);
+    const WindowControlPlacement* hidden_auto_exposure =
+        FindPlacement(hidden_panel_layout, kIdAutoExposure);
+    if (WindowControlLayout::PanelScrollMax(wide_client, 3, false) != 0 ||
+        WindowControlLayout::PanelScrollPage(wide_client, false) != 0 ||
+        !hidden_toggle_panel_button ||
+        !hidden_toggle_panel_button->visible ||
+        !hidden_toggle_panel_dock_button ||
+        !hidden_toggle_panel_dock_button->visible ||
+        !hidden_camera_card ||
+        hidden_camera_card->visible ||
+        !hidden_auto_exposure ||
+        hidden_auto_exposure->visible) {
+        return Fail("WindowControlLayout did not hide function-panel controls while keeping the toolbar visible.");
     }
 
     const std::vector<WindowControlDefinition>& control_definitions = WindowControlDefinitions::All();
@@ -300,10 +621,15 @@ int main()
     }
     const WindowControlDefinition* open_button_definition = WindowControlDefinitions::Find(kIdOpen);
     const WindowControlDefinition* fit_button_definition = WindowControlDefinitions::Find(kIdFitView);
+    const WindowControlDefinition* toggle_panel_definition =
+        WindowControlDefinitions::Find(kIdToggleFunctionPanel);
+    const WindowControlDefinition* toggle_panel_dock_definition =
+        WindowControlDefinitions::Find(kIdTogglePanelDock);
     const WindowControlDefinition* fusion_checkbox_definition = WindowControlDefinitions::Find(kIdFusionPreview);
     const WindowControlDefinition* auto_exposure_definition = WindowControlDefinitions::Find(kIdAutoExposure);
     const WindowControlDefinition* camera_gain_definition = WindowControlDefinitions::Find(kIdCameraGainEdit);
     const WindowControlDefinition* dye_red_definition = WindowControlDefinitions::Find(kIdDyeRedEdit);
+    const WindowControlDefinition* panel_scroll_definition = WindowControlDefinitions::Find(kIdPanelScrollBar);
     if (control_definitions.size() != wide_control_layout.size() ||
         control_ids.size() != control_definitions.size() ||
         !open_button_definition ||
@@ -311,6 +637,10 @@ int main()
         std::wstring(open_button_definition->text) != L"Open" ||
         !fit_button_definition ||
         std::wstring(fit_button_definition->text) != L"Fit" ||
+        !toggle_panel_definition ||
+        std::wstring(toggle_panel_definition->text) != L"Hide Panel" ||
+        !toggle_panel_dock_definition ||
+        std::wstring(toggle_panel_dock_definition->text) != L"Dock Right" ||
         !auto_exposure_definition ||
         std::wstring(auto_exposure_definition->text) != L"Auto Exposure" ||
         !camera_gain_definition ||
@@ -319,6 +649,8 @@ int main()
         (fusion_checkbox_definition->style & BS_AUTOCHECKBOX) == 0 ||
         !dye_red_definition ||
         (dye_red_definition->style & ES_NUMBER) == 0 ||
+        !panel_scroll_definition ||
+        std::wstring(panel_scroll_definition->class_name) != L"SCROLLBAR" ||
         WindowControlDefinitions::Find(9999) != nullptr) {
         return Fail("WindowControlDefinitions did not describe the expected controls.");
     }
@@ -1427,7 +1759,9 @@ int main()
         processing_frames.ProcessingResult().bgr[0] != 1) {
         return Fail("ProcessingResultFrames should ignore failed results.");
     }
-    processing_frames.Clear();
+    if (!processing_frames.Clear()) {
+        return Fail("ProcessingResultFrames did not report clearing a visible result.");
+    }
     if (processing_frames.IsProcessingResultVisible() ||
         processing_frames.ProcessingResult().IsValid() ||
         processing_frames.DisplaySource() != ProcessingResultDisplaySource::None ||
@@ -1436,6 +1770,9 @@ int main()
         processing_frames.ShowEdfCompositeFrame() ||
         processing_frames.ShowEdfFocusMap()) {
         return Fail("ProcessingResultFrames did not clear display state.");
+    }
+    if (processing_frames.Clear()) {
+        return Fail("ProcessingResultFrames should not report a visible result when already clear.");
     }
 
     const ProcessingBuildActionResult no_stitch_build =
@@ -1554,6 +1891,22 @@ int main()
         queue_tiles.size() != 1 ||
         queue_frames.IsProcessingResultVisible()) {
         return Fail("ProcessingQueueActions did not add the first stitch tile and clear old results.");
+    }
+    ProcessingResultFrames idle_queue_frames;
+    std::vector<StitchTile> idle_queue_tiles;
+    const ProcessingQueueActionResult idle_queue_stitch =
+        ProcessingQueueActions::AddStitchTile(
+            idle_queue_tiles,
+            idle_queue_frames,
+            MakeSolidImage(2, 2, 3, 3, 3),
+            L"50",
+            50);
+    if (!idle_queue_stitch.changed ||
+        idle_queue_stitch.preview_changed ||
+        idle_queue_stitch.status != ProcessingQueueActionStatus::StitchAdded ||
+        idle_queue_stitch.stitch_tile_count != 1 ||
+        idle_queue_frames.IsProcessingResultVisible()) {
+        return Fail("ProcessingQueueActions should not request preview redraw when no result was visible.");
     }
     ProcessingJobResult visible_queue_result_again;
     visible_queue_result_again.kind = ProcessingJobKind::Stitch;
@@ -2514,7 +2867,7 @@ int main()
         ProcessingParameterRules::StitchOptimizationOptionsFor(optimization_tiles, 1);
     if (ProcessingParameterRules::MinStitchSearchPercent() != 5 ||
         ProcessingParameterRules::MaxStitchSearchPercent() != 100 ||
-        ProcessingParameterRules::DefaultStitchSearchPercent() != 50 ||
+        ProcessingParameterRules::DefaultStitchSearchPercent() != 85 ||
         !ProcessingParameterRules::IsValidStitchSearchPercent(5) ||
         !ProcessingParameterRules::IsValidStitchSearchPercent(100) ||
         ProcessingParameterRules::IsValidStitchSearchPercent(4) ||
@@ -3014,6 +3367,19 @@ int main()
     if (!translation.valid || translation.dx != 6 || translation.dy != 3) {
         return Fail("Image registration did not recover the expected translation.");
     }
+    const ImageFrame brighter_moving_crop = AdjustBrightness(moving_crop, 30);
+    const TranslationOffset exposure_translation =
+        ImageRegistration::EstimateTranslation(reference_crop, brighter_moving_crop, 12, 8);
+    if (!exposure_translation.valid || exposure_translation.dx != 6 || exposure_translation.dy != 3) {
+        return Fail("Image registration did not recover translation under exposure changes.");
+    }
+    const TranslationOffset refined_exposure_translation =
+        ImageRegistration::RefineTranslation(reference_crop, brighter_moving_crop, 5, 2, 3, 3);
+    if (!refined_exposure_translation.valid ||
+        refined_exposure_translation.dx != 6 ||
+        refined_exposure_translation.dy != 3) {
+        return Fail("Image registration did not refine translation under exposure changes.");
+    }
 
     const StitchTilePlacementResult first_placement =
         StitchTilePlacementPlanner::PlaceNext(MakeSolidImage(3, 2, 1, 2, 3), {}, 50);
@@ -3036,6 +3402,99 @@ int main()
         registered_placement.tile.offset_x != 16 ||
         registered_placement.tile.offset_y != 23) {
         return Fail("StitchTilePlacementPlanner did not apply the registration offset.");
+    }
+    StitchTile unrelated_last_tile;
+    unrelated_last_tile.frame = MakeSolidImage(20, 16, 7, 7, 7);
+    unrelated_last_tile.offset_x = 200;
+    unrelated_last_tile.offset_y = 120;
+    const StitchTilePlacementResult adjacent_default_placement =
+        StitchTilePlacementPlanner::PlaceNext(
+            moving_crop,
+            {previous_registered_tile, unrelated_last_tile},
+            50);
+    if (adjacent_default_placement.registered ||
+        adjacent_default_placement.tile.offset_x != 220 ||
+        adjacent_default_placement.tile.offset_y != 120) {
+        return Fail("StitchTilePlacementPlanner did not default to the previous tile relation.");
+    }
+    const ImageFrame large_pattern = MakePatternImage(420, 300);
+    StitchTile large_previous_tile;
+    large_previous_tile.frame = CropImage(large_pattern, 0, 0, 320, 240);
+    large_previous_tile.offset_x = 30;
+    large_previous_tile.offset_y = 40;
+    const StitchTilePlacementResult large_registered_placement =
+        StitchTilePlacementPlanner::PlaceNext(
+            CropImage(large_pattern, 24, 12, 320, 240),
+            {large_previous_tile},
+            50);
+    if (large_registered_placement.registered ||
+        !large_registered_placement.estimated ||
+        !large_registered_placement.tile.estimated_position ||
+        large_registered_placement.tile.offset_x != 190 ||
+        large_registered_placement.tile.offset_y != 40) {
+        return Fail("StitchTilePlacementPlanner did not use fast adjacent placement for larger tiles.");
+    }
+    const ImageFrame precise_large_moving_tile = CropImage(large_pattern, 25, 13, 320, 240);
+    const StitchTilePlacementResult precise_large_registered_placement =
+        StitchTilePlacementPlanner::PlaceNext(
+            precise_large_moving_tile,
+            {large_previous_tile},
+            50);
+    if (precise_large_registered_placement.registered ||
+        !precise_large_registered_placement.estimated ||
+        !precise_large_registered_placement.tile.estimated_position ||
+        precise_large_registered_placement.tile.offset_x != 190 ||
+        precise_large_registered_placement.tile.offset_y != 40) {
+        return Fail("StitchTilePlacementPlanner did not keep larger Add Tile placement fast.");
+    }
+    StitchTile first_fast_large_tile;
+    first_fast_large_tile.frame = MakeSolidImage(1920, 1080, 1, 2, 3);
+    first_fast_large_tile.offset_x = 0;
+    first_fast_large_tile.offset_y = 0;
+    std::vector<StitchTile> fast_large_tiles;
+    fast_large_tiles.push_back(std::move(first_fast_large_tile));
+    ImageFrame second_fast_large_frame = MakeSolidImage(1920, 1080, 4, 5, 6);
+    const auto fast_add_start = std::chrono::steady_clock::now();
+    const StitchTilePlacementResult fast_large_placement =
+        StitchTilePlacementPlanner::PlaceNext(std::move(second_fast_large_frame), fast_large_tiles, 85);
+    const auto fast_add_elapsed = std::chrono::steady_clock::now() - fast_add_start;
+    if (fast_large_placement.registered ||
+        !fast_large_placement.estimated ||
+        !fast_large_placement.tile.estimated_position ||
+        fast_large_placement.tile.offset_x != 1632 ||
+        fast_large_placement.tile.offset_y != 0 ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(fast_add_elapsed).count() >= 2000) {
+        return Fail("StitchTilePlacementPlanner did not keep large Add Tile placement under 2 seconds.");
+    }
+    constexpr int kFastQueueTileWidth = 4096;
+    constexpr int kFastQueueTileHeight = 3072;
+    StitchTile fast_queue_previous_tile;
+    fast_queue_previous_tile.frame = MakeSolidImage(kFastQueueTileWidth, kFastQueueTileHeight, 1, 2, 3);
+    fast_queue_previous_tile.offset_x = 0;
+    fast_queue_previous_tile.offset_y = 0;
+    std::vector<StitchTile> fast_queue_tiles;
+    fast_queue_tiles.push_back(std::move(fast_queue_previous_tile));
+    ProcessingResultFrames fast_queue_frames;
+    FrameBuffer fast_queue_buffer;
+    fast_queue_buffer.Publish(MakeSolidImage(kFastQueueTileWidth, kFastQueueTileHeight, 4, 5, 6));
+    const auto fast_queue_add_start = std::chrono::steady_clock::now();
+    const ProcessingQueueActionResult fast_queue_add =
+        ProcessingQueueActions::AddStitchTile(
+            fast_queue_tiles,
+            fast_queue_frames,
+            fast_queue_buffer.Snapshot(),
+            L"85",
+            85);
+    const auto fast_queue_add_elapsed = std::chrono::steady_clock::now() - fast_queue_add_start;
+    if (!fast_queue_add.changed ||
+        fast_queue_add.preview_changed ||
+        fast_queue_add.status != ProcessingQueueActionStatus::StitchAdded ||
+        fast_queue_tiles.size() != 2 ||
+        !fast_queue_tiles[1].estimated_position ||
+        fast_queue_tiles[1].offset_x != 3481 ||
+        fast_queue_tiles[1].offset_y != 0 ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(fast_queue_add_elapsed).count() >= 2000) {
+        return Fail("ProcessingQueueActions did not keep 4096x3072 Add Tile under 2 seconds.");
     }
     StitchTile previous_fallback_tile;
     previous_fallback_tile.frame = MakeSolidImage(2, 1, 1, 1, 1);
@@ -3076,6 +3535,8 @@ int main()
     if (!registered_stitch_action.changed ||
         registered_stitch_action.status != StitchTileListActionStatus::Added ||
         !registered_stitch_action.registered ||
+        registered_stitch_action.estimated ||
+        registered_action_tiles[1].estimated_position ||
         registered_stitch_action.registration.dx != 6 ||
         registered_stitch_action.registration.dy != 3 ||
         registered_stitch_action.tile_count != 2 ||
@@ -3084,6 +3545,73 @@ int main()
         registered_action_tiles[1].offset_y != 23 ||
         registered_stitch_action.message != L"Stitch tile added with offset 6,3.") {
         return Fail("StitchTileListActions did not add a registered tile with status text.");
+    }
+    std::vector<StitchTile> estimated_action_tiles;
+    StitchTile estimated_action_previous;
+    estimated_action_previous.frame = MakeSolidImage(320, 240, 1, 2, 3);
+    estimated_action_previous.offset_x = 30;
+    estimated_action_previous.offset_y = 40;
+    estimated_action_tiles.push_back(std::move(estimated_action_previous));
+    const StitchTileListActionResult estimated_stitch_action =
+        StitchTileListActions::AddCurrentFrame(estimated_action_tiles, MakeSolidImage(320, 240, 4, 5, 6), 50);
+    if (!estimated_stitch_action.changed ||
+        estimated_stitch_action.status != StitchTileListActionStatus::Added ||
+        estimated_stitch_action.registered ||
+        !estimated_stitch_action.estimated ||
+        estimated_stitch_action.tile_count != 2 ||
+        !estimated_action_tiles[1].estimated_position ||
+        estimated_action_tiles[1].offset_x != 190 ||
+        estimated_action_tiles[1].offset_y != 40 ||
+        estimated_stitch_action.message !=
+            L"Stitch tile added with fast estimated position. Stitch will refine alignment.") {
+        return Fail("StitchTileListActions did not report fast estimated stitch placement.");
+    }
+    const std::vector<std::wstring> stitch_tile_lines =
+        StitchTileDisplayActions::TileLines(registered_action_tiles);
+    if (stitch_tile_lines.size() != 2 ||
+        stitch_tile_lines[0] != L"Tile 1  20x16  @ 10,20" ||
+        stitch_tile_lines[1] != L"Tile 2  20x16  @ 16,23") {
+        return Fail("StitchTileDisplayActions did not format stitch tile gallery lines.");
+    }
+    const std::vector<std::wstring> estimated_stitch_tile_lines =
+        StitchTileDisplayActions::TileLines(estimated_action_tiles);
+    if (estimated_stitch_tile_lines.size() != 2 ||
+        estimated_stitch_tile_lines[0] != L"Tile 1  320x240  @ 30,40" ||
+        estimated_stitch_tile_lines[1] != L"Tile 2  320x240  @ 190,40  estimated") {
+        return Fail("StitchTileDisplayActions did not mark estimated stitch tile positions.");
+    }
+    const StitchTileListActionResult missing_delete_stitch_tile =
+        StitchTileListActions::DeleteSelected(registered_action_tiles, -1);
+    if (missing_delete_stitch_tile.changed ||
+        missing_delete_stitch_tile.status != StitchTileListActionStatus::NoSelection ||
+        registered_action_tiles.size() != 2) {
+        return Fail("StitchTileListActions should reject deleting without a selected tile.");
+    }
+    const StitchTileListActionResult delete_stitch_tile =
+        StitchTileListActions::DeleteSelected(registered_action_tiles, 0);
+    if (!delete_stitch_tile.changed ||
+        delete_stitch_tile.status != StitchTileListActionStatus::Deleted ||
+        delete_stitch_tile.tile_count != 1 ||
+        !delete_stitch_tile.next_selection ||
+        *delete_stitch_tile.next_selection != 0 ||
+        registered_action_tiles.size() != 1 ||
+        registered_action_tiles[0].offset_x != 16) {
+        return Fail("StitchTileListActions did not delete the selected stitch tile.");
+    }
+    const StitchTileListActionResult clear_stitch_tiles =
+        StitchTileListActions::Clear(registered_action_tiles);
+    if (!clear_stitch_tiles.changed ||
+        clear_stitch_tiles.status != StitchTileListActionStatus::Cleared ||
+        clear_stitch_tiles.tile_count != 0 ||
+        !registered_action_tiles.empty()) {
+        return Fail("StitchTileListActions did not clear stitch tiles.");
+    }
+    const StitchTileListActionResult clear_empty_stitch_tiles =
+        StitchTileListActions::Clear(registered_action_tiles);
+    if (clear_empty_stitch_tiles.changed ||
+        clear_empty_stitch_tiles.status != StitchTileListActionStatus::Empty ||
+        clear_empty_stitch_tiles.message != L"No stitch tiles to clear.") {
+        return Fail("StitchTileListActions should report an empty stitch tile gallery.");
     }
 
     StitchTile left_tile;
@@ -3103,14 +3631,38 @@ int main()
         return Fail("Image stitching did not produce the expected canvas size.");
     }
     if (stitched_image.bgr[0] != 10 ||
-        stitched_image.bgr[3] != 30 ||
-        stitched_image.bgr[4] != 45 ||
-        stitched_image.bgr[5] != 60 ||
+        stitched_image.bgr[3] != 10 ||
+        stitched_image.bgr[4] != 20 ||
+        stitched_image.bgr[5] != 30 ||
         stitched_image.bgr[6] != 50) {
-        return Fail("Image stitching did not preserve or average tile pixels correctly.");
+        return Fail("Image stitching did not preserve sharp source pixels in the overlap.");
     }
     if (!NonDecreasingProgress(stitch_progress)) {
         return Fail("Image stitching did not report monotonic progress from 0 to 100.");
+    }
+    StitchTile exposure_left_tile;
+    exposure_left_tile.frame = MakeSolidImage(96, 64, 90, 100, 110);
+    exposure_left_tile.offset_x = 0;
+    exposure_left_tile.offset_y = 0;
+    StitchTile exposure_right_tile;
+    exposure_right_tile.frame = MakeSolidImage(96, 64, 125, 135, 145);
+    exposure_right_tile.offset_x = 48;
+    exposure_right_tile.offset_y = 0;
+    const ImageFrame exposure_matched_stitch =
+        ImageStitcher::StitchAverage({exposure_left_tile, exposure_right_tile});
+    if (!exposure_matched_stitch.IsValid() ||
+        exposure_matched_stitch.width != 144 ||
+        exposure_matched_stitch.height != 64) {
+        return Fail("Image stitching did not build the exposure-matched canvas.");
+    }
+    const unsigned char* exposure_right_only =
+        exposure_matched_stitch.bgr.data() +
+        static_cast<std::size_t>(32) * static_cast<std::size_t>(exposure_matched_stitch.stride) +
+        static_cast<std::size_t>(120) * 3U;
+    if (std::abs(static_cast<int>(exposure_right_only[0]) - 90) > 1 ||
+        std::abs(static_cast<int>(exposure_right_only[1]) - 100) > 1 ||
+        std::abs(static_cast<int>(exposure_right_only[2]) - 110) > 1) {
+        return Fail("Image stitching did not compensate exposure differences across stitched tiles.");
     }
 
     const ImageFrame stitch_pattern = MakePatternImage(64, 64);
@@ -3146,7 +3698,14 @@ int main()
         optimized_stitch.tiles[2].offset_y != 20 ||
         optimized_stitch.tiles[3].offset_x != 0 ||
         optimized_stitch.tiles[3].offset_y != 20) {
-        return Fail("Global stitch optimization did not correct drifted tile positions.");
+        return Fail(
+            "Global stitch optimization did not correct drifted tile positions; got " +
+            std::to_string(optimized_stitch.tiles[1].offset_x) + "," +
+            std::to_string(optimized_stitch.tiles[1].offset_y) + " / " +
+            std::to_string(optimized_stitch.tiles[2].offset_x) + "," +
+            std::to_string(optimized_stitch.tiles[2].offset_y) + " / " +
+            std::to_string(optimized_stitch.tiles[3].offset_x) + "," +
+            std::to_string(optimized_stitch.tiles[3].offset_y) + ".");
     }
 
     std::atomic_bool cancel_stitch = true;
@@ -3171,6 +3730,29 @@ int main()
     }
     if (!NonDecreasingProgress(stitch_job_progress)) {
         return Fail("ProcessingJobExecutor did not report monotonic stitch progress.");
+    }
+    std::vector<int> large_stitch_job_progress;
+    const ProcessingJobResult large_stitch_job_result = ProcessingJobExecutor::RunStitch(
+        44,
+        {large_previous_tile, large_registered_placement.tile},
+        50,
+        nullptr,
+        [&](int percent) { large_stitch_job_progress.push_back(percent); });
+    if (large_stitch_job_result.job_id != 44 ||
+        large_stitch_job_result.kind != ProcessingJobKind::Stitch ||
+        !large_stitch_job_result.succeeded ||
+        !large_stitch_job_result.image.IsValid() ||
+        large_stitch_job_result.image.width != 344 ||
+        large_stitch_job_result.image.height != 252) {
+        return Fail(
+            "ProcessingJobExecutor did not refine a larger estimated stitch result; got " +
+            std::to_string(large_stitch_job_result.image.width) +
+            "x" +
+            std::to_string(large_stitch_job_result.image.height) +
+            ".");
+    }
+    if (!NonDecreasingProgress(large_stitch_job_progress)) {
+        return Fail("ProcessingJobExecutor did not report monotonic larger stitch progress.");
     }
     std::atomic_bool cancel_stitch_job = true;
     const ProcessingJobResult canceled_stitch_job = ProcessingJobExecutor::RunStitch(
@@ -3459,6 +4041,120 @@ int main()
         load_error != L"Failed to open image file.") {
         return Fail("BMP import did not reject a missing image file.");
     }
+    ImageFrame wic_source = MakeSolidImage(3, 2, 12, 34, 56);
+    wic_source.bgr[0] = 90;
+    wic_source.bgr[1] = 91;
+    wic_source.bgr[2] = 92;
+    wic_source.bgr[static_cast<std::size_t>(wic_source.stride) + 2U * 3U + 0U] = 210;
+    wic_source.bgr[static_cast<std::size_t>(wic_source.stride) + 2U * 3U + 1U] = 211;
+    wic_source.bgr[static_cast<std::size_t>(wic_source.stride) + 2U * 3U + 2U] = 212;
+    const std::filesystem::path png_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTests.png";
+    const std::filesystem::path tif_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTests.tif";
+    const std::filesystem::path jpg_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTests.jpg";
+    std::filesystem::remove(png_path);
+    std::filesystem::remove(tif_path);
+    std::filesystem::remove(jpg_path);
+    if (!SaveWicTestImage(png_path, GUID_ContainerFormatPng, wic_source) ||
+        !SaveWicTestImage(tif_path, GUID_ContainerFormatTiff, wic_source) ||
+        !SaveWicTestImage(jpg_path, GUID_ContainerFormatJpeg, wic_source)) {
+        std::filesystem::remove(png_path);
+        std::filesystem::remove(tif_path);
+        std::filesystem::remove(jpg_path);
+        return Fail("WIC test image generation failed.");
+    }
+    ImageFrame loaded_png;
+    if (!ImageExporter::LoadRasterImage(png_path, loaded_png, load_error) ||
+        !loaded_png.IsValid() ||
+        loaded_png.width != wic_source.width ||
+        loaded_png.height != wic_source.height ||
+        loaded_png.stride != wic_source.stride ||
+        loaded_png.bgr[0] != 90 ||
+        loaded_png.bgr[1] != 91 ||
+        loaded_png.bgr[2] != 92 ||
+        loaded_png.bgr[static_cast<std::size_t>(loaded_png.stride) + 2U * 3U + 0U] != 210 ||
+        loaded_png.bgr[static_cast<std::size_t>(loaded_png.stride) + 2U * 3U + 1U] != 211 ||
+        loaded_png.bgr[static_cast<std::size_t>(loaded_png.stride) + 2U * 3U + 2U] != 212) {
+        std::filesystem::remove(png_path);
+        std::filesystem::remove(tif_path);
+        std::filesystem::remove(jpg_path);
+        return Fail("Image import did not read a PNG image.");
+    }
+    ImageFrame loaded_tif;
+    if (!ImageExporter::LoadRasterImage(tif_path, loaded_tif, load_error) ||
+        !loaded_tif.IsValid() ||
+        loaded_tif.width != wic_source.width ||
+        loaded_tif.height != wic_source.height ||
+        loaded_tif.stride != wic_source.stride ||
+        loaded_tif.bgr[0] != 90 ||
+        loaded_tif.bgr[1] != 91 ||
+        loaded_tif.bgr[2] != 92 ||
+        loaded_tif.bgr[static_cast<std::size_t>(loaded_tif.stride) + 2U * 3U + 0U] != 210 ||
+        loaded_tif.bgr[static_cast<std::size_t>(loaded_tif.stride) + 2U * 3U + 1U] != 211 ||
+        loaded_tif.bgr[static_cast<std::size_t>(loaded_tif.stride) + 2U * 3U + 2U] != 212) {
+        std::filesystem::remove(png_path);
+        std::filesystem::remove(tif_path);
+        std::filesystem::remove(jpg_path);
+        return Fail("Image import did not read a TIFF image.");
+    }
+    ImageFrame loaded_jpg;
+    if (!ImageExporter::LoadRasterImage(jpg_path, loaded_jpg, load_error) ||
+        !loaded_jpg.IsValid() ||
+        loaded_jpg.width != wic_source.width ||
+        loaded_jpg.height != wic_source.height ||
+        loaded_jpg.stride != wic_source.stride) {
+        std::filesystem::remove(png_path);
+        std::filesystem::remove(tif_path);
+        std::filesystem::remove(jpg_path);
+        return Fail("Image import did not read a JPEG image.");
+    }
+    std::filesystem::remove(png_path);
+    std::filesystem::remove(tif_path);
+    std::filesystem::remove(jpg_path);
+
+    const std::vector<std::uint16_t> gray16_values = {
+        1000, 3000, 5000, 1000,
+        5000, 3000, 1000, 5000
+    };
+    const std::filesystem::path gray16_png_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsGray16.png";
+    const std::filesystem::path gray16_tif_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsGray16.tif";
+    std::filesystem::remove(gray16_png_path);
+    std::filesystem::remove(gray16_tif_path);
+    if (!SaveWicGray16TestImage(gray16_png_path, GUID_ContainerFormatPng, 4, 2, gray16_values) ||
+        !SaveWicGray16TestImage(gray16_tif_path, GUID_ContainerFormatTiff, 4, 2, gray16_values)) {
+        std::filesystem::remove(gray16_png_path);
+        std::filesystem::remove(gray16_tif_path);
+        return Fail("WIC 16-bit gray test image generation failed.");
+    }
+    ImageFrame loaded_gray16_png;
+    ImageFrame loaded_gray16_tif;
+    if (!ImageExporter::LoadRasterImage(gray16_png_path, loaded_gray16_png, load_error) ||
+        !ImageExporter::LoadRasterImage(gray16_tif_path, loaded_gray16_tif, load_error) ||
+        !loaded_gray16_png.IsValid() ||
+        !loaded_gray16_tif.IsValid() ||
+        loaded_gray16_png.width != 4 ||
+        loaded_gray16_png.height != 2 ||
+        loaded_gray16_tif.width != 4 ||
+        loaded_gray16_tif.height != 2 ||
+        loaded_gray16_png.bgr[0] != 0 ||
+        loaded_gray16_png.bgr[1 * 3] < 127 ||
+        loaded_gray16_png.bgr[1 * 3] > 128 ||
+        loaded_gray16_png.bgr[2 * 3] != 255 ||
+        loaded_gray16_tif.bgr[0] != 0 ||
+        loaded_gray16_tif.bgr[1 * 3] < 127 ||
+        loaded_gray16_tif.bgr[1 * 3] > 128 ||
+        loaded_gray16_tif.bgr[2 * 3] != 255) {
+        std::filesystem::remove(gray16_png_path);
+        std::filesystem::remove(gray16_tif_path);
+        return Fail("16-bit gray image import did not auto-stretch the display range.");
+    }
+    std::filesystem::remove(gray16_png_path);
+    std::filesystem::remove(gray16_tif_path);
+
     const std::filesystem::path indexed_bmp_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTests8bit.bmp";
     std::filesystem::remove(indexed_bmp_path);
@@ -3628,6 +4324,77 @@ int main()
         return Fail("ExportActions did not include the preview display mode in image export status.");
     }
     std::filesystem::remove(action_bmp_path);
+
+    MeasurementCollection image_export_measurements;
+    image_export_measurements.AddLength(
+        L"Image Export Length",
+        ImagePoint{1.0, 1.0},
+        ImagePoint{14.0, 1.0});
+    const std::size_t image_export_overlay_pixel =
+        static_cast<std::size_t>(1) * static_cast<std::size_t>(image.stride) +
+        static_cast<std::size_t>(1) * 3U;
+    const std::filesystem::path action_png_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.png";
+    const std::filesystem::path action_tif_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.tif";
+    const std::filesystem::path action_jpg_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.jpg";
+    std::filesystem::remove(action_png_path);
+    std::filesystem::remove(action_tif_path);
+    std::filesystem::remove(action_jpg_path);
+    const ExportActionResult png_image_export =
+        ExportActions::SaveImage(action_png_path, image, image_export_measurements);
+    const ExportActionResult tif_image_export =
+        ExportActions::SaveImage(action_tif_path, image, image_export_measurements);
+    const ExportActionResult jpg_image_export =
+        ExportActions::SaveImage(action_jpg_path, image, image_export_measurements);
+    if (!png_image_export.saved ||
+        !tif_image_export.saved ||
+        !jpg_image_export.saved ||
+        !std::filesystem::exists(action_png_path) ||
+        !std::filesystem::exists(action_tif_path) ||
+        !std::filesystem::exists(action_jpg_path)) {
+        std::filesystem::remove(action_png_path);
+        std::filesystem::remove(action_tif_path);
+        std::filesystem::remove(action_jpg_path);
+        return Fail("ExportActions did not save PNG, TIFF, and JPEG images.");
+    }
+    ImageFrame exported_png;
+    ImageFrame exported_tif;
+    ImageFrame exported_jpg;
+    if (!ImageExporter::LoadRasterImage(action_png_path, exported_png, load_error) ||
+        !ImageExporter::LoadRasterImage(action_tif_path, exported_tif, load_error) ||
+        !ImageExporter::LoadRasterImage(action_jpg_path, exported_jpg, load_error) ||
+        exported_png.width != image.width ||
+        exported_png.height != image.height ||
+        exported_tif.width != image.width ||
+        exported_tif.height != image.height ||
+        exported_jpg.width != image.width ||
+        exported_jpg.height != image.height ||
+        exported_png.bgr[image_export_overlay_pixel] != 74 ||
+        exported_png.bgr[image_export_overlay_pixel + 1] != 214 ||
+        exported_png.bgr[image_export_overlay_pixel + 2] != 255 ||
+        exported_tif.bgr[image_export_overlay_pixel] != 74 ||
+        exported_tif.bgr[image_export_overlay_pixel + 1] != 214 ||
+        exported_tif.bgr[image_export_overlay_pixel + 2] != 255) {
+        std::filesystem::remove(action_png_path);
+        std::filesystem::remove(action_tif_path);
+        std::filesystem::remove(action_jpg_path);
+        return Fail("Exported PNG, TIFF, or JPEG images could not be read back.");
+    }
+    std::filesystem::remove(action_png_path);
+    std::filesystem::remove(action_tif_path);
+    std::filesystem::remove(action_jpg_path);
+
+    const std::filesystem::path action_gif_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.gif";
+    const ExportActionResult unsupported_image_export =
+        ExportActions::SaveImage(action_gif_path, image, MeasurementCollection{});
+    if (unsupported_image_export.saved ||
+        unsupported_image_export.status != ExportActionStatus::WriteFailed ||
+        unsupported_image_export.message != L"Unsupported image export format.") {
+        return Fail("ExportActions did not reject unsupported image export formats.");
+    }
 
     const std::filesystem::path action_report_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTestsDiagnostic.txt";

@@ -13,7 +13,7 @@ struct ProjectSessionState {
     std::vector<DyeProfile> dye_profiles;
     std::vector<FluorescenceChannel> fluorescence_channels;
     EdfOptions edf_options;
-    int stitch_search_percent = 50;
+    int stitch_search_percent = 85;
     bool restored_channel_settings = false;
 };
 

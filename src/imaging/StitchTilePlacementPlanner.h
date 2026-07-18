@@ -9,6 +9,7 @@ struct StitchTilePlacementResult {
     StitchTile tile;
     TranslationOffset registration;
     bool registered = false;
+    bool estimated = false;
 };
 
 class StitchTilePlacementPlanner {

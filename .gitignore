@@ -1,5 +1,6 @@
 # Build outputs
 /build*/
+/exports/
 /x64/
 /x86/
 /Debug/

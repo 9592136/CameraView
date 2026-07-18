@@ -37,10 +37,9 @@ ProcessingQueueActionResult ProcessingQueueActions::AddStitchTile(
         return result;
     }
 
-    frames.Clear();
+    result.preview_changed = frames.Clear();
     result.status = ProcessingQueueActionStatus::StitchAdded;
     result.changed = true;
-    result.preview_changed = true;
     return result;
 }
 
@@ -59,9 +58,8 @@ ProcessingQueueActionResult ProcessingQueueActions::AddEdfFrame(
         return result;
     }
 
-    frames.Clear();
+    result.preview_changed = frames.Clear();
     result.status = ProcessingQueueActionStatus::EdfAdded;
     result.changed = true;
-    result.preview_changed = true;
     return result;
 }
