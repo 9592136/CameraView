@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../domain/CalibrationProfile.h"
 #include "../domain/ImageFrame.h"
 #include "../domain/Measurement.h"
 
@@ -23,13 +24,15 @@ public:
         const std::filesystem::path& path,
         const ImageFrame& frame,
         const std::vector<LengthMeasurement>& measurements,
-        std::wstring& error);
+        std::wstring& error,
+        const CalibrationProfile* calibration = nullptr);
 
     static bool SaveRasterImage(
         const std::filesystem::path& path,
         const ImageFrame& frame,
         const std::vector<LengthMeasurement>& measurements,
-        std::wstring& error);
+        std::wstring& error,
+        const CalibrationProfile* calibration = nullptr);
 
     static bool SaveRasterImage(
         const std::filesystem::path& path,
@@ -38,7 +41,8 @@ public:
         const std::vector<AngleMeasurement>& angle_measurements,
         const std::vector<RectangleAreaMeasurement>& rectangle_measurements,
         const std::vector<PolygonAreaMeasurement>& polygon_measurements,
-        std::wstring& error);
+        std::wstring& error,
+        const CalibrationProfile* calibration = nullptr);
 
     static bool SaveBmp(
         const std::filesystem::path& path,
@@ -47,5 +51,6 @@ public:
         const std::vector<AngleMeasurement>& angle_measurements,
         const std::vector<RectangleAreaMeasurement>& rectangle_measurements,
         const std::vector<PolygonAreaMeasurement>& polygon_measurements,
-        std::wstring& error);
+        std::wstring& error,
+        const CalibrationProfile* calibration = nullptr);
 };

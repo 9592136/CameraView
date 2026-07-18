@@ -4431,6 +4431,38 @@ int main()
     std::filesystem::remove(action_tif_path);
     std::filesystem::remove(action_jpg_path);
 
+    const std::filesystem::path action_scale_png_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsScaleBar.png";
+    std::filesystem::remove(action_scale_png_path);
+    const ImageFrame scale_export_image = MakeSolidImage(500, 200, 20, 20, 20);
+    const CalibrationProfile scale_export_calibration =
+        CalibrationProfile::FromMicronsPerPixel(1.0);
+    const ExportActionResult scale_bar_export =
+        ExportActions::SaveImage(
+            action_scale_png_path,
+            scale_export_image,
+            MeasurementCollection{},
+            L"",
+            &scale_export_calibration);
+    ImageFrame exported_scale_bar;
+    if (!scale_bar_export.saved ||
+        !ImageExporter::LoadRasterImage(action_scale_png_path, exported_scale_bar, load_error) ||
+        exported_scale_bar.width != scale_export_image.width ||
+        exported_scale_bar.height != scale_export_image.height) {
+        std::filesystem::remove(action_scale_png_path);
+        return Fail("ExportActions did not save a calibrated image with a scale bar.");
+    }
+    const std::size_t scale_bar_pixel =
+        static_cast<std::size_t>(176) * static_cast<std::size_t>(exported_scale_bar.stride) +
+        static_cast<std::size_t>(426) * 3U;
+    if (exported_scale_bar.bgr[scale_bar_pixel] < 240 ||
+        exported_scale_bar.bgr[scale_bar_pixel + 1] < 240 ||
+        exported_scale_bar.bgr[scale_bar_pixel + 2] < 240) {
+        std::filesystem::remove(action_scale_png_path);
+        return Fail("Image export did not draw the calibrated scale bar.");
+    }
+    std::filesystem::remove(action_scale_png_path);
+
     const std::filesystem::path action_gif_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTestsAction.gif";
     const ExportActionResult unsupported_image_export =

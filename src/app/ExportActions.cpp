@@ -39,16 +39,18 @@ ExportActionResult ExportActions::SaveImageBmp(
     const std::filesystem::path& path,
     const ImageFrame& frame,
     const MeasurementCollection& measurements,
-    const std::wstring& display_mode)
+    const std::wstring& display_mode,
+    const CalibrationProfile* calibration)
 {
-    return SaveImage(path, frame, measurements, display_mode);
+    return SaveImage(path, frame, measurements, display_mode, calibration);
 }
 
 ExportActionResult ExportActions::SaveImage(
     const std::filesystem::path& path,
     const ImageFrame& frame,
     const MeasurementCollection& measurements,
-    const std::wstring& display_mode)
+    const std::wstring& display_mode,
+    const CalibrationProfile* calibration)
 {
     if (!frame.IsValid()) {
         return {false, ExportActionStatus::NoImageFrame, L"No image frame to export."};
@@ -62,7 +64,8 @@ ExportActionResult ExportActions::SaveImage(
             measurements.Angles(),
             measurements.Rectangles(),
             measurements.Polygons(),
-            error)) {
+            error,
+            calibration)) {
         return {
             false,
             ExportActionStatus::WriteFailed,

@@ -10,6 +10,8 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include "../imaging/OverlayRenderer.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -197,6 +199,139 @@ void DrawMeasurements(
     for (const PolygonAreaMeasurement& measurement : polygon_measurements) {
         DrawPolygon(output_frame, measurement.Points(), 2, measurement_color);
     }
+}
+
+void DrawScaleBar(ImageFrame& output_frame, const CalibrationProfile* calibration)
+{
+    if (!calibration || !calibration->IsCalibrated()) {
+        return;
+    }
+
+    const ScaleBarOverlay overlay =
+        OverlayRenderer::BuildScaleBarOverlay(*calibration, output_frame.width, 1.0);
+    if (!overlay.visible || output_frame.width <= 0 || output_frame.height <= 0) {
+        return;
+    }
+
+    BITMAPINFO bitmap_info = {};
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = output_frame.width;
+    bitmap_info.bmiHeader.biHeight = -output_frame.height;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 24;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    bitmap_info.bmiHeader.biSizeImage =
+        static_cast<DWORD>(output_frame.stride * output_frame.height);
+
+    HDC screen_dc = GetDC(nullptr);
+    if (!screen_dc) {
+        return;
+    }
+    void* bitmap_bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(
+        screen_dc,
+        &bitmap_info,
+        DIB_RGB_COLORS,
+        &bitmap_bits,
+        nullptr,
+        0);
+    HDC memory_dc = bitmap ? CreateCompatibleDC(screen_dc) : nullptr;
+    ReleaseDC(nullptr, screen_dc);
+    if (!bitmap || !memory_dc || !bitmap_bits) {
+        if (memory_dc) {
+            DeleteDC(memory_dc);
+        }
+        if (bitmap) {
+            DeleteObject(bitmap);
+        }
+        return;
+    }
+
+    std::copy(
+        output_frame.bgr.begin(),
+        output_frame.bgr.end(),
+        static_cast<unsigned char*>(bitmap_bits));
+
+    HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
+    const int margin = std::clamp(std::min(output_frame.width, output_frame.height) / 8, 12, 24);
+    const int tick = std::clamp(output_frame.height / 32, 5, 9);
+    const int x1 = output_frame.width - margin;
+    const int x0 = x1 - overlay.screen_length;
+    const int y = output_frame.height - margin;
+    if (x0 >= margin && y > tick) {
+        const int font_height = std::clamp(output_frame.height / 20, 14, 26);
+        HPEN shadow_pen = CreatePen(PS_SOLID, 6, RGB(0, 0, 0));
+        HPEN bar_pen = CreatePen(PS_SOLID, 3, RGB(255, 255, 255));
+        HFONT font = CreateFontW(
+            font_height,
+            0,
+            0,
+            0,
+            FW_SEMIBOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_SWISS,
+            L"Segoe UI");
+
+        HGDIOBJ old_pen = shadow_pen ? SelectObject(memory_dc, shadow_pen) : nullptr;
+        HGDIOBJ old_font = font ? SelectObject(memory_dc, font) : nullptr;
+        SetBkMode(memory_dc, TRANSPARENT);
+        MoveToEx(memory_dc, x0, y, nullptr);
+        LineTo(memory_dc, x1, y);
+        MoveToEx(memory_dc, x0, y - tick, nullptr);
+        LineTo(memory_dc, x0, y + tick);
+        MoveToEx(memory_dc, x1, y - tick, nullptr);
+        LineTo(memory_dc, x1, y + tick);
+
+        if (bar_pen) {
+            SelectObject(memory_dc, bar_pen);
+        }
+        MoveToEx(memory_dc, x0, y, nullptr);
+        LineTo(memory_dc, x1, y);
+        MoveToEx(memory_dc, x0, y - tick, nullptr);
+        LineTo(memory_dc, x0, y + tick);
+        MoveToEx(memory_dc, x1, y - tick, nullptr);
+        LineTo(memory_dc, x1, y + tick);
+
+        RECT label_rect{x0 - 40, y - font_height - 10, x1 + 2, y - 8};
+        RECT shadow_rect = label_rect;
+        OffsetRect(&shadow_rect, 1, 1);
+        SetTextColor(memory_dc, RGB(0, 0, 0));
+        DrawTextW(memory_dc, overlay.label.c_str(), -1, &shadow_rect, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SetTextColor(memory_dc, RGB(255, 255, 255));
+        DrawTextW(memory_dc, overlay.label.c_str(), -1, &label_rect, DT_RIGHT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        if (old_font) {
+            SelectObject(memory_dc, old_font);
+        }
+        if (old_pen) {
+            SelectObject(memory_dc, old_pen);
+        }
+        if (font) {
+            DeleteObject(font);
+        }
+        if (bar_pen) {
+            DeleteObject(bar_pen);
+        }
+        if (shadow_pen) {
+            DeleteObject(shadow_pen);
+        }
+    }
+
+    GdiFlush();
+    std::copy(
+        static_cast<unsigned char*>(bitmap_bits),
+        static_cast<unsigned char*>(bitmap_bits) + output_frame.bgr.size(),
+        output_frame.bgr.begin());
+
+    SelectObject(memory_dc, old_bitmap);
+    DeleteDC(memory_dc);
+    DeleteObject(bitmap);
 }
 
 ImageFrame CopyForExport(const ImageFrame& source)
@@ -584,9 +719,10 @@ bool ImageExporter::SaveRasterImage(
     const std::filesystem::path& path,
     const ImageFrame& frame,
     const std::vector<LengthMeasurement>& measurements,
-    std::wstring& error)
+    std::wstring& error,
+    const CalibrationProfile* calibration)
 {
-    return SaveRasterImage(path, frame, measurements, {}, {}, {}, error);
+    return SaveRasterImage(path, frame, measurements, {}, {}, {}, error, calibration);
 }
 
 bool ImageExporter::SaveRasterImage(
@@ -596,7 +732,8 @@ bool ImageExporter::SaveRasterImage(
     const std::vector<AngleMeasurement>& angle_measurements,
     const std::vector<RectangleAreaMeasurement>& rectangle_measurements,
     const std::vector<PolygonAreaMeasurement>& polygon_measurements,
-    std::wstring& error)
+    std::wstring& error,
+    const CalibrationProfile* calibration)
 {
     if (!frame.IsValid()) {
         error = L"No image frame to export.";
@@ -612,7 +749,8 @@ bool ImageExporter::SaveRasterImage(
             angle_measurements,
             rectangle_measurements,
             polygon_measurements,
-            error);
+            error,
+            calibration);
     }
 
     const GUID* container_format = WicContainerFormatForPath(path);
@@ -628,6 +766,7 @@ bool ImageExporter::SaveRasterImage(
         angle_measurements,
         rectangle_measurements,
         polygon_measurements);
+    DrawScaleBar(output_frame, calibration);
     return SaveWicImage(path, output_frame, *container_format, error);
 }
 
@@ -776,9 +915,10 @@ bool ImageExporter::SaveBmp(
     const std::filesystem::path& path,
     const ImageFrame& frame,
     const std::vector<LengthMeasurement>& measurements,
-    std::wstring& error)
+    std::wstring& error,
+    const CalibrationProfile* calibration)
 {
-    return SaveBmp(path, frame, measurements, {}, {}, {}, error);
+    return SaveBmp(path, frame, measurements, {}, {}, {}, error, calibration);
 }
 
 bool ImageExporter::SaveBmp(
@@ -788,7 +928,8 @@ bool ImageExporter::SaveBmp(
     const std::vector<AngleMeasurement>& angle_measurements,
     const std::vector<RectangleAreaMeasurement>& rectangle_measurements,
     const std::vector<PolygonAreaMeasurement>& polygon_measurements,
-    std::wstring& error)
+    std::wstring& error,
+    const CalibrationProfile* calibration)
 {
     if (!frame.IsValid()) {
         error = L"No image frame to export.";
@@ -802,6 +943,7 @@ bool ImageExporter::SaveBmp(
         angle_measurements,
         rectangle_measurements,
         polygon_measurements);
+    DrawScaleBar(output_frame, calibration);
 
     const std::uint32_t header_size = 14U + 40U;
     const std::uint32_t image_size =

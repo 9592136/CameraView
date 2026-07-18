@@ -32,13 +32,15 @@ public:
         const std::filesystem::path& path,
         const ImageFrame& frame,
         const MeasurementCollection& measurements,
-        const std::wstring& display_mode = L"");
+        const std::wstring& display_mode = L"",
+        const CalibrationProfile* calibration = nullptr);
 
     static ExportActionResult SaveImage(
         const std::filesystem::path& path,
         const ImageFrame& frame,
         const MeasurementCollection& measurements,
-        const std::wstring& display_mode = L"");
+        const std::wstring& display_mode = L"",
+        const CalibrationProfile* calibration = nullptr);
 
     static ExportActionResult SaveDiagnosticReport(
         const std::filesystem::path& path,

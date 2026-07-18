@@ -1625,7 +1625,8 @@ public:
                 std::filesystem::path(file_name),
                 export_frame,
                 measurements_,
-                display_mode);
+                display_mode,
+                &calibration_);
         SetStatus(result.message);
     }
 
@@ -2076,7 +2077,7 @@ private:
         }
 
         const ExportActionResult save_result =
-            ExportActions::SaveImage(path, frame, MeasurementCollection(), display_mode);
+            ExportActions::SaveImage(path, frame, MeasurementCollection(), display_mode, &calibration_);
         if (!save_result.saved) {
             return L"Auto-save failed: " + save_result.message;
         }
