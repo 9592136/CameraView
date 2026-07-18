@@ -179,7 +179,7 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs)
+target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs shell32)
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(MUCAM_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/MUCamSDK/bin/x64")

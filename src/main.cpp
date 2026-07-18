@@ -5,6 +5,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 
 #include "app/DiagnosticReportActions.h"
 #include "app/ExportActions.h"
@@ -1620,11 +1621,21 @@ public:
             return;
         }
 
+        OpenImageFile(file_name, false);
+    }
+
+    bool OpenImageFile(const std::wstring& file_name, bool dropped)
+    {
+        if (file_name.empty()) {
+            SetStatus(L"No image file selected.");
+            return false;
+        }
+
         ImageFrame loaded;
         std::wstring error;
         if (!ImageExporter::LoadRasterImage(std::filesystem::path(file_name), loaded, error)) {
             SetStatus(error.empty() ? L"Failed to open image." : error);
-            return;
+            return false;
         }
 
         const std::wstring image_size =
@@ -1639,7 +1650,8 @@ public:
         image_viewport_.Reset();
         SetPreviewTelemetry(L"Loaded image | " + image_size);
         InvalidatePreview(hwnd_);
-        SetStatus(L"Image opened: " + image_size + L".");
+        SetStatus((dropped ? L"Dropped image opened: " : L"Image opened: ") + image_size + L".");
+        return true;
     }
 
     void SaveDiagnosticsReport()
@@ -2684,6 +2696,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CREATE: {
         auto* app = new CameraPreviewApp(hwnd);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        DragAcceptFiles(hwnd, TRUE);
 
         HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         for (const WindowControlDefinition& definition : WindowControlDefinitions::All()) {
@@ -2978,6 +2991,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         break;
     }
+    case WM_DROPFILES: {
+        HDROP drop = reinterpret_cast<HDROP>(wparam);
+        CameraPreviewApp* app = GetApp(hwnd);
+        const UINT file_count = DragQueryFileW(drop, 0xFFFFFFFFU, nullptr, 0);
+        if (app && file_count > 0) {
+            const UINT path_length = DragQueryFileW(drop, 0, nullptr, 0);
+            if (path_length > 0) {
+                std::wstring path(path_length + 1U, L'\0');
+                if (DragQueryFileW(drop, 0, path.data(), path_length + 1U) > 0) {
+                    path.resize(path_length);
+                    app->OpenImageFile(path, true);
+                }
+            }
+        }
+        DragFinish(drop);
+        return 0;
+    }
     case WM_LBUTTONDOWN: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app) {
@@ -3091,6 +3121,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         return 0;
     }
     case WM_DESTROY: {
+        DragAcceptFiles(hwnd, FALSE);
         CameraPreviewApp* app = GetApp(hwnd);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         delete app;
