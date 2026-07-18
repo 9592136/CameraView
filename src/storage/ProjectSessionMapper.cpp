@@ -3,7 +3,43 @@
 #include "../imaging/DyeLibrary.h"
 #include "../imaging/ProcessingParameterRules.h"
 
+#include <algorithm>
 #include <utility>
+
+namespace {
+
+std::vector<std::wstring> DefaultObjectiveLabels()
+{
+    return CalibrationProfile::ObjectiveMagnificationOptions();
+}
+
+int NormalizeObjectiveIndex(int index, std::size_t count)
+{
+    if (count == 0 || index < 0 || index >= static_cast<int>(count)) {
+        return 0;
+    }
+    return index;
+}
+
+int ObjectiveIndexForLabel(
+    const std::vector<std::wstring>& labels,
+    const std::wstring& label)
+{
+    const auto match = std::find(labels.begin(), labels.end(), label);
+    if (match == labels.end()) {
+        return -1;
+    }
+    return static_cast<int>(std::distance(labels.begin(), match));
+}
+
+bool ContainsObjectiveLabel(
+    const std::vector<std::wstring>& labels,
+    const std::wstring& label)
+{
+    return ObjectiveIndexForLabel(labels, label) >= 0;
+}
+
+} // namespace
 
 ProjectDocument ProjectSessionMapper::ToDocument(
     const CalibrationProfile& calibration,
@@ -11,10 +47,19 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     const std::vector<DyeProfile>& dye_profiles,
     const std::vector<FluorescenceChannel>& fluorescence_channels,
     const EdfOptions& edf_options,
-    int stitch_search_percent)
+    int stitch_search_percent,
+    const std::vector<std::wstring>& objective_labels,
+    const std::vector<CalibrationProfile>& objective_calibrations,
+    int selected_objective_index)
 {
     ProjectDocument document;
+    const std::vector<std::wstring> objectives = objective_labels.empty()
+        ? DefaultObjectiveLabels()
+        : objective_labels;
+    const int normalized_objective_index =
+        NormalizeObjectiveIndex(selected_objective_index, objectives.size());
     document.calibration = calibration;
+    document.selected_objective = objectives[static_cast<std::size_t>(normalized_objective_index)];
     document.measurements = measurements.Lengths();
     document.angle_measurements = measurements.Angles();
     document.rectangle_measurements = measurements.Rectangles();
@@ -22,6 +67,21 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     document.dye_profiles = dye_profiles;
     document.processing_settings.edf_focus_radius = edf_options.focus_radius;
     document.processing_settings.stitch_search_percent = stitch_search_percent;
+
+    const bool has_objective_calibrations = !objective_calibrations.empty();
+    document.objective_calibrations.reserve(objectives.size());
+    for (std::size_t index = 0; index < objectives.size(); ++index) {
+        ObjectiveCalibrationDocument objective_calibration;
+        objective_calibration.objective = objectives[index];
+        objective_calibration.calibration = index < objective_calibrations.size()
+            ? objective_calibrations[index]
+            : CalibrationProfile::Uncalibrated();
+        if (!has_objective_calibrations &&
+            index == static_cast<std::size_t>(normalized_objective_index)) {
+            objective_calibration.calibration = calibration;
+        }
+        document.objective_calibrations.push_back(std::move(objective_calibration));
+    }
 
     document.fluorescence_channels.reserve(fluorescence_channels.size());
     for (const FluorescenceChannel& channel : fluorescence_channels) {
@@ -34,7 +94,52 @@ ProjectDocument ProjectSessionMapper::ToDocument(
 ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
 {
     ProjectSessionState state;
-    state.calibration = document.calibration;
+
+    if (document.objective_calibrations.empty()) {
+        state.objective_labels = DefaultObjectiveLabels();
+        state.selected_objective_index =
+            ObjectiveIndexForLabel(state.objective_labels, document.selected_objective);
+        if (state.selected_objective_index < 0 && !document.selected_objective.empty()) {
+            state.objective_labels.push_back(document.selected_objective);
+            state.selected_objective_index = static_cast<int>(state.objective_labels.size() - 1U);
+        }
+        state.selected_objective_index =
+            NormalizeObjectiveIndex(state.selected_objective_index, state.objective_labels.size());
+        state.objective_calibrations.assign(
+            state.objective_labels.size(),
+            CalibrationProfile::Uncalibrated());
+        if (document.calibration.IsCalibrated()) {
+            state.objective_calibrations[static_cast<std::size_t>(state.selected_objective_index)] =
+                document.calibration;
+        }
+    } else {
+        state.objective_labels.reserve(document.objective_calibrations.size());
+        state.objective_calibrations.reserve(document.objective_calibrations.size());
+        for (const ObjectiveCalibrationDocument& objective_calibration : document.objective_calibrations) {
+            if (ContainsObjectiveLabel(state.objective_labels, objective_calibration.objective)) {
+                continue;
+            }
+            state.objective_labels.push_back(objective_calibration.objective);
+            state.objective_calibrations.push_back(objective_calibration.calibration);
+        }
+        if (state.objective_labels.empty()) {
+            state.objective_labels = DefaultObjectiveLabels();
+            state.objective_calibrations.assign(
+                state.objective_labels.size(),
+                CalibrationProfile::Uncalibrated());
+        }
+        state.selected_objective_index =
+            ObjectiveIndexForLabel(state.objective_labels, document.selected_objective);
+        state.selected_objective_index =
+            NormalizeObjectiveIndex(state.selected_objective_index, state.objective_labels.size());
+        if (state.objective_calibrations.size() < state.objective_labels.size()) {
+            state.objective_calibrations.resize(
+                state.objective_labels.size(),
+                CalibrationProfile::Uncalibrated());
+        }
+    }
+    state.calibration =
+        state.objective_calibrations[static_cast<std::size_t>(state.selected_objective_index)];
     state.measurements.SetAll(
         std::move(document.measurements),
         std::move(document.angle_measurements),

@@ -11,7 +11,10 @@ ProjectActionResult ProjectActions::SaveProject(
     const std::vector<DyeProfile>& dye_profiles,
     const std::vector<FluorescenceChannel>& fluorescence_channels,
     const EdfOptions& edf_options,
-    int stitch_search_percent)
+    int stitch_search_percent,
+    const std::vector<std::wstring>& objective_labels,
+    const std::vector<CalibrationProfile>& objective_calibrations,
+    int selected_objective_index)
 {
     const ProjectDocument document = ProjectSessionMapper::ToDocument(
         calibration,
@@ -19,7 +22,10 @@ ProjectActionResult ProjectActions::SaveProject(
         dye_profiles,
         fluorescence_channels,
         edf_options,
-        stitch_search_percent);
+        stitch_search_percent,
+        objective_labels,
+        objective_calibrations,
+        selected_objective_index);
 
     std::wstring error;
     if (!ProjectRepository::Save(path, document, error)) {

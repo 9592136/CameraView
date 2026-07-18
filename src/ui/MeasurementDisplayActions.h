@@ -13,6 +13,10 @@
 class MeasurementDisplayActions {
 public:
     static MeasurementUnit DisplayUnit(const CalibrationProfile& calibration);
+    static std::wstring CalibrationStatusLine(const CalibrationProfile& calibration);
+    static std::wstring CalibrationStatusLine(
+        const std::wstring& objective_label,
+        const CalibrationProfile& calibration);
     static std::vector<std::wstring> ListLines(
         const MeasurementCollection& measurements,
         const CalibrationProfile& calibration);

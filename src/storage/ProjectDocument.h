@@ -4,6 +4,7 @@
 #include "../domain/Measurement.h"
 #include "../imaging/Fluorescence.h"
 
+#include <string>
 #include <vector>
 
 struct ProjectProcessingSettings {
@@ -11,8 +12,15 @@ struct ProjectProcessingSettings {
     int stitch_search_percent = 85;
 };
 
+struct ObjectiveCalibrationDocument {
+    std::wstring objective;
+    CalibrationProfile calibration = CalibrationProfile::Uncalibrated();
+};
+
 struct ProjectDocument {
     CalibrationProfile calibration = CalibrationProfile::Uncalibrated();
+    std::wstring selected_objective;
+    std::vector<ObjectiveCalibrationDocument> objective_calibrations;
     std::vector<LengthMeasurement> measurements;
     std::vector<AngleMeasurement> angle_measurements;
     std::vector<RectangleAreaMeasurement> rectangle_measurements;

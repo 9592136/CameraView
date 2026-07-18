@@ -447,6 +447,14 @@ int main()
         FindPlacement(measurement_control_layout, kIdPseudoColorLabel);
     const WindowControlPlacement* measurement_clear_calibration =
         FindPlacement(measurement_control_layout, kIdClearCalibration);
+    const WindowControlPlacement* measurement_objective_combo =
+        FindPlacement(measurement_control_layout, kIdObjectiveCombo);
+    const WindowControlPlacement* measurement_objective_name =
+        FindPlacement(measurement_control_layout, kIdObjectiveNameEdit);
+    const WindowControlPlacement* measurement_add_objective =
+        FindPlacement(measurement_control_layout, kIdAddObjective);
+    const WindowControlPlacement* measurement_delete_objective =
+        FindPlacement(measurement_control_layout, kIdDeleteObjective);
     const WindowControlPlacement* measurement_export_csv =
         FindPlacement(measurement_control_layout, kIdExportCsv);
     const WindowControlPlacement* measurement_results_list =
@@ -516,6 +524,15 @@ int main()
     }
     if (!measurement_pseudo_label ||
         measurement_pseudo_label->visible ||
+        !measurement_objective_combo ||
+        !measurement_objective_combo->visible ||
+        measurement_objective_combo->bounds.left != 12 ||
+        !measurement_objective_name ||
+        !measurement_objective_name->visible ||
+        !measurement_add_objective ||
+        !measurement_add_objective->visible ||
+        !measurement_delete_objective ||
+        !measurement_delete_objective->visible ||
         !measurement_export_csv ||
         !measurement_export_csv->visible ||
         !measurement_clear_calibration ||
@@ -634,6 +651,10 @@ int main()
     const WindowControlDefinition* auto_exposure_definition = WindowControlDefinitions::Find(kIdAutoExposure);
     const WindowControlDefinition* clear_calibration_definition =
         WindowControlDefinitions::Find(kIdClearCalibration);
+    const WindowControlDefinition* objective_combo_definition =
+        WindowControlDefinitions::Find(kIdObjectiveCombo);
+    const WindowControlDefinition* add_objective_definition =
+        WindowControlDefinitions::Find(kIdAddObjective);
     const WindowControlDefinition* camera_gain_definition = WindowControlDefinitions::Find(kIdCameraGainEdit);
     const WindowControlDefinition* dye_red_definition = WindowControlDefinitions::Find(kIdDyeRedEdit);
     const WindowControlDefinition* panel_scroll_definition = WindowControlDefinitions::Find(kIdPanelScrollBar);
@@ -652,6 +673,10 @@ int main()
         std::wstring(auto_exposure_definition->text) != L"Auto Exposure" ||
         !clear_calibration_definition ||
         std::wstring(clear_calibration_definition->text) != L"Clear Calib" ||
+        !objective_combo_definition ||
+        std::wstring(objective_combo_definition->class_name) != L"COMBOBOX" ||
+        !add_objective_definition ||
+        std::wstring(add_objective_definition->text) != L"Add Obj" ||
         !camera_gain_definition ||
         std::wstring(camera_gain_definition->class_name) != L"EDIT" ||
         !fusion_checkbox_definition ||
@@ -1463,6 +1488,19 @@ int main()
         CalibrationProfile::CalibrationUnitAtIndex(99) != MeasurementUnit::Micrometers) {
         return Fail("CalibrationProfile did not expose stable calibration unit options.");
     }
+    const std::vector<std::wstring>& objective_options =
+        CalibrationProfile::ObjectiveMagnificationOptions();
+    if (objective_options.size() != 6 ||
+        objective_options[0] != L"4x" ||
+        objective_options[2] != L"20x" ||
+        objective_options[5] != L"100x" ||
+        CalibrationProfile::ObjectiveIndexAtSelection(2) != 2 ||
+        CalibrationProfile::ObjectiveIndexAtSelection(-1) != 0 ||
+        CalibrationProfile::ObjectiveIndexForLabel(L"40x") != 3 ||
+        CalibrationProfile::ObjectiveIndexForLabel(L"bad") != -1 ||
+        CalibrationProfile::ObjectiveLabelAtIndex(99) != L"4x") {
+        return Fail("CalibrationProfile did not expose stable objective magnification options.");
+    }
     const CalibrationProfile calibration = CalibrationProfile::FromTwoPointCalibration(
         calibration_start,
         calibration_end,
@@ -1611,7 +1649,10 @@ int main()
     }
     if (MeasurementDisplayActions::DisplayUnit(CalibrationProfile::Uncalibrated()) != MeasurementUnit::Pixels ||
         MeasurementDisplayActions::DisplayUnit(calibration) != MeasurementUnit::Micrometers ||
-        MeasurementDisplayActions::MeasurementCount(measurement_collection) != 4) {
+        MeasurementDisplayActions::MeasurementCount(measurement_collection) != 4 ||
+        MeasurementDisplayActions::CalibrationStatusLine(L"20x", calibration) != L"20x: 0.5000 um/px" ||
+        MeasurementDisplayActions::CalibrationStatusLine(L"40x", CalibrationProfile::Uncalibrated()) !=
+            L"40x: uncalibrated") {
         return Fail("MeasurementDisplayActions did not choose display units or count measurements.");
     }
     const std::vector<std::wstring> display_lines =
@@ -2679,6 +2720,13 @@ int main()
 
     ProjectDocument document;
     document.calibration = calibration;
+    document.selected_objective = L"20x";
+    document.objective_calibrations.push_back(
+        ObjectiveCalibrationDocument{L"4x", CalibrationProfile::Uncalibrated()});
+    document.objective_calibrations.push_back(
+        ObjectiveCalibrationDocument{L"10x", CalibrationProfile::FromMicronsPerPixel(0.25)});
+    document.objective_calibrations.push_back(
+        ObjectiveCalibrationDocument{L"20x", calibration});
     document.measurements.emplace_back(L"Length, \"A\"", ImagePoint{1.0, 2.0}, ImagePoint{3.0, 4.0});
     document.measurements.emplace_back(L"Length 2", ImagePoint{10.0, 20.0}, ImagePoint{30.0, 40.0});
     document.angle_measurements.emplace_back(L"Angle 1", ImagePoint{1.0, 0.0}, ImagePoint{0.0, 0.0}, ImagePoint{0.0, 1.0});
@@ -2712,6 +2760,11 @@ int main()
 
     if (!loaded_document.calibration.IsCalibrated() ||
         !Near(loaded_document.calibration.MicronsPerPixel(), calibration.MicronsPerPixel(), 0.0001) ||
+        loaded_document.selected_objective != L"20x" ||
+        loaded_document.objective_calibrations.size() != 3 ||
+        loaded_document.objective_calibrations[1].objective != L"10x" ||
+        !Near(loaded_document.objective_calibrations[1].calibration.MicronsPerPixel(), 0.25) ||
+        !Near(loaded_document.objective_calibrations[2].calibration.MicronsPerPixel(), calibration.MicronsPerPixel()) ||
         loaded_document.measurements.size() != 2 ||
         loaded_document.angle_measurements.size() != 1 ||
         loaded_document.rectangle_measurements.size() != 1 ||
@@ -2754,15 +2807,28 @@ int main()
     mapped_channel.frame = MakeSolidImage(2, 2, 1, 2, 3);
     EdfOptions mapped_edf_options;
     mapped_edf_options.focus_radius = 5;
+    std::vector<std::wstring> mapped_objective_labels{L"4x", L"20x Oil", L"63x Oil"};
+    std::vector<CalibrationProfile> mapped_objective_calibrations(
+        mapped_objective_labels.size(),
+        CalibrationProfile::Uncalibrated());
+    mapped_objective_calibrations[1] = CalibrationProfile::FromMicronsPerPixel(0.25);
+    mapped_objective_calibrations[2] = CalibrationProfile::FromMicronsPerPixel(0.125);
     const ProjectDocument mapped_document = ProjectSessionMapper::ToDocument(
         calibration,
         project_measurements,
         document.dye_profiles,
         std::vector<FluorescenceChannel>{mapped_channel},
         mapped_edf_options,
-        44);
+        44,
+        mapped_objective_labels,
+        mapped_objective_calibrations,
+        2);
     if (mapped_document.measurements.size() != 1 ||
         mapped_document.angle_measurements.size() != 1 ||
+        mapped_document.selected_objective != L"63x Oil" ||
+        mapped_document.objective_calibrations.size() != mapped_objective_labels.size() ||
+        mapped_document.objective_calibrations[1].objective != L"20x Oil" ||
+        !Near(mapped_document.objective_calibrations[2].calibration.MicronsPerPixel(), 0.125) ||
         mapped_document.fluorescence_channels.size() != 1 ||
         mapped_document.fluorescence_channels[0].name != L"Mapped Channel" ||
         mapped_document.fluorescence_channels[0].visible ||
@@ -2781,7 +2847,10 @@ int main()
         document.dye_profiles,
         std::vector<FluorescenceChannel>{mapped_channel},
         mapped_edf_options,
-        44);
+        44,
+        mapped_objective_labels,
+        mapped_objective_calibrations,
+        2);
     if (!project_save.succeeded ||
         project_save.status != ProjectActionStatus::Saved ||
         project_save.message != L"Project saved." ||
@@ -2792,6 +2861,11 @@ int main()
     std::filesystem::remove(action_project_path);
     if (!project_load.succeeded ||
         project_load.status != ProjectActionStatus::Loaded ||
+        project_load.session_state.selected_objective_index != 2 ||
+        project_load.session_state.objective_labels.size() != mapped_objective_labels.size() ||
+        project_load.session_state.objective_labels[2] != L"63x Oil" ||
+        project_load.session_state.objective_calibrations.size() != mapped_objective_labels.size() ||
+        !Near(project_load.session_state.calibration.MicronsPerPixel(), 0.125) ||
         project_load.session_state.measurements.LengthCount() != 1 ||
         project_load.session_state.measurements.AngleCount() != 1 ||
         project_load.session_state.dye_profiles.size() != 1 ||
@@ -2805,12 +2879,17 @@ int main()
     }
 
     ProjectDocument sparse_document;
+    sparse_document.calibration = millimeter_calibration;
+    sparse_document.selected_objective = L"40x";
     sparse_document.measurements.emplace_back(L"Open Length", ImagePoint{0.0, 0.0}, ImagePoint{5.0, 0.0});
     sparse_document.processing_settings.edf_focus_radius = 99;
     sparse_document.processing_settings.stitch_search_percent = 1;
     sparse_document.fluorescence_channels.push_back(channel_recipe);
     ProjectSessionState mapped_state = ProjectSessionMapper::FromDocument(std::move(sparse_document));
     if (mapped_state.measurements.LengthCount() != 1 ||
+        mapped_state.selected_objective_index != 3 ||
+        !Near(mapped_state.calibration.MicronsPerPixel(), millimeter_calibration.MicronsPerPixel()) ||
+        !Near(mapped_state.objective_calibrations[3].MicronsPerPixel(), millimeter_calibration.MicronsPerPixel()) ||
         mapped_state.dye_profiles.empty() ||
         mapped_state.edf_options.focus_radius != 16 ||
         mapped_state.stitch_search_percent != 5 ||
@@ -2836,6 +2915,9 @@ int main()
     runtime_edf_options.focus_radius = 2;
     int runtime_stitch_search_percent = 77;
     bool runtime_show_fusion_preview = true;
+    std::vector<std::wstring> runtime_objective_labels;
+    std::vector<CalibrationProfile> runtime_objective_calibrations;
+    int runtime_selected_objective_index = 0;
     ProcessingRetryState runtime_retry;
     runtime_retry.RememberEdf(runtime_edf_stack, runtime_edf_options);
     ProcessingResultFrames runtime_processing_frames;
@@ -2858,12 +2940,20 @@ int main()
             runtime_stitch_search_percent,
             runtime_show_fusion_preview,
             runtime_retry,
-            runtime_processing_frames
+            runtime_processing_frames,
+            runtime_objective_labels,
+            runtime_objective_calibrations,
+            runtime_selected_objective_index
         },
         std::move(restore_state));
     if (!restore_result.restored_channel_settings ||
         restore_result.status.find(L"Fluorescence channel settings restored") == std::wstring::npos ||
         runtime_measurements.LengthCount() != 1 ||
+        runtime_selected_objective_index != 3 ||
+        runtime_objective_labels.size() != CalibrationProfile::ObjectiveMagnificationOptions().size() ||
+        runtime_objective_labels[3] != L"40x" ||
+        runtime_objective_calibrations.size() != runtime_objective_labels.size() ||
+        !Near(runtime_calibration.MicronsPerPixel(), millimeter_calibration.MicronsPerPixel()) ||
         runtime_dyes.empty() ||
         runtime_channels.size() != 1 ||
         runtime_edf_options.focus_radius != 16 ||

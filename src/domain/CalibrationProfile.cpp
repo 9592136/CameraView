@@ -1,5 +1,6 @@
 #include "CalibrationProfile.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -99,4 +100,42 @@ std::wstring CalibrationProfile::UnitLabel(MeasurementUnit unit)
     default:
         return L"";
     }
+}
+
+const std::vector<std::wstring>& CalibrationProfile::ObjectiveMagnificationOptions()
+{
+    static const std::vector<std::wstring> objectives = {
+        L"4x",
+        L"10x",
+        L"20x",
+        L"40x",
+        L"60x",
+        L"100x"
+    };
+    return objectives;
+}
+
+int CalibrationProfile::ObjectiveIndexAtSelection(int index)
+{
+    const std::vector<std::wstring>& objectives = ObjectiveMagnificationOptions();
+    if (index < 0 || index >= static_cast<int>(objectives.size())) {
+        return 0;
+    }
+    return index;
+}
+
+int CalibrationProfile::ObjectiveIndexForLabel(const std::wstring& label)
+{
+    const std::vector<std::wstring>& objectives = ObjectiveMagnificationOptions();
+    const auto match = std::find(objectives.begin(), objectives.end(), label);
+    if (match == objectives.end()) {
+        return -1;
+    }
+    return static_cast<int>(std::distance(objectives.begin(), match));
+}
+
+std::wstring CalibrationProfile::ObjectiveLabelAtIndex(int index)
+{
+    const std::vector<std::wstring>& objectives = ObjectiveMagnificationOptions();
+    return objectives[static_cast<std::size_t>(ObjectiveIndexAtSelection(index))];
 }

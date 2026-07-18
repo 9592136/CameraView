@@ -63,6 +63,7 @@ MeasurementActionApplyResult MeasurementActionApplier::Apply(
             calibration_unit);
         result.measurement_list_changed = calibration.IsCalibrated();
         result.preview_changed = true;
+        result.calibration_changed = calibration.IsCalibrated();
         result.status = calibration.IsCalibrated()
             ? L"Calibration set to " + FormatDouble(calibration.MicronsPerPixel(), 4) + L" um/px."
             : L"Calibration failed: click two different points in the image.";

@@ -9,6 +9,7 @@
 struct MeasurementActionApplyResult {
     bool measurement_list_changed = false;
     bool preview_changed = false;
+    bool calibration_changed = false;
     std::wstring status;
 };
 

@@ -23,6 +23,9 @@ struct ProjectRuntimeState {
     bool& show_fusion_preview;
     ProcessingRetryState& processing_retry;
     ProcessingResultFrames& processing_frames;
+    std::vector<std::wstring>& objective_labels;
+    std::vector<CalibrationProfile>& objective_calibrations;
+    int& selected_objective_index;
 };
 
 struct ProjectSessionRestoreResult {

@@ -677,6 +677,106 @@ public:
         return true;
     }
 
+    void InitializeObjectiveControls(HWND combo, HWND name_edit)
+    {
+        EnsureObjectiveCalibrationCount();
+        RefreshObjectiveCombo(combo);
+        SyncObjectiveNameEdit(name_edit);
+        SyncCalibrationStatus();
+    }
+
+    void SelectObjective(HWND combo, HWND name_edit)
+    {
+        StoreActiveObjectiveCalibration();
+        const LRESULT selection = combo ? SendMessageW(combo, CB_GETCURSEL, 0, 0) : selected_objective_index_;
+        selected_objective_index_ = NormalizeObjectiveIndex(static_cast<int>(selection));
+        EnsureObjectiveCalibrationCount();
+        calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+        measurement_interaction_.Clear();
+        RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        SyncObjectiveNameEdit(name_edit);
+        SyncCalibrationStatus();
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+
+        const std::wstring objective = ActiveObjectiveLabel();
+        SetStatus(calibration_.IsCalibrated()
+            ? objective + L" calibration loaded."
+            : objective + L" has no saved calibration.");
+    }
+
+    void AddObjective(HWND combo, HWND name_edit)
+    {
+        const std::wstring objective = TextInputParser::Trim(ReadEditText(name_edit, 128));
+        if (objective.empty()) {
+            SetStatus(L"Enter an objective magnification name.");
+            return;
+        }
+        if (ObjectiveLabelExists(objective)) {
+            SetStatus(L"Objective already exists.");
+            return;
+        }
+
+        StoreActiveObjectiveCalibration();
+        objective_labels_.push_back(objective);
+        objective_calibrations_.push_back(CalibrationProfile::Uncalibrated());
+        selected_objective_index_ = static_cast<int>(objective_labels_.size() - 1U);
+        calibration_ = CalibrationProfile::Uncalibrated();
+        measurement_interaction_.Clear();
+        RefreshObjectiveCombo(combo);
+        SyncObjectiveNameEdit(name_edit);
+        RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        SyncCalibrationStatus();
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+        SetStatus(L"Objective added: " + objective + L".");
+    }
+
+    void RenameSelectedObjective(HWND combo, HWND name_edit)
+    {
+        EnsureObjectiveCalibrationCount();
+        const std::wstring objective = TextInputParser::Trim(ReadEditText(name_edit, 128));
+        if (objective.empty()) {
+            SetStatus(L"Enter an objective magnification name.");
+            return;
+        }
+        if (ObjectiveLabelExists(objective, selected_objective_index_)) {
+            SetStatus(L"Objective already exists.");
+            return;
+        }
+
+        objective_labels_[static_cast<std::size_t>(selected_objective_index_)] = objective;
+        RefreshObjectiveCombo(combo);
+        SyncObjectiveNameEdit(name_edit);
+        SyncCalibrationStatus();
+        SetStatus(L"Objective renamed: " + objective + L".");
+    }
+
+    void DeleteSelectedObjective(HWND combo, HWND name_edit)
+    {
+        EnsureObjectiveCalibrationCount();
+        if (objective_labels_.size() <= 1U) {
+            SetStatus(L"Keep at least one objective.");
+            return;
+        }
+
+        const std::wstring removed = ActiveObjectiveLabel();
+        const std::size_t selected = static_cast<std::size_t>(selected_objective_index_);
+        objective_labels_.erase(objective_labels_.begin() + selected);
+        objective_calibrations_.erase(objective_calibrations_.begin() + selected);
+        selected_objective_index_ =
+            std::min(selected_objective_index_, static_cast<int>(objective_labels_.size() - 1U));
+        calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+        measurement_interaction_.Clear();
+        RefreshObjectiveCombo(combo);
+        SyncObjectiveNameEdit(name_edit);
+        RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        SyncCalibrationStatus();
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+        SetStatus(L"Objective deleted: " + removed + L".");
+    }
+
     void InitializeDyeCombo(HWND combo)
     {
         if (!combo) {
@@ -1376,16 +1476,19 @@ public:
     void ClearCalibration()
     {
         if (!calibration_.IsCalibrated()) {
-            SetStatus(L"No calibration to clear.");
+            SyncCalibrationStatus();
+            SetStatus(ActiveObjectiveLabel() + L" has no calibration to clear.");
             return;
         }
 
         calibration_ = CalibrationProfile::Uncalibrated();
+        StoreActiveObjectiveCalibration();
         measurement_interaction_.Clear();
         RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        SyncCalibrationStatus();
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
-        SetStatus(L"Calibration cleared.");
+        SetStatus(ActiveObjectiveLabel() + L" calibration cleared.");
     }
 
     void BeginLengthMeasurement()
@@ -1754,6 +1857,7 @@ public:
             return;
         }
 
+        StoreActiveObjectiveCalibration();
         const ProjectActionResult result = ProjectActions::SaveProject(
             std::filesystem::path(file_name),
             calibration_,
@@ -1761,7 +1865,10 @@ public:
             dye_library_,
             fluorescence_channels_,
             edf_options_,
-            stitch_search_percent_);
+            stitch_search_percent_,
+            objective_labels_,
+            objective_calibrations_,
+            selected_objective_index_);
         SetStatus(result.message);
     }
 
@@ -1791,7 +1898,10 @@ public:
                 stitch_search_percent_,
                 show_fusion_preview_,
                 processing_retry_,
-                processing_frames_
+                processing_frames_,
+                objective_labels_,
+                objective_calibrations_,
+                selected_objective_index_
             },
             std::move(load_result.session_state));
         if (HWND fusion_checkbox = GetDlgItem(hwnd_, kIdFusionPreview)) {
@@ -1820,6 +1930,9 @@ public:
             SetWindowTextW(stitch_search_edit, search_text.c_str());
         }
         RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        RefreshObjectiveCombo(GetDlgItem(hwnd_, kIdObjectiveCombo));
+        SyncObjectiveNameEdit(GetDlgItem(hwnd_, kIdObjectiveNameEdit));
+        SyncCalibrationStatus();
         RefreshChannelList(GetDlgItem(hwnd_, kIdChannelList));
         RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         SyncSelectedChannelControls(
@@ -1872,6 +1985,10 @@ private:
         }
         if (result.measurement_list_changed) {
             RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        }
+        if (result.calibration_changed) {
+            StoreActiveObjectiveCalibration();
+            SyncCalibrationStatus();
         }
         if (!result.message.empty()) {
             SetStatus(result.message);
@@ -2111,10 +2228,101 @@ private:
         return TextInputParser::TryParseByte(ReadEditText(edit, 32), value);
     }
 
+    static std::vector<CalibrationProfile> MakeDefaultObjectiveCalibrations()
+    {
+        return std::vector<CalibrationProfile>(
+            CalibrationProfile::ObjectiveMagnificationOptions().size(),
+            CalibrationProfile::Uncalibrated());
+    }
+
+    static std::vector<std::wstring> MakeDefaultObjectiveLabels()
+    {
+        return CalibrationProfile::ObjectiveMagnificationOptions();
+    }
+
     static MeasurementUnit SelectedCalibrationUnit(HWND combo)
     {
         const LRESULT selection = combo ? SendMessageW(combo, CB_GETCURSEL, 0, 0) : 0;
         return CalibrationProfile::CalibrationUnitAtIndex(static_cast<int>(selection));
+    }
+
+    int NormalizeObjectiveIndex(int index) const
+    {
+        if (objective_labels_.empty() || index < 0 || index >= static_cast<int>(objective_labels_.size())) {
+            return 0;
+        }
+        return index;
+    }
+
+    void EnsureObjectiveCalibrationCount()
+    {
+        if (objective_labels_.empty()) {
+            objective_labels_ = MakeDefaultObjectiveLabels();
+        }
+        objective_calibrations_.resize(objective_labels_.size(), CalibrationProfile::Uncalibrated());
+        selected_objective_index_ = NormalizeObjectiveIndex(selected_objective_index_);
+    }
+
+    std::wstring ActiveObjectiveLabel() const
+    {
+        if (objective_labels_.empty()) {
+            return L"Objective";
+        }
+        return objective_labels_[static_cast<std::size_t>(NormalizeObjectiveIndex(selected_objective_index_))];
+    }
+
+    void StoreActiveObjectiveCalibration()
+    {
+        EnsureObjectiveCalibrationCount();
+        objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)] = calibration_;
+    }
+
+    void SyncObjectiveComboSelection(HWND combo) const
+    {
+        if (combo) {
+            SendMessageW(combo, CB_SETCURSEL, selected_objective_index_, 0);
+        }
+    }
+
+    void RefreshObjectiveCombo(HWND combo) const
+    {
+        if (!combo) {
+            return;
+        }
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        for (const std::wstring& objective : objective_labels_) {
+            SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(objective.c_str()));
+        }
+        SyncObjectiveComboSelection(combo);
+    }
+
+    void SyncObjectiveNameEdit(HWND edit) const
+    {
+        if (edit) {
+            const std::wstring objective = ActiveObjectiveLabel();
+            SetWindowTextW(edit, objective.c_str());
+        }
+    }
+
+    bool ObjectiveLabelExists(const std::wstring& label, int ignored_index = -1) const
+    {
+        for (std::size_t index = 0; index < objective_labels_.size(); ++index) {
+            if (static_cast<int>(index) != ignored_index && objective_labels_[index] == label) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void SyncCalibrationStatus() const
+    {
+        HWND label = GetDlgItem(hwnd_, kIdCalibrationStatusLabel);
+        if (!label) {
+            return;
+        }
+        const std::wstring status =
+            MeasurementDisplayActions::CalibrationStatusLine(ActiveObjectiveLabel(), calibration_);
+        SetWindowTextW(label, status.c_str());
     }
 
     static void ApplyCameraDeviceListPresentation(
@@ -2644,6 +2852,9 @@ private:
     EdfOptions edf_options_ = ProcessingParameterRules::DefaultEdfOptions();
     ProcessingJobState processing_state_;
     CalibrationProfile calibration_ = CalibrationProfile::Uncalibrated();
+    std::vector<std::wstring> objective_labels_ = MakeDefaultObjectiveLabels();
+    std::vector<CalibrationProfile> objective_calibrations_ = MakeDefaultObjectiveCalibrations();
+    int selected_objective_index_ = 0;
     MeasurementCollection measurements_;
     MeasurementInteractionState measurement_interaction_;
     MeasurementEditSession edit_session_;
@@ -2797,6 +3008,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
 
         HWND device_combo = GetDlgItem(hwnd, kIdDeviceCombo);
+        HWND objective_combo = GetDlgItem(hwnd, kIdObjectiveCombo);
+        HWND objective_name_edit = GetDlgItem(hwnd, kIdObjectiveNameEdit);
         HWND calibration_unit = GetDlgItem(hwnd, kIdCalibrationUnitCombo);
         HWND pseudo_color_combo = GetDlgItem(hwnd, kIdPseudoColorCombo);
         HWND dye_combo = GetDlgItem(hwnd, kIdDyeCombo);
@@ -2811,6 +3024,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             SendMessageW(calibration_unit, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label_text.c_str()));
         }
         SendMessageW(calibration_unit, CB_SETCURSEL, 0, 0);
+        app->InitializeObjectiveControls(objective_combo, objective_name_edit);
 
         for (const std::wstring& label_text : PreviewDisplayActions::PseudoColorLabels()) {
             SendMessageW(pseudo_color_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label_text.c_str()));
@@ -2872,6 +3086,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         if (LOWORD(wparam) == kIdPseudoColorCombo && HIWORD(wparam) == CBN_SELCHANGE) {
             app->UpdatePseudoColor(GetDlgItem(hwnd, kIdPseudoColorCombo));
+            return 0;
+        }
+        if (LOWORD(wparam) == kIdObjectiveCombo && HIWORD(wparam) == CBN_SELCHANGE) {
+            app->SelectObjective(GetDlgItem(hwnd, kIdObjectiveCombo), GetDlgItem(hwnd, kIdObjectiveNameEdit));
             return 0;
         }
         if (LOWORD(wparam) == kIdDyeCombo && HIWORD(wparam) == CBN_SELCHANGE) {
@@ -2951,6 +3169,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdClearCalibration:
             app->ClearCalibration();
+            return 0;
+        case kIdAddObjective:
+            app->AddObjective(GetDlgItem(hwnd, kIdObjectiveCombo), GetDlgItem(hwnd, kIdObjectiveNameEdit));
+            return 0;
+        case kIdRenameObjective:
+            app->RenameSelectedObjective(GetDlgItem(hwnd, kIdObjectiveCombo), GetDlgItem(hwnd, kIdObjectiveNameEdit));
+            return 0;
+        case kIdDeleteObjective:
+            app->DeleteSelectedObjective(GetDlgItem(hwnd, kIdObjectiveCombo), GetDlgItem(hwnd, kIdObjectiveNameEdit));
             return 0;
         case kIdLengthTool:
             app->BeginLengthMeasurement();

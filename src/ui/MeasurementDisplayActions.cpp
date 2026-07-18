@@ -4,9 +4,31 @@
 #include "MeasurementListSelection.h"
 #include "MeasurementOverlayModelBuilder.h"
 
+#include <iomanip>
+#include <sstream>
+
 MeasurementUnit MeasurementDisplayActions::DisplayUnit(const CalibrationProfile& calibration)
 {
     return calibration.IsCalibrated() ? MeasurementUnit::Micrometers : MeasurementUnit::Pixels;
+}
+
+std::wstring MeasurementDisplayActions::CalibrationStatusLine(const CalibrationProfile& calibration)
+{
+    return CalibrationStatusLine(L"Current scale", calibration);
+}
+
+std::wstring MeasurementDisplayActions::CalibrationStatusLine(
+    const std::wstring& objective_label,
+    const CalibrationProfile& calibration)
+{
+    if (!calibration.IsCalibrated()) {
+        return objective_label + L": uncalibrated";
+    }
+
+    std::wostringstream stream;
+    stream << objective_label << L": " << std::fixed << std::setprecision(4)
+           << calibration.MicronsPerPixel() << L" um/px";
+    return stream.str();
 }
 
 std::vector<std::wstring> MeasurementDisplayActions::ListLines(

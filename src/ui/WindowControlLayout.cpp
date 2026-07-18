@@ -212,11 +212,27 @@ void AddSidePanel(
         content_y += kControlHeight;
         break;
     case 4:
+        add(kIdObjectiveLabel, x, content_y, w, 20);
+        content_y += 24;
+        add(kIdObjectiveCombo, x, content_y, w, 120);
+        content_y += kControlHeight + kControlGap;
+        add(kIdObjectiveNameEdit, x, content_y, w, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        {
+            const int button_gap = 6;
+            const int third_width = (w - button_gap * 2) / 3;
+            add(kIdAddObjective, x, content_y, third_width, kControlHeight);
+            add(kIdRenameObjective, x + third_width + button_gap, content_y, third_width, kControlHeight);
+            add(kIdDeleteObjective, x + (third_width + button_gap) * 2, content_y, w - (third_width + button_gap) * 2, kControlHeight);
+            content_y += kControlHeight + kControlGap;
+        }
         add(kIdCalibrationLengthLabel, x, content_y, w, 20);
         content_y += 24;
         add(kIdCalibrationLengthEdit, x, content_y, 90, kControlHeight);
         add(kIdCalibrationUnitCombo, x + 98, content_y, 92, 100);
         content_y += kControlHeight + kControlGap;
+        add(kIdCalibrationStatusLabel, x, content_y, w, 20);
+        content_y += 24;
         add(kIdCalibrate, x, content_y, half_width, kControlHeight);
         add(kIdClearCalibration, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
@@ -470,9 +486,16 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdShowEdfFocusMap,
         kIdRetryProcessing,
         kIdClearProcessing,
+        kIdObjectiveLabel,
+        kIdObjectiveCombo,
+        kIdObjectiveNameEdit,
+        kIdAddObjective,
+        kIdRenameObjective,
+        kIdDeleteObjective,
         kIdCalibrationLengthLabel,
         kIdCalibrationLengthEdit,
         kIdCalibrationUnitCombo,
+        kIdCalibrationStatusLabel,
         kIdCalibrate,
         kIdClearCalibration,
         kIdLengthTool,

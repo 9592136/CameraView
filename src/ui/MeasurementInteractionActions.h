@@ -24,6 +24,7 @@ struct MeasurementInteractionActionResult {
     bool preview_changed = false;
     MeasurementInteractionActionStatus status = MeasurementInteractionActionStatus::Ignored;
     std::wstring message;
+    bool calibration_changed = false;
 };
 
 class MeasurementInteractionActions {

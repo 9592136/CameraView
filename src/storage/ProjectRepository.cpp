@@ -183,11 +183,28 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
 
     output << "{\n";
     output << "  \"format\": \"CameraViewProject\",\n";
-    output << "  \"version\": 7,\n";
+    output << "  \"version\": 8,\n";
     output << "  \"calibration\": {\n";
     output << "    \"microns_per_pixel\": " << std::fixed << std::setprecision(10)
            << document.calibration.MicronsPerPixel() << "\n";
     output << "  },\n";
+    output << "  \"selected_objective\": \"" << JsonEscape(document.selected_objective) << "\",\n";
+    output << "  \"objective_calibrations\": [\n";
+    for (std::size_t index = 0; index < document.objective_calibrations.size(); ++index) {
+        const ObjectiveCalibrationDocument& objective_calibration = document.objective_calibrations[index];
+        if (index > 0) {
+            output << ",\n";
+        }
+        output << "    {\n";
+        output << "      \"objective\": \"" << JsonEscape(objective_calibration.objective) << "\",\n";
+        output << "      \"microns_per_pixel\": " << std::fixed << std::setprecision(10)
+               << objective_calibration.calibration.MicronsPerPixel() << "\n";
+        output << "    }";
+    }
+    if (!document.objective_calibrations.empty()) {
+        output << "\n";
+    }
+    output << "  ],\n";
     output << "  \"measurements\": [\n";
     bool first_measurement = true;
     auto write_separator = [&]() {
@@ -340,7 +357,8 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
 
     ProjectDocument loaded;
 
-    const std::regex calibration_pattern(R"("microns_per_pixel"\s*:\s*([-+0-9.eE]+))");
+    const std::regex calibration_pattern(
+        R"project("calibration"\s*:\s*\{\s*"microns_per_pixel"\s*:\s*([-+0-9.eE]+)\s*\})project");
     std::smatch calibration_match;
     if (std::regex_search(text, calibration_match, calibration_pattern)) {
         double microns_per_pixel = 0.0;
@@ -349,6 +367,36 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
             return false;
         }
         loaded.calibration = CalibrationProfile::FromMicronsPerPixel(microns_per_pixel);
+    }
+
+    const std::regex selected_objective_pattern(
+        R"project("selected_objective"\s*:\s*"((?:\\.|[^"])*)")project");
+    std::smatch selected_objective_match;
+    if (std::regex_search(text, selected_objective_match, selected_objective_pattern)) {
+        loaded.selected_objective = JsonUnescape(selected_objective_match[1].str());
+    }
+
+    const std::regex objective_calibration_pattern(
+        R"project(\{\s*"objective"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"microns_per_pixel"\s*:\s*([-+0-9.eE]+)\s*\})project");
+    auto objective_begin =
+        std::sregex_iterator(text.begin(), text.end(), objective_calibration_pattern);
+    auto objective_end = std::sregex_iterator();
+    for (auto iterator = objective_begin; iterator != objective_end; ++iterator) {
+        const std::smatch& match = *iterator;
+        double microns_per_pixel = 0.0;
+        if (!TryParseDouble(match[2].str(), microns_per_pixel)) {
+            error = L"Invalid objective calibration value in project file.";
+            return false;
+        }
+        ObjectiveCalibrationDocument objective_calibration;
+        objective_calibration.objective = JsonUnescape(match[1].str());
+        if (objective_calibration.objective.empty()) {
+            error = L"Objective calibration in project file has an empty objective.";
+            return false;
+        }
+        objective_calibration.calibration =
+            CalibrationProfile::FromMicronsPerPixel(microns_per_pixel);
+        loaded.objective_calibrations.push_back(std::move(objective_calibration));
     }
 
     const std::regex measurement_pattern(

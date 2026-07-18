@@ -11,12 +11,14 @@ MeasurementInteractionActionResult FromApplyResult(
     MeasurementInteractionActionStatus status,
     MeasurementActionApplyResult apply_result)
 {
-    return {
+    MeasurementInteractionActionResult result{
         true,
         apply_result.measurement_list_changed,
         apply_result.preview_changed,
         status,
         std::move(apply_result.status)};
+    result.calibration_changed = apply_result.calibration_changed;
+    return result;
 }
 
 bool IsCalibrationSecondPointTooClose(
