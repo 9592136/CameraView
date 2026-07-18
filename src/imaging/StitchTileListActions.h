@@ -35,6 +35,11 @@ public:
         ImageFrame frame,
         int search_percent);
 
+    static StitchTileListActionResult AddFrames(
+        std::vector<StitchTile>& tiles,
+        std::vector<ImageFrame> frames,
+        int search_percent);
+
     static StitchTileListActionResult DeleteSelected(
         std::vector<StitchTile>& tiles,
         int selection);

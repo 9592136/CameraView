@@ -1654,6 +1654,68 @@ public:
         return true;
     }
 
+    void OpenDroppedFiles(const std::vector<std::wstring>& file_names)
+    {
+        if (file_names.empty()) {
+            SetStatus(L"No dropped image files.");
+            return;
+        }
+        if (file_names.size() == 1U) {
+            OpenImageFile(file_names.front(), true);
+            return;
+        }
+
+        std::vector<ImageFrame> frames;
+        frames.reserve(file_names.size());
+        std::size_t failed_count = 0;
+        for (const std::wstring& file_name : file_names) {
+            ImageFrame loaded;
+            std::wstring error;
+            if (ImageExporter::LoadRasterImage(std::filesystem::path(file_name), loaded, error)) {
+                frames.push_back(std::move(loaded));
+            } else {
+                ++failed_count;
+            }
+        }
+        if (frames.empty()) {
+            SetStatus(L"No dropped image files could be added to stitch tiles.");
+            return;
+        }
+
+        const ProcessingIntegerInputResult search_input =
+            ProcessingBuildInputActions::StitchSearchForNextTile(
+                !stitch_tiles_.empty() || frames.size() > 1U,
+                ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
+                stitch_search_percent_);
+        if (!search_input.accepted) {
+            SetStatus(search_input.message);
+            return;
+        }
+        stitch_search_percent_ = search_input.value;
+
+        const StitchTileListActionResult result =
+            StitchTileListActions::AddFrames(stitch_tiles_, std::move(frames), search_input.value);
+        if (!result.changed) {
+            SetStatus(failed_count > 0
+                ? L"No dropped image files could be added to stitch tiles."
+                : result.message);
+            return;
+        }
+
+        processing_frames_.Clear();
+        RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
+        if (HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList)) {
+            SendMessageW(stitch_tile_list, LB_SETCURSEL, result.tile_count - 1U, 0);
+        }
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+        std::wstring message = result.message;
+        if (failed_count > 0) {
+            message += L" Skipped " + std::to_wstring(failed_count) + L" file(s).";
+        }
+        SetStatus(message);
+    }
+
     void SaveDiagnosticsReport()
     {
         std::wstring file_name;
@@ -2996,14 +3058,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         CameraPreviewApp* app = GetApp(hwnd);
         const UINT file_count = DragQueryFileW(drop, 0xFFFFFFFFU, nullptr, 0);
         if (app && file_count > 0) {
-            const UINT path_length = DragQueryFileW(drop, 0, nullptr, 0);
-            if (path_length > 0) {
+            std::vector<std::wstring> paths;
+            paths.reserve(file_count);
+            for (UINT index = 0; index < file_count; ++index) {
+                const UINT path_length = DragQueryFileW(drop, index, nullptr, 0);
+                if (path_length == 0) {
+                    continue;
+                }
                 std::wstring path(path_length + 1U, L'\0');
-                if (DragQueryFileW(drop, 0, path.data(), path_length + 1U) > 0) {
+                if (DragQueryFileW(drop, index, path.data(), path_length + 1U) > 0) {
                     path.resize(path_length);
-                    app->OpenImageFile(path, true);
+                    paths.push_back(std::move(path));
                 }
             }
+            app->OpenDroppedFiles(paths);
         }
         DragFinish(drop);
         return 0;

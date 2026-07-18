@@ -42,6 +42,40 @@ StitchTileListActionResult StitchTileListActions::AddCurrentFrame(
     return result;
 }
 
+StitchTileListActionResult StitchTileListActions::AddFrames(
+    std::vector<StitchTile>& tiles,
+    std::vector<ImageFrame> frames,
+    int search_percent)
+{
+    StitchTileListActionResult result;
+    std::size_t added_count = 0;
+    for (ImageFrame& frame : frames) {
+        StitchTileListActionResult add_result =
+            AddCurrentFrame(tiles, std::move(frame), search_percent);
+        if (!add_result.changed) {
+            continue;
+        }
+        ++added_count;
+        result.registered = result.registered || add_result.registered;
+        result.estimated = result.estimated || add_result.estimated;
+        result.registration = add_result.registration;
+    }
+
+    result.tile_count = tiles.size();
+    if (added_count == 0) {
+        result.status = StitchTileListActionStatus::NoFrame;
+        result.message = L"No image frame to add as a stitch tile.";
+        return result;
+    }
+
+    result.status = StitchTileListActionStatus::Added;
+    result.changed = true;
+    result.message =
+        L"Stitch tiles added: " + std::to_wstring(added_count) +
+        L". Total: " + std::to_wstring(result.tile_count) + L".";
+    return result;
+}
+
 StitchTileListActionResult StitchTileListActions::DeleteSelected(
     std::vector<StitchTile>& tiles,
     int selection)

@@ -3566,6 +3566,25 @@ int main()
             L"Stitch tile added with fast estimated position. Stitch will refine alignment.") {
         return Fail("StitchTileListActions did not report fast estimated stitch placement.");
     }
+    std::vector<StitchTile> batch_action_tiles;
+    std::vector<ImageFrame> batch_stitch_frames;
+    batch_stitch_frames.push_back(MakeSolidImage(320, 240, 10, 20, 30));
+    batch_stitch_frames.push_back(MakeSolidImage(320, 240, 40, 50, 60));
+    const StitchTileListActionResult batch_stitch_action =
+        StitchTileListActions::AddFrames(batch_action_tiles, std::move(batch_stitch_frames), 50);
+    if (!batch_stitch_action.changed ||
+        batch_stitch_action.status != StitchTileListActionStatus::Added ||
+        !batch_stitch_action.estimated ||
+        batch_stitch_action.tile_count != 2 ||
+        batch_action_tiles.size() != 2 ||
+        batch_action_tiles[0].offset_x != 0 ||
+        batch_action_tiles[0].offset_y != 0 ||
+        batch_action_tiles[1].offset_x != 160 ||
+        batch_action_tiles[1].offset_y != 0 ||
+        !batch_action_tiles[1].estimated_position ||
+        batch_stitch_action.message != L"Stitch tiles added: 2. Total: 2.") {
+        return Fail("StitchTileListActions did not batch-add dropped stitch tiles.");
+    }
     const std::vector<std::wstring> stitch_tile_lines =
         StitchTileDisplayActions::TileLines(registered_action_tiles);
     if (stitch_tile_lines.size() != 2 ||
