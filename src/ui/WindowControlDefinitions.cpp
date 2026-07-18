@@ -35,6 +35,7 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdCalibrationLengthEdit, L"EDIT", L"100", kEditStyle},
         {kIdCalibrationUnitCombo, L"COMBOBOX", nullptr, kComboStyle},
         {kIdCalibrate, L"BUTTON", L"Calibrate", kButtonStyle},
+        {kIdClearCalibration, L"BUTTON", L"Clear Calib", kButtonStyle},
         {kIdLengthTool, L"BUTTON", L"Length", kButtonStyle},
         {kIdAngleTool, L"BUTTON", L"Angle", kButtonStyle},
         {kIdRectangleAreaTool, L"BUTTON", L"Area", kButtonStyle},

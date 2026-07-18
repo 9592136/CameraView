@@ -183,6 +183,7 @@ HMENU CreateMainMenu()
     AppendMenuW(processing_menu, MF_STRING, kIdClearProcessing, L"Clear Processing");
 
     AppendMenuW(measurement_menu, MF_STRING, kIdCalibrate, L"Calibrate");
+    AppendMenuW(measurement_menu, MF_STRING, kIdClearCalibration, L"Clear Calibration");
     AppendMenuW(measurement_menu, MF_STRING, kIdLengthTool, L"Length");
     AppendMenuW(measurement_menu, MF_STRING, kIdAngleTool, L"Angle");
     AppendMenuW(measurement_menu, MF_STRING, kIdRectangleAreaTool, L"Rectangle Area");
@@ -1370,6 +1371,21 @@ public:
         pending_calibration_length_ = result.calibration_length;
         pending_calibration_unit_ = result.calibration_unit;
         SetStatus(result.message);
+    }
+
+    void ClearCalibration()
+    {
+        if (!calibration_.IsCalibrated()) {
+            SetStatus(L"No calibration to clear.");
+            return;
+        }
+
+        calibration_ = CalibrationProfile::Uncalibrated();
+        measurement_interaction_.Clear();
+        RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+        SetStatus(L"Calibration cleared.");
     }
 
     void BeginLengthMeasurement()
@@ -2931,6 +2947,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdCalibrate:
             app->BeginCalibration(GetDlgItem(hwnd, kIdCalibrationLengthEdit), GetDlgItem(hwnd, kIdCalibrationUnitCombo));
+            return 0;
+        case kIdClearCalibration:
+            app->ClearCalibration();
             return 0;
         case kIdLengthTool:
             app->BeginLengthMeasurement();

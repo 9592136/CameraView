@@ -218,20 +218,22 @@ void AddSidePanel(
         add(kIdCalibrationUnitCombo, x + 98, content_y, 92, 100);
         content_y += kControlHeight + kControlGap;
         add(kIdCalibrate, x, content_y, half_width, kControlHeight);
-        add(kIdLengthTool, second_column, content_y, half_width, kControlHeight);
+        add(kIdClearCalibration, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
-        add(kIdAngleTool, x, content_y, half_width, kControlHeight);
-        add(kIdRectangleAreaTool, second_column, content_y, half_width, kControlHeight);
+        add(kIdLengthTool, x, content_y, half_width, kControlHeight);
+        add(kIdAngleTool, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
-        add(kIdPolygonAreaTool, x, content_y, half_width, kControlHeight);
-        add(kIdFinishPolygonArea, second_column, content_y, half_width, kControlHeight);
+        add(kIdRectangleAreaTool, x, content_y, half_width, kControlHeight);
+        add(kIdPolygonAreaTool, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
-        add(kIdDeleteMeasurement, x, content_y, half_width, kControlHeight);
-        add(kIdClearMeasurements, second_column, content_y, half_width, kControlHeight);
+        add(kIdFinishPolygonArea, x, content_y, half_width, kControlHeight);
+        add(kIdDeleteMeasurement, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
-        add(kIdExportCsv, x, content_y, half_width, kControlHeight);
-        add(kIdMeasurementNameEdit, second_column, content_y, half_width - 64, kControlHeight);
-        add(kIdRenameMeasurement, second_column + half_width - 56, content_y, 56, kControlHeight);
+        add(kIdClearMeasurements, x, content_y, half_width, kControlHeight);
+        add(kIdExportCsv, second_column, content_y, half_width, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        add(kIdMeasurementNameEdit, x, content_y, w - 64, kControlHeight);
+        add(kIdRenameMeasurement, x + w - 56, content_y, 56, kControlHeight);
         content_y += kControlHeight + kControlGap + 8;
         add(kIdResultsLabel, x, content_y, w, 20);
         content_y += 24;
@@ -472,6 +474,7 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdCalibrationLengthEdit,
         kIdCalibrationUnitCombo,
         kIdCalibrate,
+        kIdClearCalibration,
         kIdLengthTool,
         kIdAngleTool,
         kIdRectangleAreaTool,

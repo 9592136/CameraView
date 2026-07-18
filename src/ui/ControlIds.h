@@ -95,3 +95,4 @@ inline constexpr int kIdExit = 1092;
 inline constexpr int kIdTogglePanelDock = 1093;
 inline constexpr int kIdDockFunctionPanelLeft = 1094;
 inline constexpr int kIdDockFunctionPanelRight = 1095;
+inline constexpr int kIdClearCalibration = 1096;

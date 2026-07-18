@@ -445,6 +445,8 @@ int main()
         WindowControlLayout::Compute(wide_client, 4);
     const WindowControlPlacement* measurement_pseudo_label =
         FindPlacement(measurement_control_layout, kIdPseudoColorLabel);
+    const WindowControlPlacement* measurement_clear_calibration =
+        FindPlacement(measurement_control_layout, kIdClearCalibration);
     const WindowControlPlacement* measurement_export_csv =
         FindPlacement(measurement_control_layout, kIdExportCsv);
     const WindowControlPlacement* measurement_results_list =
@@ -516,6 +518,9 @@ int main()
         measurement_pseudo_label->visible ||
         !measurement_export_csv ||
         !measurement_export_csv->visible ||
+        !measurement_clear_calibration ||
+        !measurement_clear_calibration->visible ||
+        measurement_clear_calibration->bounds.left <= 12 ||
         !measurement_results_list ||
         !measurement_results_list->visible ||
         measurement_results_list->bounds.left != 12 ||
@@ -627,6 +632,8 @@ int main()
         WindowControlDefinitions::Find(kIdTogglePanelDock);
     const WindowControlDefinition* fusion_checkbox_definition = WindowControlDefinitions::Find(kIdFusionPreview);
     const WindowControlDefinition* auto_exposure_definition = WindowControlDefinitions::Find(kIdAutoExposure);
+    const WindowControlDefinition* clear_calibration_definition =
+        WindowControlDefinitions::Find(kIdClearCalibration);
     const WindowControlDefinition* camera_gain_definition = WindowControlDefinitions::Find(kIdCameraGainEdit);
     const WindowControlDefinition* dye_red_definition = WindowControlDefinitions::Find(kIdDyeRedEdit);
     const WindowControlDefinition* panel_scroll_definition = WindowControlDefinitions::Find(kIdPanelScrollBar);
@@ -643,6 +650,8 @@ int main()
         std::wstring(toggle_panel_dock_definition->text) != L"Dock Right" ||
         !auto_exposure_definition ||
         std::wstring(auto_exposure_definition->text) != L"Auto Exposure" ||
+        !clear_calibration_definition ||
+        std::wstring(clear_calibration_definition->text) != L"Clear Calib" ||
         !camera_gain_definition ||
         std::wstring(camera_gain_definition->class_name) != L"EDIT" ||
         !fusion_checkbox_definition ||
