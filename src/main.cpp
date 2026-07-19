@@ -89,8 +89,10 @@ constexpr UINT kMsgFrameReady = WM_APP + 1;
 constexpr UINT kMsgStatusChanged = WM_APP + 2;
 constexpr UINT kMsgProcessingFinished = WM_APP + 3;
 constexpr int kPanelTitleHeight = 34;
+constexpr int kFunctionPanelResizeGripWidth = 8;
 constexpr const wchar_t* kFunctionPanelVisibleProperty = L"CameraViewFunctionPanelVisible";
 constexpr const wchar_t* kFunctionPanelDockLeftProperty = L"CameraViewFunctionPanelDockLeft";
+constexpr const wchar_t* kFunctionPanelWidthProperty = L"CameraViewFunctionPanelWidth";
 constexpr const wchar_t* kReportTemplateDesignerClassName = L"CameraViewReportTemplateDesigner";
 constexpr const wchar_t* kReportTemplatePreviewClassName = L"CameraViewReportTemplatePreview";
 constexpr int kReportTemplateDesignerDefaultWidth = 980;
@@ -183,6 +185,23 @@ bool IsFunctionPanelDockedLeft(HWND hwnd)
     return value == reinterpret_cast<HANDLE>(kFunctionPanelDockLeftValue);
 }
 
+int FunctionPanelWidth(HWND hwnd)
+{
+    return static_cast<int>(reinterpret_cast<INT_PTR>(GetPropW(hwnd, kFunctionPanelWidthProperty)));
+}
+
+void SetFunctionPanelWidthProperty(HWND hwnd, int width)
+{
+    if (width > 0) {
+        SetPropW(
+            hwnd,
+            kFunctionPanelWidthProperty,
+            reinterpret_cast<HANDLE>(static_cast<INT_PTR>(width)));
+    } else {
+        RemovePropW(hwnd, kFunctionPanelWidthProperty);
+    }
+}
+
 void SetFunctionPanelVisibleProperty(HWND hwnd, bool visible)
 {
     SetPropW(
@@ -207,6 +226,11 @@ void RemoveFunctionPanelVisibleProperty(HWND hwnd)
 void RemoveFunctionPanelDockLeftProperty(HWND hwnd)
 {
     RemovePropW(hwnd, kFunctionPanelDockLeftProperty);
+}
+
+void RemoveFunctionPanelWidthProperty(HWND hwnd)
+{
+    RemovePropW(hwnd, kFunctionPanelWidthProperty);
 }
 
 HMENU CreateMainMenu()
@@ -294,7 +318,8 @@ RECT GetPreviewRect(HWND hwnd)
     return WindowLayout::PreviewRect(
         rect,
         IsFunctionPanelVisible(hwnd),
-        IsFunctionPanelDockedLeft(hwnd));
+        IsFunctionPanelDockedLeft(hwnd),
+        FunctionPanelWidth(hwnd));
 }
 
 RECT GetSidePanelRect(HWND hwnd)
@@ -304,7 +329,8 @@ RECT GetSidePanelRect(HWND hwnd)
     return WindowLayout::SidePanelRect(
         rect,
         IsFunctionPanelVisible(hwnd),
-        IsFunctionPanelDockedLeft(hwnd));
+        IsFunctionPanelDockedLeft(hwnd),
+        FunctionPanelWidth(hwnd));
 }
 
 RECT GetStatusRect(HWND hwnd)
@@ -408,6 +434,7 @@ public:
     {
         SetFunctionPanelVisibleProperty(hwnd_, function_panel_visible_);
         SetFunctionPanelDockLeftProperty(hwnd_, function_panel_docked_left_);
+        SetFunctionPanelWidthProperty(hwnd_, function_panel_width_);
     }
     ~CameraPreviewApp()
     {
@@ -421,6 +448,7 @@ public:
         ReleasePaintBuffer();
         RemoveFunctionPanelVisibleProperty(hwnd_);
         RemoveFunctionPanelDockLeftProperty(hwnd_);
+        RemoveFunctionPanelWidthProperty(hwnd_);
     }
 
     void Start()
@@ -626,6 +654,11 @@ public:
         return function_panel_docked_left_;
     }
 
+    int FunctionPanelWidth() const
+    {
+        return function_panel_width_;
+    }
+
     void SyncFunctionPanelChrome() const
     {
         HWND toggle_button = GetDlgItem(hwnd_, kIdToggleFunctionPanel);
@@ -705,9 +738,85 @@ public:
         return title.right > title.left && title.bottom > title.top && PtInRect(&title, point);
     }
 
+    RECT FunctionPanelResizeGripRect() const
+    {
+        RECT grip = GetSidePanelRect(hwnd_);
+        if (!function_panel_visible_ || grip.right <= grip.left || grip.bottom <= grip.top) {
+            return RECT{};
+        }
+        if (function_panel_docked_left_) {
+            grip.left = grip.right - kFunctionPanelResizeGripWidth / 2;
+            grip.right += kFunctionPanelResizeGripWidth / 2;
+        } else {
+            grip.right = grip.left + kFunctionPanelResizeGripWidth / 2;
+            grip.left -= kFunctionPanelResizeGripWidth / 2;
+        }
+        return grip;
+    }
+
+    bool PointInFunctionPanelResizeGrip(POINT point) const
+    {
+        const RECT grip = FunctionPanelResizeGripRect();
+        return grip.right > grip.left && grip.bottom > grip.top && PtInRect(&grip, point);
+    }
+
     bool ShouldShowFunctionPanelDockCursor(POINT point) const
     {
-        return function_panel_drag_active_ || PointInFunctionPanelTitle(point);
+        return function_panel_resize_active_ ||
+            function_panel_drag_active_ ||
+            PointInFunctionPanelResizeGrip(point) ||
+            PointInFunctionPanelTitle(point);
+    }
+
+    bool BeginFunctionPanelResize(POINT point)
+    {
+        if (!PointInFunctionPanelResizeGrip(point)) {
+            return false;
+        }
+
+        function_panel_resize_active_ = true;
+        SetCapture(hwnd_);
+        SetStatus(L"Resizing function panel.");
+        return true;
+    }
+
+    bool ContinueFunctionPanelResize(POINT point)
+    {
+        if (!function_panel_resize_active_) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        const int requested_width = function_panel_docked_left_
+            ? point.x - static_cast<int>(client.left)
+            : static_cast<int>(client.right) - point.x;
+        const int width = WindowLayout::ComputeSidePanelWidth(
+            client,
+            function_panel_visible_,
+            requested_width);
+        if (width > 0 && width != function_panel_width_) {
+            function_panel_width_ = width;
+            SetFunctionPanelWidthProperty(hwnd_, function_panel_width_);
+            ClampPanelScroll();
+            LayoutControls(hwnd_);
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return true;
+    }
+
+    bool EndFunctionPanelResize()
+    {
+        if (!function_panel_resize_active_) {
+            return false;
+        }
+
+        function_panel_resize_active_ = false;
+        if (GetCapture() == hwnd_) {
+            ReleaseCapture();
+        }
+        SetStatus(L"Function panel width adjusted.");
+        return true;
     }
 
     bool BeginFunctionPanelDockDrag(POINT point)
@@ -773,7 +882,8 @@ public:
                 client,
                 panel_category_,
                 function_panel_visible_,
-                function_panel_docked_left_));
+                function_panel_docked_left_,
+                function_panel_width_));
     }
 
     void SyncPanelScrollBar()
@@ -790,7 +900,8 @@ public:
                 client,
                 panel_category_,
                 function_panel_visible_,
-                function_panel_docked_left_);
+                function_panel_docked_left_,
+                function_panel_width_);
         if (max_scroll <= 0) {
             SCROLLINFO info = {};
             info.cbSize = sizeof(info);
@@ -808,7 +919,8 @@ public:
             WindowControlLayout::PanelScrollPage(
                 client,
                 function_panel_visible_,
-                function_panel_docked_left_));
+                function_panel_docked_left_,
+                function_panel_width_));
         SCROLLINFO info = {};
         info.cbSize = sizeof(info);
         info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
@@ -1530,7 +1642,8 @@ public:
                 client,
                 panel_category_,
                 function_panel_visible_,
-                function_panel_docked_left_);
+                function_panel_docked_left_,
+                function_panel_width_);
         if (max_scroll <= 0) {
             return ScrollPanelTo(0);
         }
@@ -1541,7 +1654,8 @@ public:
                 WindowControlLayout::PanelScrollPage(
                     client,
                     function_panel_visible_,
-                    function_panel_docked_left_) - 24);
+                    function_panel_docked_left_,
+                    function_panel_width_) - 24);
         int target_offset = panel_scroll_offset_;
         switch (scroll_request) {
         case SB_LINEUP:
@@ -1592,7 +1706,8 @@ public:
                 client,
                 panel_category_,
                 function_panel_visible_,
-                function_panel_docked_left_);
+                function_panel_docked_left_,
+                function_panel_width_);
         const int old_offset = panel_scroll_offset_;
         panel_scroll_offset_ = std::clamp(target_offset, 0, max_scroll);
         if (panel_scroll_offset_ == old_offset) {
@@ -5982,6 +6097,8 @@ private:
     bool function_panel_visible_ = true;
     bool function_panel_docked_left_ = true;
     bool function_panel_drag_active_ = false;
+    bool function_panel_resize_active_ = false;
+    int function_panel_width_ = 0;
     int panel_category_ = 0;
     int panel_scroll_offset_ = 0;
     ViewportPanState viewport_pan_;
@@ -6008,6 +6125,7 @@ void LayoutControls(HWND hwnd, bool repaint_children)
         app ? app->FunctionPanelVisible() : IsFunctionPanelVisible(hwnd);
     const bool function_panel_docked_left =
         app ? app->FunctionPanelDockedLeft() : IsFunctionPanelDockedLeft(hwnd);
+    const int function_panel_width = app ? app->FunctionPanelWidth() : FunctionPanelWidth(hwnd);
     if (app) {
         app->ClampPanelScroll();
     }
@@ -6018,7 +6136,8 @@ void LayoutControls(HWND hwnd, bool repaint_children)
             panel_category,
             panel_scroll_offset,
             function_panel_visible,
-            function_panel_docked_left);
+            function_panel_docked_left,
+            function_panel_width);
     std::vector<HWND> paused_redraw_controls;
     if (!repaint_children) {
         paused_redraw_controls.reserve(placements.size());
@@ -6471,6 +6590,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 static_cast<int>(static_cast<short>(LOWORD(lparam))),
                 static_cast<int>(static_cast<short>(HIWORD(lparam)))
             };
+            if (app->BeginFunctionPanelResize(point)) {
+                return 0;
+            }
             if (app->BeginFunctionPanelDockDrag(point)) {
                 return 0;
             }
@@ -6517,6 +6639,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 static_cast<int>(static_cast<short>(LOWORD(lparam))),
                 static_cast<int>(static_cast<short>(HIWORD(lparam)))
             };
+            if (app->ContinueFunctionPanelResize(point)) {
+                return 0;
+            }
             if (app->ContinueFunctionPanelDockDrag(point)) {
                 return 0;
             }
@@ -6532,6 +6657,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_LBUTTONUP: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app) {
+            if (app->EndFunctionPanelResize()) {
+                return 0;
+            }
             if (app->EndFunctionPanelDockDrag()) {
                 return 0;
             }
@@ -6552,6 +6680,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CAPTURECHANGED: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app) {
+            app->EndFunctionPanelResize();
             app->EndFunctionPanelDockDrag();
             app->EndMeasurementEdit();
             app->EndPan();

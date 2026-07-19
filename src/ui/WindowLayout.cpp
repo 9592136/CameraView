@@ -7,7 +7,8 @@ namespace {
 constexpr int kToolbarHeight = 48;
 constexpr int kStatusHeight = 28;
 constexpr int kMinSidePanelWidth = 300;
-constexpr int kMaxSidePanelWidth = 420;
+constexpr int kDefaultMaxSidePanelWidth = 420;
+constexpr int kUserMaxSidePanelWidth = 560;
 constexpr int kMinPreviewWidth = 420;
 
 } // namespace
@@ -22,7 +23,10 @@ int WindowLayout::StatusHeight()
     return kStatusHeight;
 }
 
-int WindowLayout::ComputeSidePanelWidth(const RECT& client_rect, bool show_side_panel)
+int WindowLayout::ComputeSidePanelWidth(
+    const RECT& client_rect,
+    bool show_side_panel,
+    int requested_width)
 {
     if (!show_side_panel) {
         return 0;
@@ -33,20 +37,27 @@ int WindowLayout::ComputeSidePanelWidth(const RECT& client_rect, bool show_side_
     }
     const int scaled_width = width / 3;
     const int available_width = width - kMinPreviewWidth;
-    return std::min(
+    const int default_width = std::min(
         available_width,
-        std::clamp(scaled_width, kMinSidePanelWidth, kMaxSidePanelWidth));
+        std::clamp(scaled_width, kMinSidePanelWidth, kDefaultMaxSidePanelWidth));
+    if (requested_width <= 0) {
+        return default_width;
+    }
+
+    const int max_user_width = std::min(available_width, kUserMaxSidePanelWidth);
+    return std::clamp(requested_width, kMinSidePanelWidth, max_user_width);
 }
 
 RECT WindowLayout::PreviewRect(
     const RECT& client_rect,
     bool show_side_panel,
-    bool dock_panel_left)
+    bool dock_panel_left,
+    int requested_side_panel_width)
 {
     RECT rect = client_rect;
     rect.top = kToolbarHeight;
     rect.bottom = std::max(rect.top, rect.bottom - kStatusHeight);
-    const int side_panel_width = ComputeSidePanelWidth(rect, show_side_panel);
+    const int side_panel_width = ComputeSidePanelWidth(rect, show_side_panel, requested_side_panel_width);
     if (dock_panel_left) {
         rect.left = std::min(rect.right, rect.left + side_panel_width);
     } else {
@@ -58,12 +69,13 @@ RECT WindowLayout::PreviewRect(
 RECT WindowLayout::SidePanelRect(
     const RECT& client_rect,
     bool show_side_panel,
-    bool dock_panel_left)
+    bool dock_panel_left,
+    int requested_side_panel_width)
 {
     RECT rect = client_rect;
     rect.top = kToolbarHeight;
     rect.bottom = std::max(rect.top, rect.bottom - kStatusHeight);
-    const int side_panel_width = ComputeSidePanelWidth(rect, show_side_panel);
+    const int side_panel_width = ComputeSidePanelWidth(rect, show_side_panel, requested_side_panel_width);
     if (dock_panel_left) {
         rect.right = std::min(rect.right, rect.left + side_panel_width);
     } else {

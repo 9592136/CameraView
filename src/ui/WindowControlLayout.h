@@ -24,16 +24,19 @@ public:
         int panel_category = 0,
         int panel_scroll_offset = 0,
         bool show_side_panel = true,
-        bool dock_panel_left = true);
+        bool dock_panel_left = true,
+        int requested_side_panel_width = 0);
     static int PanelScrollMax(
         const RECT& client_rect,
         int panel_category = 0,
         bool show_side_panel = true,
-        bool dock_panel_left = true);
+        bool dock_panel_left = true,
+        int requested_side_panel_width = 0);
     static int PanelScrollPage(
         const RECT& client_rect,
         bool show_side_panel = true,
-        bool dock_panel_left = true);
+        bool dock_panel_left = true,
+        int requested_side_panel_width = 0);
     static const std::vector<std::wstring>& PanelCategoryLabels();
     static int NormalizePanelCategory(int panel_category);
     static int PanelCategoryFromCardControl(int control_id);

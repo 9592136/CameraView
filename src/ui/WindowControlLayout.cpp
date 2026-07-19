@@ -333,20 +333,21 @@ std::vector<WindowControlPlacement> WindowControlLayout::Compute(
     int panel_category,
     int panel_scroll_offset,
     bool show_side_panel,
-    bool dock_panel_left)
+    bool dock_panel_left,
+    int requested_side_panel_width)
 {
     std::vector<WindowControlPlacement> placements;
     placements.reserve(3 + SideControlIds().size());
     AddToolbar(placements);
 
-    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left);
+    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left, requested_side_panel_width);
     if (panel.right <= panel.left) {
         AddHiddenSideControls(placements);
         return placements;
     }
 
     const bool show_scroll_bar =
-        PanelScrollMax(client_rect, panel_category, show_side_panel, dock_panel_left) > 0;
+        PanelScrollMax(client_rect, panel_category, show_side_panel, dock_panel_left, requested_side_panel_width) > 0;
     AddSidePanel(placements, panel, panel_category, panel_scroll_offset, nullptr, show_scroll_bar);
     return placements;
 }
@@ -355,9 +356,10 @@ int WindowControlLayout::PanelScrollMax(
     const RECT& client_rect,
     int panel_category,
     bool show_side_panel,
-    bool dock_panel_left)
+    bool dock_panel_left,
+    int requested_side_panel_width)
 {
-    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left);
+    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left, requested_side_panel_width);
     if (panel.right <= panel.left || panel.bottom <= panel.top) {
         return 0;
     }
@@ -365,16 +367,17 @@ int WindowControlLayout::PanelScrollMax(
     std::vector<WindowControlPlacement> placements;
     int content_height = 0;
     AddSidePanel(placements, panel, panel_category, 0, &content_height, true);
-    const int viewport_height = PanelScrollPage(client_rect, show_side_panel, dock_panel_left);
+    const int viewport_height = PanelScrollPage(client_rect, show_side_panel, dock_panel_left, requested_side_panel_width);
     return std::max(0, content_height - viewport_height);
 }
 
 int WindowControlLayout::PanelScrollPage(
     const RECT& client_rect,
     bool show_side_panel,
-    bool dock_panel_left)
+    bool dock_panel_left,
+    int requested_side_panel_width)
 {
-    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left);
+    const RECT panel = WindowLayout::SidePanelRect(client_rect, show_side_panel, dock_panel_left, requested_side_panel_width);
     if (panel.right <= panel.left || panel.bottom <= panel.top) {
         return 0;
     }
