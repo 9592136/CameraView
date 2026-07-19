@@ -469,6 +469,16 @@ int main()
         FindPlacement(processing_control_layout, kIdDeleteStitchTile);
     const WindowControlPlacement* processing_clear_stitch_tiles =
         FindPlacement(processing_control_layout, kIdClearStitchTiles);
+    const std::vector<WindowControlPlacement> project_control_layout =
+        WindowControlLayout::Compute(wide_client, 5);
+    const WindowControlPlacement* project_design_template =
+        FindPlacement(project_control_layout, kIdDesignReportTemplate);
+    const WindowControlPlacement* project_load_template =
+        FindPlacement(project_control_layout, kIdLoadReportTemplate);
+    const WindowControlPlacement* project_clear_template =
+        FindPlacement(project_control_layout, kIdClearReportTemplate);
+    const WindowControlPlacement* project_template_status =
+        FindPlacement(project_control_layout, kIdReportTemplateStatus);
     const std::vector<WindowControlPlacement> right_docked_control_layout =
         WindowControlLayout::Compute(wide_client, 0, 0, true, false);
     const WindowControlPlacement* right_docked_camera_card =
@@ -555,6 +565,16 @@ int main()
         !processing_clear_stitch_tiles->visible ||
         processing_stitch_tile_list->bounds.bottom <= processing_stitch_tile_list->bounds.top) {
         return Fail("WindowControlLayout did not expose the stitch tile gallery controls.");
+    }
+    if (!project_design_template ||
+        !project_design_template->visible ||
+        !project_load_template ||
+        !project_load_template->visible ||
+        !project_clear_template ||
+        !project_clear_template->visible ||
+        !project_template_status ||
+        !project_template_status->visible) {
+        return Fail("WindowControlLayout did not expose report template controls.");
     }
     const RECT compact_client{0, 0, 900, 420};
     const int compact_processing_scroll =
@@ -655,6 +675,12 @@ int main()
         WindowControlDefinitions::Find(kIdObjectiveCombo);
     const WindowControlDefinition* add_objective_definition =
         WindowControlDefinitions::Find(kIdAddObjective);
+    const WindowControlDefinition* save_report_definition =
+        WindowControlDefinitions::Find(kIdSaveDiagnostics);
+    const WindowControlDefinition* design_template_definition =
+        WindowControlDefinitions::Find(kIdDesignReportTemplate);
+    const WindowControlDefinition* load_template_definition =
+        WindowControlDefinitions::Find(kIdLoadReportTemplate);
     const WindowControlDefinition* camera_gain_definition = WindowControlDefinitions::Find(kIdCameraGainEdit);
     const WindowControlDefinition* dye_red_definition = WindowControlDefinitions::Find(kIdDyeRedEdit);
     const WindowControlDefinition* panel_scroll_definition = WindowControlDefinitions::Find(kIdPanelScrollBar);
@@ -677,6 +703,12 @@ int main()
         std::wstring(objective_combo_definition->class_name) != L"COMBOBOX" ||
         !add_objective_definition ||
         std::wstring(add_objective_definition->text) != L"Add Obj" ||
+        !save_report_definition ||
+        std::wstring(save_report_definition->text) != L"Save Report" ||
+        !design_template_definition ||
+        std::wstring(design_template_definition->text) != L"Design Template" ||
+        !load_template_definition ||
+        std::wstring(load_template_definition->text) != L"Load Template" ||
         !camera_gain_definition ||
         std::wstring(camera_gain_definition->class_name) != L"EDIT" ||
         !fusion_checkbox_definition ||
@@ -2512,6 +2544,7 @@ int main()
     diagnostic_input.latest_frame.sequence = 42;
     diagnostic_input.latest_frame.timestamp = 1234;
     diagnostic_input.measurement.calibrated = true;
+    diagnostic_input.measurement.objective_label = L"20x Oil";
     diagnostic_input.measurement.microns_per_pixel = 0.5;
     diagnostic_input.measurement.display_unit = MeasurementUnit::Micrometers;
     diagnostic_input.measurement.total_measurements = 4;
@@ -2545,6 +2578,7 @@ int main()
         diagnostic_report.find(L"  3. MUCam C | type 12") == std::wstring::npos ||
         diagnostic_report.find(L"Latest frame source: Image file: C:\\Samples\\field.bmp") == std::wstring::npos ||
         diagnostic_report.find(L"Latest frame size: 4x3") == std::wstring::npos ||
+        diagnostic_report.find(L"Objective: 20x Oil") == std::wstring::npos ||
         diagnostic_report.find(L"Microns per pixel: 0.50000000") == std::wstring::npos ||
         diagnostic_report.find(L"Preview display mode: Pseudo color: Hot") == std::wstring::npos ||
         diagnostic_report.find(L"Pseudo color: Hot") == std::wstring::npos ||
@@ -2553,6 +2587,17 @@ int main()
         diagnostic_report.find(L"Processing result source: Stitch result") == std::wstring::npos ||
         diagnostic_report.find(L"Processing result size: 12x8") == std::wstring::npos) {
         return Fail("DiagnosticReportBuilder did not include the expected diagnostic fields.");
+    }
+    const std::wstring template_report = DiagnosticReportBuilder::BuildFromTemplate(
+        diagnostic_input,
+        L"Report {{Generated}}\nObjective={{Objective}}\nScale={{MicronsPerPixel}}\nTotal={{TotalMeasurements}}\nMode={{PreviewDisplayMode}}\nUnknown={{UnknownToken}}");
+    if (template_report.find(L"Report 2026-06-29 09:08:07") == std::wstring::npos ||
+        template_report.find(L"Objective=20x Oil") == std::wstring::npos ||
+        template_report.find(L"Scale=0.50000000") == std::wstring::npos ||
+        template_report.find(L"Total=4") == std::wstring::npos ||
+        template_report.find(L"Mode=Pseudo color: Hot") == std::wstring::npos ||
+        template_report.find(L"Unknown={{UnknownToken}}") == std::wstring::npos) {
+        return Fail("DiagnosticReportBuilder did not replace custom template placeholders.");
     }
     if (DiagnosticReportBuilder::BuildSdkTelemetry(CameraSdkDiagnostics{}) != L"SDK not loaded") {
         return Fail("DiagnosticReportBuilder did not summarize an unloaded SDK correctly.");
@@ -2576,6 +2621,7 @@ int main()
         CameraDevice{1, 22, L"Aux Camera"}};
     action_diagnostic_input.latest_frame_source = L"Camera device 1 | type 21";
     action_diagnostic_input.latest_frame = MakeSolidImage(6, 5, 1, 2, 3);
+    action_diagnostic_input.objective_label = L"63x Oil";
     action_diagnostic_input.calibration = calibration;
     action_diagnostic_input.display_unit = MeasurementUnit::Micrometers;
     action_diagnostic_input.preview_display_mode = L"Processing result: EDF focus map";
@@ -2593,8 +2639,14 @@ int main()
     action_diagnostic_input.processing_result_height = 8;
     action_diagnostic_input.edf_composite_available = true;
     action_diagnostic_input.edf_focus_map_available = true;
+    const DiagnosticReportActionInput image_report_input = action_diagnostic_input;
     const std::wstring action_diagnostic_report =
-        DiagnosticReportActions::BuildReport(std::move(action_diagnostic_input), diagnostic_measurements);
+        DiagnosticReportActions::BuildReport(action_diagnostic_input, diagnostic_measurements);
+    const std::wstring templated_action_diagnostic_report =
+        DiagnosticReportActions::BuildReport(
+            std::move(action_diagnostic_input),
+            diagnostic_measurements,
+            L"{{Objective}} | {{LengthMeasurements}} | {{RectangleAreaMeasurements}} | {{ProcessingResultSize}}");
     if (action_diagnostic_report.find(L"Generated: 2026-07-13 10:11:12") == std::wstring::npos ||
         action_diagnostic_report.find(L"Preview telemetry: Preview telemetry text.") == std::wstring::npos ||
         action_diagnostic_report.find(L"Viewport zoom: 150%") == std::wstring::npos ||
@@ -2605,6 +2657,7 @@ int main()
         action_diagnostic_report.find(L"  2. Aux Camera | type 22") == std::wstring::npos ||
         action_diagnostic_report.find(L"Latest frame source: Camera device 1 | type 21") == std::wstring::npos ||
         action_diagnostic_report.find(L"Latest frame size: 6x5") == std::wstring::npos ||
+        action_diagnostic_report.find(L"Objective: 63x Oil") == std::wstring::npos ||
         action_diagnostic_report.find(L"Total measurements: 2") == std::wstring::npos ||
         action_diagnostic_report.find(L"Length measurements: 1") == std::wstring::npos ||
         action_diagnostic_report.find(L"Rectangle area measurements: 1") == std::wstring::npos ||
@@ -2618,6 +2671,227 @@ int main()
         action_diagnostic_report.find(L"EDF composite available: Yes") == std::wstring::npos ||
         action_diagnostic_report.find(L"EDF focus map available: Yes") == std::wstring::npos) {
         return Fail("DiagnosticReportActions did not build a report from application state.");
+    }
+    if (templated_action_diagnostic_report != L"63x Oil | 1 | 1 | 9x8") {
+        return Fail("DiagnosticReportActions did not build a report from a custom template.");
+    }
+    const std::wstring default_image_report_template =
+        DiagnosticReportActions::DefaultImageReportTemplate();
+    if (default_image_report_template.find(L"{{ImageTag}}") == std::wstring::npos ||
+        default_image_report_template.find(L"{{MeasurementTable}}") == std::wstring::npos ||
+        default_image_report_template.find(L"{{MeasurementSummary}}") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not expose a usable image report template.");
+    }
+    ImageReportTemplateOptions compact_report_template_options;
+    compact_report_template_options.title = L"Cell Count Report";
+    compact_report_template_options.subtitle = L"Batch 2026-A";
+    compact_report_template_options.accent = ImageReportTemplateAccent::Green;
+    compact_report_template_options.image_size = ImageReportTemplateImageSize::Compact;
+    compact_report_template_options.page_layout = ImageReportTemplatePageLayout::Compact;
+    compact_report_template_options.show_image = false;
+    compact_report_template_options.show_report_information = true;
+    compact_report_template_options.report_information_fields =
+        L"Sample=Slide A\nOperator=Dr. Lin\nComment without equals";
+    compact_report_template_options.show_notes = true;
+    compact_report_template_options.notes = L"Specimen A\nFocus stack reviewed";
+    compact_report_template_options.show_measurement_table = false;
+    compact_report_template_options.show_measurement_raw_values = false;
+    compact_report_template_options.group_measurements_by_type = true;
+    compact_report_template_options.show_processing_details = false;
+    const std::wstring compact_report_template =
+        DiagnosticReportActions::BuildImageReportTemplate(compact_report_template_options);
+    if (compact_report_template.find(L"Cell Count Report") == std::wstring::npos ||
+        compact_report_template.find(L"Batch 2026-A") == std::wstring::npos ||
+        compact_report_template.find(L"#4f8a69") == std::wstring::npos ||
+        compact_report_template.find(L"max-width: 920px") == std::wstring::npos ||
+        compact_report_template.find(L"font-size: 12px") == std::wstring::npos ||
+        compact_report_template.find(L"720px") == std::wstring::npos ||
+        compact_report_template.find(L"{{ImageTag}}") != std::wstring::npos ||
+        compact_report_template.find(L"Report Information") == std::wstring::npos ||
+        compact_report_template.find(L"Slide A") == std::wstring::npos ||
+        compact_report_template.find(L"Dr. Lin") == std::wstring::npos ||
+        compact_report_template.find(L"Comment without equals") == std::wstring::npos ||
+        compact_report_template.find(L"Specimen A") == std::wstring::npos ||
+        compact_report_template.find(L"Focus stack reviewed") == std::wstring::npos ||
+        compact_report_template.find(L"{{MeasurementTable}}") != std::wstring::npos ||
+        compact_report_template.find(L"{{MeasurementSummary}}") == std::wstring::npos ||
+        compact_report_template.find(L"{{PseudoColor}}") != std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not build a visual report template from options.");
+    }
+    ImageReportTemplateOptions parsed_compact_report_template_options;
+    if (!DiagnosticReportActions::TryParseImageReportTemplateOptions(
+            compact_report_template,
+            parsed_compact_report_template_options) ||
+        parsed_compact_report_template_options.title != L"Cell Count Report" ||
+        parsed_compact_report_template_options.subtitle != L"Batch 2026-A" ||
+        parsed_compact_report_template_options.accent != ImageReportTemplateAccent::Green ||
+        parsed_compact_report_template_options.image_size != ImageReportTemplateImageSize::Compact ||
+        parsed_compact_report_template_options.page_layout != ImageReportTemplatePageLayout::Compact ||
+        parsed_compact_report_template_options.show_image ||
+        !parsed_compact_report_template_options.show_report_information ||
+        parsed_compact_report_template_options.report_information_fields !=
+            L"Sample=Slide A\nOperator=Dr. Lin\nComment without equals" ||
+        !parsed_compact_report_template_options.show_notes ||
+        parsed_compact_report_template_options.notes != L"Specimen A\nFocus stack reviewed" ||
+        parsed_compact_report_template_options.show_measurement_table ||
+        parsed_compact_report_template_options.show_measurement_raw_values ||
+        !parsed_compact_report_template_options.group_measurements_by_type ||
+        parsed_compact_report_template_options.show_processing_details ||
+        !parsed_compact_report_template_options.show_measurement_summary) {
+        return Fail("DiagnosticReportActions did not restore visual report template options.");
+    }
+    ImageReportTemplateOptions ordered_report_template_options;
+    ordered_report_template_options.image_size = ImageReportTemplateImageSize::FitPage;
+    ordered_report_template_options.page_layout = ImageReportTemplatePageLayout::Wide;
+    ordered_report_template_options.print_orientation = ImageReportTemplatePrintOrientation::Landscape;
+    ordered_report_template_options.measurement_precision =
+        ImageReportTemplateMeasurementPrecision::ThreeDecimals;
+    ordered_report_template_options.image_caption = L"Brightfield overview {{ImageSize}}";
+    ordered_report_template_options.current_image_heading = L"Microscopy Image";
+    ordered_report_template_options.measurement_table_heading = L"Measurement Results";
+    ordered_report_template_options.image_details_heading = L"Acquisition Details";
+    ordered_report_template_options.footer_text = L"Reviewed by CameraView Lab - {{Generated}}";
+    ordered_report_template_options.show_report_information = true;
+    ordered_report_template_options.report_information_fields = L"Case=42";
+    ordered_report_template_options.show_notes = true;
+    ordered_report_template_options.notes = L"Ordering notes";
+    ordered_report_template_options.section_order = {
+        ImageReportTemplateSection::MeasurementTable,
+        ImageReportTemplateSection::ReportInformation,
+        ImageReportTemplateSection::ReportNotes,
+        ImageReportTemplateSection::CurrentImage,
+        ImageReportTemplateSection::MeasurementSummary,
+        ImageReportTemplateSection::ImageDetails};
+    const std::wstring ordered_report_template =
+        DiagnosticReportActions::BuildImageReportTemplate(ordered_report_template_options);
+    if (ordered_report_template.find(L"width: 100%") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write fit-page image sizing.");
+    }
+    if (ordered_report_template.find(L"max-width: 1440px") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write wide visual report page layout.");
+    }
+    if (ordered_report_template.find(L"@page { size: A4 landscape;") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write visual report print orientation.");
+    }
+    if (ordered_report_template.find(L"MeasurementPrecision=3") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write visual report measurement precision.");
+    }
+    if (ordered_report_template.find(L"Brightfield overview {{ImageSize}}") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write the visual report image caption.");
+    }
+    if (ordered_report_template.find(L"Measurement Results") == std::wstring::npos ||
+        ordered_report_template.find(L"Microscopy Image") == std::wstring::npos ||
+        ordered_report_template.find(L"Acquisition Details") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write visual report section headings.");
+    }
+    if (ordered_report_template.find(L"Reviewed by CameraView Lab - {{Generated}}") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not write visual report footer text.");
+    }
+    const std::size_t ordered_table = ordered_report_template.find(L"<h2>Measurement Results</h2>");
+    const std::size_t ordered_info = ordered_report_template.find(L"<h2>Report Information</h2>");
+    const std::size_t ordered_notes = ordered_report_template.find(L"<h2>Notes</h2>");
+    const std::size_t ordered_image = ordered_report_template.find(L"<h2>Microscopy Image</h2>");
+    const std::size_t ordered_summary = ordered_report_template.find(L"<h2>Measurement Summary</h2>");
+    if (ordered_table == std::wstring::npos ||
+        ordered_info == std::wstring::npos ||
+        ordered_notes == std::wstring::npos ||
+        ordered_image == std::wstring::npos ||
+        ordered_summary == std::wstring::npos ||
+        !(ordered_table < ordered_info &&
+          ordered_info < ordered_notes &&
+          ordered_notes < ordered_image &&
+          ordered_image < ordered_summary)) {
+        return Fail("DiagnosticReportActions did not honor visual report section ordering.");
+    }
+    ImageReportTemplateOptions parsed_ordered_report_template_options;
+    if (!DiagnosticReportActions::TryParseImageReportTemplateOptions(
+            ordered_report_template,
+            parsed_ordered_report_template_options) ||
+        parsed_ordered_report_template_options.section_order.size() != 6U ||
+        parsed_ordered_report_template_options.section_order[0] != ImageReportTemplateSection::MeasurementTable ||
+        parsed_ordered_report_template_options.section_order[1] != ImageReportTemplateSection::ReportInformation ||
+        parsed_ordered_report_template_options.section_order[2] != ImageReportTemplateSection::ReportNotes ||
+        parsed_ordered_report_template_options.section_order[3] != ImageReportTemplateSection::CurrentImage ||
+        parsed_ordered_report_template_options.page_layout != ImageReportTemplatePageLayout::Wide ||
+        parsed_ordered_report_template_options.print_orientation != ImageReportTemplatePrintOrientation::Landscape ||
+        parsed_ordered_report_template_options.measurement_precision !=
+            ImageReportTemplateMeasurementPrecision::ThreeDecimals ||
+        parsed_ordered_report_template_options.image_caption != L"Brightfield overview {{ImageSize}}" ||
+        parsed_ordered_report_template_options.current_image_heading != L"Microscopy Image" ||
+        parsed_ordered_report_template_options.measurement_table_heading != L"Measurement Results" ||
+        parsed_ordered_report_template_options.image_details_heading != L"Acquisition Details" ||
+        parsed_ordered_report_template_options.footer_text != L"Reviewed by CameraView Lab - {{Generated}}" ||
+        DiagnosticReportActions::TryParseImageReportTemplateOptions(L"<html></html>", parsed_ordered_report_template_options)) {
+        return Fail("DiagnosticReportActions did not restore visual report section ordering.");
+    }
+    const ImageFrame report_image = MakeSolidImage(10, 6, 4, 5, 6);
+    const std::wstring image_report =
+        DiagnosticReportActions::BuildImageReport(
+            image_report_input,
+            diagnostic_measurements,
+            L"report_image.png",
+            report_image);
+    ImageReportTemplateOptions table_without_raw_template_options;
+    table_without_raw_template_options.show_image = false;
+    table_without_raw_template_options.show_measurement_summary = false;
+    table_without_raw_template_options.show_measurement_raw_values = false;
+    table_without_raw_template_options.group_measurements_by_type = true;
+    table_without_raw_template_options.show_calibration_details = false;
+    table_without_raw_template_options.show_processing_details = false;
+    table_without_raw_template_options.show_footer = false;
+    const std::wstring table_without_raw_report =
+        DiagnosticReportActions::BuildImageReport(
+            image_report_input,
+            diagnostic_measurements,
+            L"report_image.png",
+            report_image,
+            DiagnosticReportActions::BuildImageReportTemplate(table_without_raw_template_options));
+    const std::wstring templated_image_report =
+        DiagnosticReportActions::BuildImageReport(
+            image_report_input,
+            diagnostic_measurements,
+            L"custom_image.png",
+            report_image,
+            L"{{ImageTag}} {{MeasurementTable}} {{Objective}} {{ImageSize}} {{UnknownToken}}");
+    const std::wstring captioned_image_report =
+        DiagnosticReportActions::BuildImageReport(
+            image_report_input,
+            diagnostic_measurements,
+            L"report_image.png",
+            report_image,
+            DiagnosticReportActions::BuildImageReportTemplate(ordered_report_template_options));
+    if (image_report.find(L"<img class=\"report-image\" src=\"report_image.png\"") == std::wstring::npos ||
+        image_report.find(L"Diagnostic Length") == std::wstring::npos ||
+        image_report.find(L"Diagnostic Area") == std::wstring::npos ||
+        image_report.find(L"63x Oil") == std::wstring::npos ||
+        image_report.find(L"0.50000000") == std::wstring::npos ||
+        image_report.find(L"<table class=\"measurement-table\"") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not build an image report with image and measurements.");
+    }
+    if (table_without_raw_report.find(L"<table class=\"measurement-table\"") == std::wstring::npos ||
+        table_without_raw_report.find(L"<th>Raw</th>") != std::wstring::npos ||
+        table_without_raw_report.find(L"Length measurements") == std::wstring::npos ||
+        table_without_raw_report.find(L"Rectangle area measurements") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not honor the report template measurement table settings.");
+    }
+    if (templated_image_report.find(L"custom_image.png") == std::wstring::npos ||
+        templated_image_report.find(L"10x6") == std::wstring::npos ||
+        templated_image_report.find(L"{{UnknownToken}}") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not replace image report template placeholders.");
+    }
+    if (captioned_image_report.find(L"Brightfield overview 10x6") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not replace placeholders inside image captions.");
+    }
+    if (captioned_image_report.find(L"<td>4.000</td>") == std::wstring::npos ||
+        captioned_image_report.find(L"<td>5.000</td>") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not apply visual report measurement precision.");
+    }
+    if (captioned_image_report.find(L"Measurement Results") == std::wstring::npos ||
+        captioned_image_report.find(L"Microscopy Image") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not apply visual report section headings.");
+    }
+    if (captioned_image_report.find(L"Reviewed by CameraView Lab - 2026-07-13 10:11:12") == std::wstring::npos) {
+        return Fail("DiagnosticReportActions did not apply visual report footer text.");
     }
     if (DiagnosticReportActions::BuildSdkTelemetry(CameraSdkDiagnostics{}) != L"SDK not loaded") {
         return Fail("DiagnosticReportActions did not summarize SDK telemetry.");
@@ -4078,7 +4352,13 @@ int main()
         std::vector<ImagePoint>{ImagePoint{0.0, 0.0}, ImagePoint{4.0, 0.0}, ImagePoint{4.0, 4.0}});
     const std::filesystem::path csv_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTests.csv";
-    if (!MeasurementCsvExporter::Save(csv_path, csv_measurements, calibration, MeasurementUnit::Micrometers, error)) {
+    if (!MeasurementCsvExporter::Save(
+            csv_path,
+            csv_measurements,
+            calibration,
+            MeasurementUnit::Micrometers,
+            L"63x, Oil",
+            error)) {
         return Fail("CSV export failed.");
     }
 
@@ -4094,7 +4374,9 @@ int main()
         static_cast<unsigned char>(csv_text[0]) != 0xEF ||
         static_cast<unsigned char>(csv_text[1]) != 0xBB ||
         static_cast<unsigned char>(csv_text[2]) != 0xBF ||
+        csv_text.find("Points,Objective,MicronsPerPixel") == std::string::npos ||
         csv_text.find("\"CSV, \"\"Length\"\"\"") == std::string::npos ||
+        csv_text.find("\"63x, Oil\"") == std::string::npos ||
         csv_text.find("0.0000:0.0000;4.0000:0.0000;4.0000:4.0000") == std::string::npos) {
         return Fail("CSV export did not preserve BOM, escaping, or polygon point list.");
     }
@@ -4105,7 +4387,8 @@ int main()
         action_csv_path,
         MeasurementCollection{},
         calibration,
-        MeasurementUnit::Micrometers);
+        MeasurementUnit::Micrometers,
+        L"63x Oil");
     if (empty_csv_export.saved ||
         empty_csv_export.status != ExportActionStatus::NoMeasurements ||
         empty_csv_export.message != L"No measurements to export.") {
@@ -4115,7 +4398,8 @@ int main()
         action_csv_path,
         csv_measurements,
         calibration,
-        MeasurementUnit::Micrometers);
+        MeasurementUnit::Micrometers,
+        L"63x Oil");
     if (!csv_export.saved ||
         csv_export.status != ExportActionStatus::Saved ||
         csv_export.message != L"CSV exported." ||
@@ -4629,6 +4913,45 @@ int main()
         diagnostic_bytes.find("Diagnostic line") == std::string::npos) {
         return Fail("ExportActions did not write diagnostic report as UTF-8 with BOM.");
     }
+
+    const std::filesystem::path html_report_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsReport.html";
+    const ExportActionResult html_report_export =
+        ExportActions::SaveReportHtml(html_report_path, L"<html>显微图文报告</html>");
+    if (!html_report_export.saved ||
+        html_report_export.status != ExportActionStatus::Saved ||
+        html_report_export.message != L"Report saved.") {
+        return Fail("ExportActions did not save an HTML image report.");
+    }
+    std::ifstream html_report_file(html_report_path, std::ios::binary);
+    html_report_file.seekg(0, std::ios::end);
+    const std::streamoff html_report_size = html_report_file.tellg();
+    html_report_file.seekg(0, std::ios::beg);
+    std::string html_report_bytes(static_cast<std::size_t>(html_report_size), '\0');
+    if (!html_report_bytes.empty()) {
+        html_report_file.read(html_report_bytes.data(), static_cast<std::streamsize>(html_report_bytes.size()));
+    }
+    html_report_file.close();
+    std::filesystem::remove(html_report_path);
+    if (html_report_bytes.size() < 3 ||
+        static_cast<unsigned char>(html_report_bytes[0]) != 0xEF ||
+        static_cast<unsigned char>(html_report_bytes[1]) != 0xBB ||
+        static_cast<unsigned char>(html_report_bytes[2]) != 0xBF ||
+        html_report_bytes.find("<html>") == std::string::npos) {
+        return Fail("ExportActions did not write HTML report as UTF-8 with BOM.");
+    }
+
+    const std::filesystem::path template_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsTemplate.html";
+    const ExportActionResult template_export =
+        ExportActions::SaveReportTemplate(template_path, L"{{ImageTag}}\n{{MeasurementTable}}");
+    if (!template_export.saved ||
+        template_export.status != ExportActionStatus::Saved ||
+        template_export.message != L"Report template saved." ||
+        !std::filesystem::exists(template_path)) {
+        return Fail("ExportActions did not save a report template.");
+    }
+    std::filesystem::remove(template_path);
 
     std::cout << "domain smoke tests passed\n";
     return 0;

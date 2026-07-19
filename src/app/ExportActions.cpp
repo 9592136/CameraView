@@ -18,14 +18,15 @@ ExportActionResult ExportActions::SaveMeasurementsCsv(
     const std::filesystem::path& path,
     const MeasurementCollection& measurements,
     const CalibrationProfile& calibration,
-    MeasurementUnit display_unit)
+    MeasurementUnit display_unit,
+    const std::wstring& objective_label)
 {
     if (measurements.Empty()) {
         return {false, ExportActionStatus::NoMeasurements, L"No measurements to export."};
     }
 
     std::wstring error;
-    if (!MeasurementCsvExporter::Save(path, measurements, calibration, display_unit, error)) {
+    if (!MeasurementCsvExporter::Save(path, measurements, calibration, display_unit, objective_label, error)) {
         return {
             false,
             ExportActionStatus::WriteFailed,
@@ -85,18 +86,57 @@ ExportActionResult ExportActions::SaveDiagnosticReport(
     const std::filesystem::path& path,
     const std::wstring& report)
 {
+    return SaveUtf8TextFile(
+        path,
+        report,
+        L"Failed to create diagnostic report.",
+        L"Failed while writing diagnostic report.",
+        L"Diagnostic report saved.");
+}
+
+ExportActionResult ExportActions::SaveReportHtml(
+    const std::filesystem::path& path,
+    const std::wstring& report)
+{
+    return SaveUtf8TextFile(
+        path,
+        report,
+        L"Failed to create report.",
+        L"Failed while writing report.",
+        L"Report saved.");
+}
+
+ExportActionResult ExportActions::SaveReportTemplate(
+    const std::filesystem::path& path,
+    const std::wstring& template_text)
+{
+    return SaveUtf8TextFile(
+        path,
+        template_text,
+        L"Failed to create report template.",
+        L"Failed while writing report template.",
+        L"Report template saved.");
+}
+
+ExportActionResult ExportActions::SaveUtf8TextFile(
+    const std::filesystem::path& path,
+    const std::wstring& text,
+    const std::wstring& create_error,
+    const std::wstring& write_error,
+    const std::wstring& success_message)
+{
     std::ofstream output(path, std::ios::binary);
     if (!output) {
-        return {false, ExportActionStatus::WriteFailed, L"Failed to create diagnostic report."};
+        return {false, ExportActionStatus::WriteFailed, create_error};
     }
 
     output << "\xEF\xBB\xBF";
-    output << Utf8FromWide(report);
+    output << Utf8FromWide(text);
     if (!output) {
-        return {false, ExportActionStatus::WriteFailed, L"Failed while writing diagnostic report."};
+        return {false, ExportActionStatus::WriteFailed, write_error};
     }
 
-    return {true, ExportActionStatus::Saved, L"Diagnostic report saved."};
+    return {true, ExportActionStatus::Saved, success_message};
 }
 
 std::string ExportActions::Utf8FromWide(const std::wstring& text)

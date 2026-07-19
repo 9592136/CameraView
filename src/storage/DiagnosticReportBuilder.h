@@ -19,6 +19,7 @@ struct DiagnosticReportTimestamp {
 };
 
 struct DiagnosticMeasurementSummary {
+    std::wstring objective_label;
     bool calibrated = false;
     double microns_per_pixel = 0.0;
     MeasurementUnit display_unit = MeasurementUnit::Pixels;
@@ -68,9 +69,13 @@ struct DiagnosticReportInput {
 class DiagnosticReportBuilder {
 public:
     static std::wstring Build(const DiagnosticReportInput& input);
+    static std::wstring BuildFromTemplate(
+        const DiagnosticReportInput& input,
+        const std::wstring& template_text);
     static std::wstring BuildSdkTelemetry(const CameraSdkDiagnostics& diagnostics);
 
 private:
+    static std::wstring FormatTimestamp(const DiagnosticReportTimestamp& timestamp);
     static std::wstring FormatDouble(double value, int precision);
     static std::wstring FileNameFromPath(const std::wstring& path);
     static const wchar_t* YesNo(bool value);

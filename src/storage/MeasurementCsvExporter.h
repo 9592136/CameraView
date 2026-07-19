@@ -13,5 +13,6 @@ public:
         const MeasurementCollection& measurements,
         const CalibrationProfile& calibration,
         MeasurementUnit display_unit,
+        const std::wstring& objective_label,
         std::wstring& error);
 };

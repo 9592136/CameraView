@@ -96,7 +96,8 @@ void WriteLengthRow(
     std::ofstream& output,
     const LengthMeasurement& measurement,
     const CalibrationProfile& calibration,
-    MeasurementUnit display_unit)
+    MeasurementUnit display_unit,
+    const std::wstring& objective_label)
 {
     const MeasurementResult result = measurement.Evaluate(calibration, display_unit);
     const ImagePoint first = measurement.First();
@@ -113,13 +114,15 @@ void WriteLengthRow(
            << ','
            << ','
            << ','
+           << CsvEscape(objective_label) << ','
            << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
 }
 
 void WriteAngleRow(
     std::ofstream& output,
     const AngleMeasurement& measurement,
-    const CalibrationProfile& calibration)
+    const CalibrationProfile& calibration,
+    const std::wstring& objective_label)
 {
     const MeasurementResult result = measurement.Evaluate();
     const ImagePoint first = measurement.First();
@@ -137,6 +140,7 @@ void WriteAngleRow(
            << FormatCsvNumber(second.x, 4) << ','
            << FormatCsvNumber(second.y, 4) << ','
            << ','
+           << CsvEscape(objective_label) << ','
            << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
 }
 
@@ -144,7 +148,8 @@ void WriteRectangleRow(
     std::ofstream& output,
     const RectangleAreaMeasurement& measurement,
     const CalibrationProfile& calibration,
-    MeasurementUnit display_unit)
+    MeasurementUnit display_unit,
+    const std::wstring& objective_label)
 {
     const MeasurementResult result = measurement.Evaluate(calibration, display_unit);
     const ImagePoint first = measurement.First();
@@ -161,6 +166,7 @@ void WriteRectangleRow(
            << ','
            << ','
            << ','
+           << CsvEscape(objective_label) << ','
            << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
 }
 
@@ -168,7 +174,8 @@ void WritePolygonRow(
     std::ofstream& output,
     const PolygonAreaMeasurement& measurement,
     const CalibrationProfile& calibration,
-    MeasurementUnit display_unit)
+    MeasurementUnit display_unit,
+    const std::wstring& objective_label)
 {
     const MeasurementResult result = measurement.Evaluate(calibration, display_unit);
     const std::vector<ImagePoint>& points = measurement.Points();
@@ -187,6 +194,7 @@ void WritePolygonRow(
         }
     }
     output << CsvEscape(FormatPointListCsv(points)) << ','
+           << CsvEscape(objective_label) << ','
            << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
 }
 
@@ -197,6 +205,7 @@ bool MeasurementCsvExporter::Save(
     const MeasurementCollection& measurements,
     const CalibrationProfile& calibration,
     MeasurementUnit display_unit,
+    const std::wstring& objective_label,
     std::wstring& error)
 {
     std::ofstream output(path, std::ios::binary);
@@ -206,18 +215,18 @@ bool MeasurementCsvExporter::Save(
     }
 
     output << "\xEF\xBB\xBF";
-    output << "Name,Kind,Value,Unit,RawPixelValue,Point1X,Point1Y,Point2X,Point2Y,Point3X,Point3Y,Points,MicronsPerPixel\n";
+    output << "Name,Kind,Value,Unit,RawPixelValue,Point1X,Point1Y,Point2X,Point2Y,Point3X,Point3Y,Points,Objective,MicronsPerPixel\n";
     for (const LengthMeasurement& measurement : measurements.Lengths()) {
-        WriteLengthRow(output, measurement, calibration, display_unit);
+        WriteLengthRow(output, measurement, calibration, display_unit, objective_label);
     }
     for (const AngleMeasurement& measurement : measurements.Angles()) {
-        WriteAngleRow(output, measurement, calibration);
+        WriteAngleRow(output, measurement, calibration, objective_label);
     }
     for (const RectangleAreaMeasurement& measurement : measurements.Rectangles()) {
-        WriteRectangleRow(output, measurement, calibration, display_unit);
+        WriteRectangleRow(output, measurement, calibration, display_unit, objective_label);
     }
     for (const PolygonAreaMeasurement& measurement : measurements.Polygons()) {
-        WritePolygonRow(output, measurement, calibration, display_unit);
+        WritePolygonRow(output, measurement, calibration, display_unit, objective_label);
     }
 
     if (!output) {

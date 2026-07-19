@@ -103,3 +103,7 @@ inline constexpr int kIdObjectiveNameEdit = 1100;
 inline constexpr int kIdAddObjective = 1101;
 inline constexpr int kIdRenameObjective = 1102;
 inline constexpr int kIdDeleteObjective = 1103;
+inline constexpr int kIdLoadReportTemplate = 1104;
+inline constexpr int kIdClearReportTemplate = 1105;
+inline constexpr int kIdReportTemplateStatus = 1106;
+inline constexpr int kIdDesignReportTemplate = 1107;

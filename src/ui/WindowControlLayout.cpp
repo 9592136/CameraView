@@ -260,6 +260,13 @@ void AddSidePanel(
         add(kIdOpenProject, x, content_y, half_width, kControlHeight);
         add(kIdSaveProject, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap;
+        add(kIdDesignReportTemplate, x, content_y, w, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        add(kIdLoadReportTemplate, x, content_y, half_width, kControlHeight);
+        add(kIdClearReportTemplate, second_column, content_y, half_width, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        add(kIdReportTemplateStatus, x, content_y, w, 20);
+        content_y += 24;
         add(kIdSaveDiagnostics, x, content_y, w, kControlHeight);
         content_y += kControlHeight;
         break;
@@ -509,6 +516,10 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdExportImage,
         kIdOpenImage,
         kIdSaveDiagnostics,
+        kIdDesignReportTemplate,
+        kIdLoadReportTemplate,
+        kIdClearReportTemplate,
+        kIdReportTemplateStatus,
         kIdOpenProject,
         kIdSaveProject,
         kIdMeasurementNameEdit,

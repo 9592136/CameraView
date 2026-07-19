@@ -22,6 +22,18 @@ constexpr wchar_t kImageOpenFilter[] =
     L"TIFF Files (*.tif;*.tiff)\0*.tif;*.tiff\0"
     L"All Files (*.*)\0*.*\0";
 constexpr wchar_t kTextFilter[] = L"Text Files (*.txt)\0*.txt\0All Files (*.*)\0*.*\0";
+constexpr wchar_t kReportSaveFilter[] =
+    L"HTML Reports (*.html;*.htm)\0*.html;*.htm\0All Files (*.*)\0*.*\0";
+constexpr wchar_t kTemplateSaveFilter[] =
+    L"Report Templates (*.html;*.htm;*.tpl;*.txt)\0*.html;*.htm;*.tpl;*.txt\0"
+    L"HTML Files (*.html;*.htm)\0*.html;*.htm\0"
+    L"Text Files (*.txt)\0*.txt\0"
+    L"All Files (*.*)\0*.*\0";
+constexpr wchar_t kTemplateOpenFilter[] =
+    L"Report Templates (*.html;*.htm;*.tpl;*.txt)\0*.html;*.htm;*.tpl;*.txt\0"
+    L"HTML Files (*.html;*.htm)\0*.html;*.htm\0"
+    L"Text Files (*.txt)\0*.txt\0"
+    L"All Files (*.*)\0*.*\0";
 constexpr wchar_t kProjectFilter[] =
     L"CameraView Project (*.cvproj)\0*.cvproj\0JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0";
 
@@ -115,6 +127,18 @@ bool FileDialog::OpenImage(HWND owner, std::wstring& selected_path)
         selected_path);
 }
 
+bool FileDialog::SaveReport(HWND owner, std::wstring& selected_path)
+{
+    return ShowFileDialog(
+        owner,
+        L"CameraViewReport.html",
+        kReportSaveFilter,
+        L"html",
+        OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        true,
+        selected_path);
+}
+
 bool FileDialog::SaveText(HWND owner, std::wstring& selected_path)
 {
     return ShowFileDialog(
@@ -122,6 +146,30 @@ bool FileDialog::SaveText(HWND owner, std::wstring& selected_path)
         L"CameraViewDiagnostics.txt",
         kTextFilter,
         L"txt",
+        OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
+        true,
+        selected_path);
+}
+
+bool FileDialog::OpenText(HWND owner, std::wstring& selected_path)
+{
+    return ShowFileDialog(
+        owner,
+        nullptr,
+        kTemplateOpenFilter,
+        nullptr,
+        OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST,
+        false,
+        selected_path);
+}
+
+bool FileDialog::SaveTemplate(HWND owner, std::wstring& selected_path)
+{
+    return ShowFileDialog(
+        owner,
+        L"CameraViewReportTemplate.html",
+        kTemplateSaveFilter,
+        L"html",
         OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
         true,
         selected_path);

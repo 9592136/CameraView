@@ -70,11 +70,14 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -88,10 +91,73 @@ constexpr UINT kMsgProcessingFinished = WM_APP + 3;
 constexpr int kPanelTitleHeight = 34;
 constexpr const wchar_t* kFunctionPanelVisibleProperty = L"CameraViewFunctionPanelVisible";
 constexpr const wchar_t* kFunctionPanelDockLeftProperty = L"CameraViewFunctionPanelDockLeft";
+constexpr const wchar_t* kReportTemplateDesignerClassName = L"CameraViewReportTemplateDesigner";
+constexpr const wchar_t* kReportTemplatePreviewClassName = L"CameraViewReportTemplatePreview";
+constexpr int kReportTemplateDesignerDefaultWidth = 980;
+constexpr int kReportTemplateDesignerDefaultHeight = 940;
+constexpr int kReportTemplateDesignerMinWidth = 780;
+constexpr int kReportTemplateDesignerMinHeight = 720;
 constexpr INT_PTR kFunctionPanelVisibleValue = 1;
 constexpr INT_PTR kFunctionPanelHiddenValue = 2;
 constexpr INT_PTR kFunctionPanelDockLeftValue = 1;
 constexpr INT_PTR kFunctionPanelDockRightValue = 2;
+constexpr int kTemplateDesignerTitleLabel = 4101;
+constexpr int kTemplateDesignerTitleEdit = 4102;
+constexpr int kTemplateDesignerImage = 4103;
+constexpr int kTemplateDesignerSummary = 4104;
+constexpr int kTemplateDesignerTable = 4105;
+constexpr int kTemplateDesignerCalibration = 4106;
+constexpr int kTemplateDesignerProcessing = 4107;
+constexpr int kTemplateDesignerFooter = 4108;
+constexpr int kTemplateDesignerPreview = 4109;
+constexpr int kTemplateDesignerStatus = 4110;
+constexpr int kTemplateDesignerDefault = 4111;
+constexpr int kTemplateDesignerApply = 4112;
+constexpr int kTemplateDesignerSave = 4113;
+constexpr int kTemplateDesignerClose = 4114;
+constexpr int kTemplateDesignerSectionLabel = 4115;
+constexpr int kTemplateDesignerSectionList = 4116;
+constexpr int kTemplateDesignerMoveUp = 4117;
+constexpr int kTemplateDesignerMoveDown = 4118;
+constexpr int kTemplateDesignerNotes = 4119;
+constexpr int kTemplateDesignerNotesLabel = 4120;
+constexpr int kTemplateDesignerNotesEdit = 4121;
+constexpr int kTemplateDesignerSubtitleLabel = 4122;
+constexpr int kTemplateDesignerSubtitleEdit = 4123;
+constexpr int kTemplateDesignerAccentLabel = 4124;
+constexpr int kTemplateDesignerAccentBlue = 4125;
+constexpr int kTemplateDesignerAccentGreen = 4126;
+constexpr int kTemplateDesignerAccentGold = 4127;
+constexpr int kTemplateDesignerAccentMagenta = 4128;
+constexpr int kTemplateDesignerInfo = 4129;
+constexpr int kTemplateDesignerInfoLabel = 4130;
+constexpr int kTemplateDesignerInfoEdit = 4131;
+constexpr int kTemplateDesignerImageSizeLabel = 4132;
+constexpr int kTemplateDesignerImageSizeOriginal = 4133;
+constexpr int kTemplateDesignerImageSizeFit = 4134;
+constexpr int kTemplateDesignerImageSizeCompact = 4135;
+constexpr int kTemplateDesignerRawValues = 4136;
+constexpr int kTemplateDesignerGroupMeasurements = 4137;
+constexpr int kTemplateDesignerImageCaptionLabel = 4138;
+constexpr int kTemplateDesignerImageCaptionEdit = 4139;
+constexpr int kTemplateDesignerSectionHeadingLabel = 4140;
+constexpr int kTemplateDesignerSectionHeadingEdit = 4141;
+constexpr int kTemplateDesignerFooterTextLabel = 4142;
+constexpr int kTemplateDesignerFooterTextEdit = 4143;
+constexpr int kTemplateDesignerInsertField = 4144;
+constexpr int kTemplateDesignerPageLayoutLabel = 4145;
+constexpr int kTemplateDesignerPageLayoutStandard = 4146;
+constexpr int kTemplateDesignerPageLayoutWide = 4147;
+constexpr int kTemplateDesignerPageLayoutCompact = 4148;
+constexpr int kTemplateDesignerPrintOrientationLabel = 4149;
+constexpr int kTemplateDesignerPrintOrientationPortrait = 4150;
+constexpr int kTemplateDesignerPrintOrientationLandscape = 4151;
+constexpr int kTemplateDesignerMeasurementPrecisionLabel = 4152;
+constexpr int kTemplateDesignerMeasurementPrecisionAuto = 4153;
+constexpr int kTemplateDesignerMeasurementPrecisionTwo = 4154;
+constexpr int kTemplateDesignerMeasurementPrecisionThree = 4155;
+constexpr int kTemplateDesignerLeftScrollBar = 4156;
+constexpr int kTemplatePlaceholderMenuBase = 4300;
 
 enum class PreviewFrameCacheKind {
     None,
@@ -157,7 +223,8 @@ HMENU CreateMainMenu()
     AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file_menu, MF_STRING, kIdOpenProject, L"Open Project...");
     AppendMenuW(file_menu, MF_STRING, kIdSaveProject, L"Save Project...");
-    AppendMenuW(file_menu, MF_STRING, kIdSaveDiagnostics, L"Save Diagnostic...");
+    AppendMenuW(file_menu, MF_STRING, kIdDesignReportTemplate, L"Design Report Template...");
+    AppendMenuW(file_menu, MF_STRING, kIdSaveDiagnostics, L"Save Report...");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file_menu, MF_STRING, kIdExit, L"Exit");
 
@@ -264,6 +331,71 @@ void InvalidateStatus(HWND hwnd)
 void LayoutControls(HWND hwnd, bool repaint_children = true);
 
 class CameraPreviewApp {
+    struct ReportTemplateDesignerState {
+        CameraPreviewApp* app = nullptr;
+        HWND title_label = nullptr;
+        HWND title_edit = nullptr;
+        HWND subtitle_label = nullptr;
+        HWND subtitle_edit = nullptr;
+        HWND page_layout_label = nullptr;
+        HWND page_layout_standard = nullptr;
+        HWND page_layout_wide = nullptr;
+        HWND page_layout_compact = nullptr;
+        HWND print_orientation_label = nullptr;
+        HWND print_orientation_portrait = nullptr;
+        HWND print_orientation_landscape = nullptr;
+        HWND image_checkbox = nullptr;
+        HWND image_size_label = nullptr;
+        HWND image_size_original = nullptr;
+        HWND image_size_fit = nullptr;
+        HWND image_size_compact = nullptr;
+        HWND image_caption_label = nullptr;
+        HWND image_caption_edit = nullptr;
+        HWND info_checkbox = nullptr;
+        HWND notes_checkbox = nullptr;
+        HWND summary_checkbox = nullptr;
+        HWND table_checkbox = nullptr;
+        HWND raw_values_checkbox = nullptr;
+        HWND group_measurements_checkbox = nullptr;
+        HWND measurement_precision_label = nullptr;
+        HWND measurement_precision_auto = nullptr;
+        HWND measurement_precision_two = nullptr;
+        HWND measurement_precision_three = nullptr;
+        HWND calibration_checkbox = nullptr;
+        HWND processing_checkbox = nullptr;
+        HWND footer_checkbox = nullptr;
+        HWND footer_text_label = nullptr;
+        HWND footer_text_edit = nullptr;
+        HWND accent_label = nullptr;
+        HWND accent_blue = nullptr;
+        HWND accent_green = nullptr;
+        HWND accent_gold = nullptr;
+        HWND accent_magenta = nullptr;
+        HWND info_label = nullptr;
+        HWND info_edit = nullptr;
+        HWND notes_label = nullptr;
+        HWND notes_edit = nullptr;
+        HWND section_label = nullptr;
+        HWND section_list = nullptr;
+        HWND section_heading_label = nullptr;
+        HWND section_heading_edit = nullptr;
+        HWND left_scroll_bar = nullptr;
+        HWND preview = nullptr;
+        HWND status = nullptr;
+        HWND last_text_target = nullptr;
+        int left_scroll_offset = 0;
+        int left_scroll_max = 0;
+        std::vector<ImageReportTemplateSection> section_order;
+        std::wstring current_image_heading;
+        std::wstring report_information_heading;
+        std::wstring notes_heading;
+        std::wstring measurement_summary_heading;
+        std::wstring measurement_table_heading;
+        std::wstring image_details_heading;
+        bool initialized = false;
+        bool syncing_section_heading = false;
+    };
+
 public:
     explicit CameraPreviewApp(HWND hwnd) : hwnd_(hwnd)
     {
@@ -272,6 +404,10 @@ public:
     }
     ~CameraPreviewApp()
     {
+        if (report_template_designer_ && IsWindow(report_template_designer_)) {
+            DestroyWindow(report_template_designer_);
+            report_template_designer_ = nullptr;
+        }
         Stop();
         RequestProcessingCancel();
         WaitForProcessingWorker();
@@ -1700,7 +1836,8 @@ public:
                 std::filesystem::path(file_name),
                 measurements_,
                 calibration_,
-                DisplayUnit());
+                DisplayUnit(),
+                ActiveObjectiveLabel());
         SetStatus(result.message);
     }
 
@@ -1838,15 +1975,167 @@ public:
 
     void SaveDiagnosticsReport()
     {
-        std::wstring file_name;
-        if (!FileDialog::SaveText(hwnd_, file_name)) {
-            SetStatus(L"Diagnostic save canceled.");
+        const ImageFrame& report_frame = CurrentPreviewFrame();
+        if (!report_frame.IsValid()) {
+            SetStatus(L"No image frame to report.");
             return;
         }
 
-        const ExportActionResult result =
-            ExportActions::SaveDiagnosticReport(std::filesystem::path(file_name), BuildDiagnosticsReport());
-        SetStatus(result.message);
+        std::wstring file_name;
+        if (!FileDialog::SaveReport(hwnd_, file_name)) {
+            SetStatus(L"Report save canceled.");
+            return;
+        }
+
+        const std::filesystem::path report_path =
+            EnsureFileExtension(std::filesystem::path(file_name), L".html");
+        const std::filesystem::path image_path = ReportImagePathFor(report_path);
+        std::error_code directory_error;
+        if (!image_path.parent_path().empty()) {
+            std::filesystem::create_directories(image_path.parent_path(), directory_error);
+        }
+        if (directory_error) {
+            SetStatus(L"Failed to create report image folder.");
+            return;
+        }
+
+        const std::wstring preview_mode = PreviewDisplayActions::PreviewModeLabel(
+            report_frame,
+            processing_frames_,
+            fluorescence_channels_,
+            show_fusion_preview_,
+            pseudo_color_palette_);
+        const ExportActionResult image_result =
+            ExportActions::SaveImage(image_path, report_frame, measurements_, preview_mode, &calibration_);
+        if (!image_result.saved) {
+            SetStatus(L"Report image failed: " + image_result.message);
+            return;
+        }
+
+        const std::wstring report = BuildImageReport(image_path.filename().wstring(), report_frame);
+        const ExportActionResult report_result =
+            ExportActions::SaveReportHtml(report_path, report);
+        if (!report_result.saved) {
+            SetStatus(report_result.message);
+            return;
+        }
+
+        SetStatus(
+            L"Report saved: " + AbsolutePathText(report_path) +
+            L". Image: " + AbsolutePathText(image_path) + L".");
+    }
+
+    void LoadReportTemplate()
+    {
+        std::wstring file_name;
+        if (!FileDialog::OpenText(hwnd_, file_name)) {
+            SetStatus(L"Report template load canceled.");
+            return;
+        }
+
+        std::wstring text;
+        std::wstring error;
+        if (!ReadTextFile(std::filesystem::path(file_name), text, error)) {
+            SetStatus(error.empty() ? L"Failed to load report template." : error);
+            return;
+        }
+        if (text.empty()) {
+            SetStatus(L"Report template is empty.");
+            return;
+        }
+
+        report_template_text_ = std::move(text);
+        report_template_path_ = file_name;
+        ImageReportTemplateOptions loaded_visual_options;
+        const bool loaded_visual_template =
+            DiagnosticReportActions::TryParseImageReportTemplateOptions(
+                report_template_text_,
+                loaded_visual_options);
+        visual_report_template_options_ = loaded_visual_template
+            ? loaded_visual_options
+            : ImageReportTemplateOptions{};
+        SyncReportTemplateStatus();
+        SetStatus(
+            L"Report template loaded: " +
+            std::filesystem::path(file_name).filename().wstring() +
+            (loaded_visual_template ? L" (visual settings restored)." : L"."));
+    }
+
+    void ClearReportTemplate()
+    {
+        report_template_text_.clear();
+        report_template_path_.clear();
+        visual_report_template_options_ = ImageReportTemplateOptions{};
+        SyncReportTemplateStatus();
+        SetStatus(L"Report template cleared.");
+    }
+
+    void ShowReportTemplateDesigner()
+    {
+        if (report_template_designer_ && IsWindow(report_template_designer_)) {
+            ShowWindow(report_template_designer_, SW_SHOWNORMAL);
+            SetForegroundWindow(report_template_designer_);
+            return;
+        }
+
+        RegisterReportTemplateDesignerClass();
+        auto* state = new ReportTemplateDesignerState;
+        state->app = this;
+
+        RECT parent_rect = {};
+        GetWindowRect(hwnd_, &parent_rect);
+        RECT work_area = {};
+        if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0)) {
+            work_area = parent_rect;
+        }
+        const int work_width = static_cast<int>(work_area.right - work_area.left);
+        const int work_height = static_cast<int>(work_area.bottom - work_area.top);
+        const int max_width = std::max(kReportTemplateDesignerMinWidth, work_width - 40);
+        const int max_height = std::max(kReportTemplateDesignerMinHeight, work_height - 40);
+        const int width = std::clamp(
+            kReportTemplateDesignerDefaultWidth,
+            kReportTemplateDesignerMinWidth,
+            max_width);
+        const int height = std::clamp(
+            kReportTemplateDesignerDefaultHeight,
+            kReportTemplateDesignerMinHeight,
+            max_height);
+        const int parent_width = static_cast<int>(parent_rect.right - parent_rect.left);
+        const int parent_height = static_cast<int>(parent_rect.bottom - parent_rect.top);
+        auto clamp_position = [](int value, int low, int high) {
+            return low <= high ? std::clamp(value, low, high) : low;
+        };
+        const int centered_x = static_cast<int>(parent_rect.left) + (parent_width - width) / 2;
+        const int centered_y = static_cast<int>(parent_rect.top) + (parent_height - height) / 2;
+        const int x = clamp_position(
+            centered_x,
+            static_cast<int>(work_area.left) + 20,
+            static_cast<int>(work_area.right) - width - 20);
+        const int y = clamp_position(
+            centered_y,
+            static_cast<int>(work_area.top) + 20,
+            static_cast<int>(work_area.bottom) - height - 20);
+        HWND designer = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            kReportTemplateDesignerClassName,
+            L"Report Template Designer",
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            x,
+            y,
+            width,
+            height,
+            hwnd_,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            state);
+        if (!designer) {
+            delete state;
+            SetStatus(L"Failed to open report template designer.");
+            return;
+        }
+
+        report_template_designer_ = designer;
+        SetStatus(L"Report template designer opened.");
     }
 
     void SaveProject()
@@ -2218,6 +2507,2394 @@ private:
         return text;
     }
 
+    static std::wstring ReadWindowText(HWND control)
+    {
+        if (!control) {
+            return {};
+        }
+
+        const int length = GetWindowTextLengthW(control);
+        if (length <= 0) {
+            return {};
+        }
+
+        std::wstring text(static_cast<std::size_t>(length) + 1U, L'\0');
+        const int copied = GetWindowTextW(control, text.data(), length + 1);
+        text.resize(static_cast<std::size_t>(std::max(0, copied)));
+        return text;
+    }
+
+    static std::filesystem::path EnsureFileExtension(
+        const std::filesystem::path& path,
+        const std::wstring& extension)
+    {
+        if (!path.extension().empty()) {
+            return path;
+        }
+        std::filesystem::path result = path;
+        result += extension;
+        return result;
+    }
+
+    static std::filesystem::path ReportImagePathFor(const std::filesystem::path& report_path)
+    {
+        std::wstring stem = report_path.stem().wstring();
+        if (stem.empty()) {
+            stem = L"CameraViewReport";
+        }
+        return report_path.parent_path() / (stem + L"_image.png");
+    }
+
+    static std::wstring AbsolutePathText(const std::filesystem::path& path)
+    {
+        std::error_code error;
+        const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+        return error ? path.wstring() : absolute.wstring();
+    }
+
+    static void SetDesignerStatus(HWND status, const std::wstring& text)
+    {
+        if (status) {
+            SetWindowTextW(status, text.c_str());
+        }
+    }
+
+    static void SetCheckbox(HWND checkbox, bool checked)
+    {
+        if (checkbox) {
+            SendMessageW(checkbox, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+    }
+
+    static bool CheckboxChecked(HWND checkbox)
+    {
+        return checkbox && SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    }
+
+    static void SyncTemplateDesignerControlAvailability(ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+
+        const BOOL image_enabled = CheckboxChecked(state->image_checkbox) ? TRUE : FALSE;
+        EnableWindow(state->image_size_label, image_enabled);
+        EnableWindow(state->image_size_original, image_enabled);
+        EnableWindow(state->image_size_fit, image_enabled);
+        EnableWindow(state->image_size_compact, image_enabled);
+        EnableWindow(state->image_caption_label, image_enabled);
+        EnableWindow(state->image_caption_edit, image_enabled);
+
+        const BOOL info_enabled = CheckboxChecked(state->info_checkbox) ? TRUE : FALSE;
+        EnableWindow(state->info_label, info_enabled);
+        EnableWindow(state->info_edit, info_enabled);
+
+        const BOOL notes_enabled = CheckboxChecked(state->notes_checkbox) ? TRUE : FALSE;
+        EnableWindow(state->notes_label, notes_enabled);
+        EnableWindow(state->notes_edit, notes_enabled);
+
+        const BOOL table_enabled = CheckboxChecked(state->table_checkbox) ? TRUE : FALSE;
+        EnableWindow(state->raw_values_checkbox, table_enabled);
+        EnableWindow(state->group_measurements_checkbox, table_enabled);
+        EnableWindow(state->measurement_precision_label, table_enabled);
+        EnableWindow(state->measurement_precision_auto, table_enabled);
+        EnableWindow(state->measurement_precision_two, table_enabled);
+        EnableWindow(state->measurement_precision_three, table_enabled);
+
+        const BOOL footer_enabled = CheckboxChecked(state->footer_checkbox) ? TRUE : FALSE;
+        EnableWindow(state->footer_text_label, footer_enabled);
+        EnableWindow(state->footer_text_edit, footer_enabled);
+    }
+
+    static ImageReportTemplateAccent ReadVisualTemplateAccent(const ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return ImageReportTemplateAccent::Blue;
+        }
+        if (CheckboxChecked(state->accent_green)) {
+            return ImageReportTemplateAccent::Green;
+        }
+        if (CheckboxChecked(state->accent_gold)) {
+            return ImageReportTemplateAccent::Gold;
+        }
+        if (CheckboxChecked(state->accent_magenta)) {
+            return ImageReportTemplateAccent::Magenta;
+        }
+        return ImageReportTemplateAccent::Blue;
+    }
+
+    static void SetVisualTemplateAccent(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplateAccent accent)
+    {
+        if (!state) {
+            return;
+        }
+
+        SetCheckbox(state->accent_blue, accent == ImageReportTemplateAccent::Blue);
+        SetCheckbox(state->accent_green, accent == ImageReportTemplateAccent::Green);
+        SetCheckbox(state->accent_gold, accent == ImageReportTemplateAccent::Gold);
+        SetCheckbox(state->accent_magenta, accent == ImageReportTemplateAccent::Magenta);
+    }
+
+    static ImageReportTemplateImageSize ReadVisualTemplateImageSize(
+        const ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return ImageReportTemplateImageSize::Original;
+        }
+        if (CheckboxChecked(state->image_size_fit)) {
+            return ImageReportTemplateImageSize::FitPage;
+        }
+        if (CheckboxChecked(state->image_size_compact)) {
+            return ImageReportTemplateImageSize::Compact;
+        }
+        return ImageReportTemplateImageSize::Original;
+    }
+
+    static void SetVisualTemplateImageSize(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplateImageSize image_size)
+    {
+        if (!state) {
+            return;
+        }
+
+        SetCheckbox(state->image_size_original, image_size == ImageReportTemplateImageSize::Original);
+        SetCheckbox(state->image_size_fit, image_size == ImageReportTemplateImageSize::FitPage);
+        SetCheckbox(state->image_size_compact, image_size == ImageReportTemplateImageSize::Compact);
+    }
+
+    static ImageReportTemplatePageLayout ReadVisualTemplatePageLayout(
+        const ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return ImageReportTemplatePageLayout::Standard;
+        }
+        if (CheckboxChecked(state->page_layout_wide)) {
+            return ImageReportTemplatePageLayout::Wide;
+        }
+        if (CheckboxChecked(state->page_layout_compact)) {
+            return ImageReportTemplatePageLayout::Compact;
+        }
+        return ImageReportTemplatePageLayout::Standard;
+    }
+
+    static void SetVisualTemplatePageLayout(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplatePageLayout page_layout)
+    {
+        if (!state) {
+            return;
+        }
+
+        SetCheckbox(
+            state->page_layout_standard,
+            page_layout == ImageReportTemplatePageLayout::Standard);
+        SetCheckbox(state->page_layout_wide, page_layout == ImageReportTemplatePageLayout::Wide);
+        SetCheckbox(state->page_layout_compact, page_layout == ImageReportTemplatePageLayout::Compact);
+    }
+
+    static ImageReportTemplatePrintOrientation ReadVisualTemplatePrintOrientation(
+        const ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return ImageReportTemplatePrintOrientation::Portrait;
+        }
+        if (CheckboxChecked(state->print_orientation_landscape)) {
+            return ImageReportTemplatePrintOrientation::Landscape;
+        }
+        return ImageReportTemplatePrintOrientation::Portrait;
+    }
+
+    static void SetVisualTemplatePrintOrientation(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplatePrintOrientation orientation)
+    {
+        if (!state) {
+            return;
+        }
+
+        SetCheckbox(
+            state->print_orientation_portrait,
+            orientation == ImageReportTemplatePrintOrientation::Portrait);
+        SetCheckbox(
+            state->print_orientation_landscape,
+            orientation == ImageReportTemplatePrintOrientation::Landscape);
+    }
+
+    static ImageReportTemplateMeasurementPrecision ReadVisualTemplateMeasurementPrecision(
+        const ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return ImageReportTemplateMeasurementPrecision::Automatic;
+        }
+        if (CheckboxChecked(state->measurement_precision_two)) {
+            return ImageReportTemplateMeasurementPrecision::TwoDecimals;
+        }
+        if (CheckboxChecked(state->measurement_precision_three)) {
+            return ImageReportTemplateMeasurementPrecision::ThreeDecimals;
+        }
+        return ImageReportTemplateMeasurementPrecision::Automatic;
+    }
+
+    static void SetVisualTemplateMeasurementPrecision(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplateMeasurementPrecision precision)
+    {
+        if (!state) {
+            return;
+        }
+
+        SetCheckbox(
+            state->measurement_precision_auto,
+            precision == ImageReportTemplateMeasurementPrecision::Automatic);
+        SetCheckbox(
+            state->measurement_precision_two,
+            precision == ImageReportTemplateMeasurementPrecision::TwoDecimals);
+        SetCheckbox(
+            state->measurement_precision_three,
+            precision == ImageReportTemplateMeasurementPrecision::ThreeDecimals);
+    }
+
+    static std::vector<ImageReportTemplateSection> DefaultVisualTemplateSectionOrder()
+    {
+        return {
+            ImageReportTemplateSection::CurrentImage,
+            ImageReportTemplateSection::ReportInformation,
+            ImageReportTemplateSection::ReportNotes,
+            ImageReportTemplateSection::MeasurementSummary,
+            ImageReportTemplateSection::MeasurementTable,
+            ImageReportTemplateSection::ImageDetails};
+    }
+
+    static const wchar_t* TemplateSectionLabel(ImageReportTemplateSection section)
+    {
+        switch (section) {
+        case ImageReportTemplateSection::CurrentImage:
+            return L"Current image";
+        case ImageReportTemplateSection::ReportInformation:
+            return L"Report information";
+        case ImageReportTemplateSection::ReportNotes:
+            return L"Notes";
+        case ImageReportTemplateSection::MeasurementSummary:
+            return L"Measurement summary";
+        case ImageReportTemplateSection::MeasurementTable:
+            return L"Measurement data table";
+        case ImageReportTemplateSection::ImageDetails:
+            return L"Image and calibration fields";
+        default:
+            return L"Report section";
+        }
+    }
+
+    static const wchar_t* DefaultTemplateSectionHeading(ImageReportTemplateSection section)
+    {
+        switch (section) {
+        case ImageReportTemplateSection::CurrentImage:
+            return L"Current Image";
+        case ImageReportTemplateSection::ReportInformation:
+            return L"Report Information";
+        case ImageReportTemplateSection::ReportNotes:
+            return L"Notes";
+        case ImageReportTemplateSection::MeasurementSummary:
+            return L"Measurement Summary";
+        case ImageReportTemplateSection::MeasurementTable:
+            return L"Measurement Data";
+        case ImageReportTemplateSection::ImageDetails:
+            return L"Image And Calibration";
+        default:
+            return L"Report Section";
+        }
+    }
+
+    static std::wstring VisualTemplateSectionHeading(
+        const ImageReportTemplateOptions& options,
+        ImageReportTemplateSection section)
+    {
+        const std::wstring* heading = nullptr;
+        switch (section) {
+        case ImageReportTemplateSection::CurrentImage:
+            heading = &options.current_image_heading;
+            break;
+        case ImageReportTemplateSection::ReportInformation:
+            heading = &options.report_information_heading;
+            break;
+        case ImageReportTemplateSection::ReportNotes:
+            heading = &options.notes_heading;
+            break;
+        case ImageReportTemplateSection::MeasurementSummary:
+            heading = &options.measurement_summary_heading;
+            break;
+        case ImageReportTemplateSection::MeasurementTable:
+            heading = &options.measurement_table_heading;
+            break;
+        case ImageReportTemplateSection::ImageDetails:
+            heading = &options.image_details_heading;
+            break;
+        default:
+            break;
+        }
+
+        if (heading && !TextInputParser::Trim(*heading).empty()) {
+            return *heading;
+        }
+        return DefaultTemplateSectionHeading(section);
+    }
+
+    static std::wstring TemplateSectionHeadingText(
+        const ReportTemplateDesignerState* state,
+        ImageReportTemplateSection section)
+    {
+        const std::wstring* heading = nullptr;
+        if (state) {
+            switch (section) {
+            case ImageReportTemplateSection::CurrentImage:
+                heading = &state->current_image_heading;
+                break;
+            case ImageReportTemplateSection::ReportInformation:
+                heading = &state->report_information_heading;
+                break;
+            case ImageReportTemplateSection::ReportNotes:
+                heading = &state->notes_heading;
+                break;
+            case ImageReportTemplateSection::MeasurementSummary:
+                heading = &state->measurement_summary_heading;
+                break;
+            case ImageReportTemplateSection::MeasurementTable:
+                heading = &state->measurement_table_heading;
+                break;
+            case ImageReportTemplateSection::ImageDetails:
+                heading = &state->image_details_heading;
+                break;
+            default:
+                break;
+            }
+        }
+
+        if (heading && !TextInputParser::Trim(*heading).empty()) {
+            return *heading;
+        }
+        return DefaultTemplateSectionHeading(section);
+    }
+
+    static void SetTemplateSectionHeadingText(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplateSection section,
+        const std::wstring& heading)
+    {
+        if (!state) {
+            return;
+        }
+
+        switch (section) {
+        case ImageReportTemplateSection::CurrentImage:
+            state->current_image_heading = heading;
+            break;
+        case ImageReportTemplateSection::ReportInformation:
+            state->report_information_heading = heading;
+            break;
+        case ImageReportTemplateSection::ReportNotes:
+            state->notes_heading = heading;
+            break;
+        case ImageReportTemplateSection::MeasurementSummary:
+            state->measurement_summary_heading = heading;
+            break;
+        case ImageReportTemplateSection::MeasurementTable:
+            state->measurement_table_heading = heading;
+            break;
+        case ImageReportTemplateSection::ImageDetails:
+            state->image_details_heading = heading;
+            break;
+        default:
+            break;
+        }
+    }
+
+    static std::wstring TemplateSectionListText(
+        const ReportTemplateDesignerState* state,
+        ImageReportTemplateSection section)
+    {
+        std::wstring label = TemplateSectionLabel(section);
+        const std::wstring heading = TemplateSectionHeadingText(state, section);
+        if (heading != DefaultTemplateSectionHeading(section)) {
+            label += L" - " + heading;
+        }
+        return label;
+    }
+
+    static COLORREF TemplateAccentColor(ImageReportTemplateAccent accent)
+    {
+        switch (accent) {
+        case ImageReportTemplateAccent::Blue:
+            return RGB(91, 134, 163);
+        case ImageReportTemplateAccent::Green:
+            return RGB(79, 138, 105);
+        case ImageReportTemplateAccent::Gold:
+            return RGB(163, 119, 47);
+        case ImageReportTemplateAccent::Magenta:
+            return RGB(164, 90, 122);
+        default:
+            return RGB(91, 134, 163);
+        }
+    }
+
+    static COLORREF TemplateAccentSoftColor(ImageReportTemplateAccent accent)
+    {
+        switch (accent) {
+        case ImageReportTemplateAccent::Blue:
+            return RGB(237, 243, 247);
+        case ImageReportTemplateAccent::Green:
+            return RGB(237, 246, 241);
+        case ImageReportTemplateAccent::Gold:
+            return RGB(248, 242, 230);
+        case ImageReportTemplateAccent::Magenta:
+            return RGB(248, 237, 242);
+        default:
+            return RGB(237, 243, 247);
+        }
+    }
+
+    static void RefreshTemplateSectionList(
+        ReportTemplateDesignerState* state,
+        std::size_t selected_index = 0)
+    {
+        if (!state || !state->section_list) {
+            return;
+        }
+
+        SendMessageW(state->section_list, WM_SETREDRAW, FALSE, 0);
+        SendMessageW(state->section_list, LB_RESETCONTENT, 0, 0);
+        for (ImageReportTemplateSection section : state->section_order) {
+            const std::wstring label = TemplateSectionListText(state, section);
+            SendMessageW(state->section_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+        }
+        if (!state->section_order.empty()) {
+            selected_index = std::min(selected_index, state->section_order.size() - 1U);
+            SendMessageW(state->section_list, LB_SETCURSEL, selected_index, 0);
+        }
+        SendMessageW(state->section_list, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(state->section_list, nullptr, TRUE);
+    }
+
+    static void MoveSelectedTemplateSection(ReportTemplateDesignerState* state, int delta)
+    {
+        if (!state || !state->section_list || state->section_order.empty()) {
+            return;
+        }
+
+        const LRESULT selection = SendMessageW(state->section_list, LB_GETCURSEL, 0, 0);
+        if (selection == LB_ERR) {
+            return;
+        }
+
+        const int source = static_cast<int>(selection);
+        const int target = source + delta;
+        if (target < 0 || target >= static_cast<int>(state->section_order.size())) {
+            return;
+        }
+
+        std::swap(
+            state->section_order[static_cast<std::size_t>(source)],
+            state->section_order[static_cast<std::size_t>(target)]);
+        RefreshTemplateSectionList(state, static_cast<std::size_t>(target));
+        RefreshTemplatePreview(state);
+    }
+
+    static void RefreshTemplateSectionHeadingEdit(ReportTemplateDesignerState* state)
+    {
+        if (!state || !state->section_heading_edit) {
+            return;
+        }
+
+        const LRESULT selection = state->section_list
+            ? SendMessageW(state->section_list, LB_GETCURSEL, 0, 0)
+            : LB_ERR;
+        const bool has_selection =
+            selection != LB_ERR &&
+            selection >= 0 &&
+            selection < static_cast<LRESULT>(state->section_order.size());
+
+        state->syncing_section_heading = true;
+        if (has_selection) {
+            const ImageReportTemplateSection section =
+                state->section_order[static_cast<std::size_t>(selection)];
+            const std::wstring heading = TemplateSectionHeadingText(state, section);
+            SetWindowTextW(state->section_heading_edit, heading.c_str());
+        } else {
+            SetWindowTextW(state->section_heading_edit, L"");
+        }
+        state->syncing_section_heading = false;
+        EnableWindow(state->section_heading_label, has_selection ? TRUE : FALSE);
+        EnableWindow(state->section_heading_edit, has_selection ? TRUE : FALSE);
+    }
+
+    static void SaveSelectedTemplateSectionHeading(ReportTemplateDesignerState* state)
+    {
+        if (!state || !state->section_heading_edit || state->syncing_section_heading) {
+            return;
+        }
+
+        const LRESULT selection = state->section_list
+            ? SendMessageW(state->section_list, LB_GETCURSEL, 0, 0)
+            : LB_ERR;
+        if (selection == LB_ERR ||
+            selection < 0 ||
+            selection >= static_cast<LRESULT>(state->section_order.size())) {
+            return;
+        }
+
+        const ImageReportTemplateSection section =
+            state->section_order[static_cast<std::size_t>(selection)];
+        SetTemplateSectionHeadingText(state, section, ReadWindowText(state->section_heading_edit));
+        RefreshTemplateSectionList(state, static_cast<std::size_t>(selection));
+    }
+
+    struct TemplatePlaceholderEntry {
+        const wchar_t* label;
+        const wchar_t* token;
+    };
+
+    static const TemplatePlaceholderEntry* TemplatePlaceholderEntries(std::size_t& count)
+    {
+        static constexpr TemplatePlaceholderEntry kEntries[] = {
+            {L"Generated date", L"{{Generated}}"},
+            {L"Image file", L"{{ImageFile}}"},
+            {L"Image size", L"{{ImageSize}}"},
+            {L"Objective", L"{{Objective}}"},
+            {L"Calibration state", L"{{Calibrated}}"},
+            {L"Microns per pixel", L"{{MicronsPerPixel}}"},
+            {L"Display unit", L"{{DisplayUnit}}"},
+            {L"Total measurements", L"{{TotalMeasurements}}"},
+            {L"Measurement summary", L"{{MeasurementSummary}}"},
+            {L"Measurement table", L"{{MeasurementTable}}"},
+            {L"Preview mode", L"{{PreviewDisplayMode}}"},
+            {L"Pseudo color", L"{{PseudoColor}}"},
+            {L"Fluorescence channels", L"{{FluorescenceChannels}}"},
+            {L"Stitch tiles", L"{{StitchTiles}}"},
+            {L"EDF frames", L"{{EdfFrames}}"}};
+        count = sizeof(kEntries) / sizeof(kEntries[0]);
+        return kEntries;
+    }
+
+    static bool IsTemplateTextTarget(const ReportTemplateDesignerState* state, HWND control)
+    {
+        return state &&
+            control &&
+            (control == state->title_edit ||
+             control == state->subtitle_edit ||
+             control == state->image_caption_edit ||
+             control == state->footer_text_edit ||
+             control == state->info_edit ||
+             control == state->notes_edit ||
+             control == state->section_heading_edit);
+    }
+
+    static bool IsTemplateTextTargetId(int control_id)
+    {
+        switch (control_id) {
+        case kTemplateDesignerTitleEdit:
+        case kTemplateDesignerSubtitleEdit:
+        case kTemplateDesignerImageCaptionEdit:
+        case kTemplateDesignerFooterTextEdit:
+        case kTemplateDesignerInfoEdit:
+        case kTemplateDesignerNotesEdit:
+        case kTemplateDesignerSectionHeadingEdit:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static HWND ResolveTemplateTextTarget(ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return nullptr;
+        }
+
+        HWND focus = GetFocus();
+        if (IsTemplateTextTarget(state, focus)) {
+            state->last_text_target = focus;
+            return focus;
+        }
+        if (IsTemplateTextTarget(state, state->last_text_target)) {
+            return state->last_text_target;
+        }
+        return state->image_caption_edit ? state->image_caption_edit : state->title_edit;
+    }
+
+    static void InsertTemplatePlaceholder(
+        ReportTemplateDesignerState* state,
+        const std::wstring& token)
+    {
+        HWND target = ResolveTemplateTextTarget(state);
+        if (!state || !target || token.empty()) {
+            return;
+        }
+
+        state->last_text_target = target;
+        SetFocus(target);
+        SendMessageW(target, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(token.c_str()));
+        if (target == state->section_heading_edit) {
+            SaveSelectedTemplateSectionHeading(state);
+        }
+        RefreshTemplatePreview(state);
+        SetDesignerStatus(state->status, L"Placeholder inserted.");
+    }
+
+    static void ShowTemplatePlaceholderMenu(HWND hwnd, ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+
+        std::size_t placeholder_count = 0;
+        const TemplatePlaceholderEntry* placeholders =
+            TemplatePlaceholderEntries(placeholder_count);
+        HMENU menu = CreatePopupMenu();
+        if (!menu) {
+            SetDesignerStatus(state->status, L"Could not open placeholder menu.");
+            return;
+        }
+
+        for (std::size_t index = 0; index < placeholder_count; ++index) {
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                kTemplatePlaceholderMenuBase + static_cast<UINT>(index),
+                placeholders[index].label);
+        }
+
+        RECT button_rect = {};
+        HWND button = GetDlgItem(hwnd, kTemplateDesignerInsertField);
+        if (!button || !GetWindowRect(button, &button_rect)) {
+            GetWindowRect(hwnd, &button_rect);
+        }
+
+        const UINT command = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD,
+            button_rect.left,
+            button_rect.bottom,
+            0,
+            hwnd,
+            nullptr);
+        DestroyMenu(menu);
+
+        if (command < kTemplatePlaceholderMenuBase) {
+            return;
+        }
+        const std::size_t index =
+            static_cast<std::size_t>(command - kTemplatePlaceholderMenuBase);
+        if (index >= placeholder_count) {
+            return;
+        }
+        InsertTemplatePlaceholder(state, placeholders[index].token);
+    }
+
+    static ImageReportTemplateOptions ReadVisualTemplateOptions(const ReportTemplateDesignerState* state)
+    {
+        ImageReportTemplateOptions options;
+        if (!state) {
+            return options;
+        }
+
+        options.title = ReadWindowText(state->title_edit);
+        options.subtitle = ReadWindowText(state->subtitle_edit);
+        options.accent = ReadVisualTemplateAccent(state);
+        options.image_size = ReadVisualTemplateImageSize(state);
+        options.page_layout = ReadVisualTemplatePageLayout(state);
+        options.print_orientation = ReadVisualTemplatePrintOrientation(state);
+        options.measurement_precision = ReadVisualTemplateMeasurementPrecision(state);
+        options.image_caption = ReadWindowText(state->image_caption_edit);
+        options.show_image = CheckboxChecked(state->image_checkbox);
+        options.show_report_information = CheckboxChecked(state->info_checkbox);
+        options.show_notes = CheckboxChecked(state->notes_checkbox);
+        options.show_measurement_summary = CheckboxChecked(state->summary_checkbox);
+        options.show_measurement_table = CheckboxChecked(state->table_checkbox);
+        options.show_measurement_raw_values = CheckboxChecked(state->raw_values_checkbox);
+        options.group_measurements_by_type = CheckboxChecked(state->group_measurements_checkbox);
+        options.show_calibration_details = CheckboxChecked(state->calibration_checkbox);
+        options.show_processing_details = CheckboxChecked(state->processing_checkbox);
+        options.show_footer = CheckboxChecked(state->footer_checkbox);
+        options.footer_text = ReadWindowText(state->footer_text_edit);
+        options.report_information_fields = ReadWindowText(state->info_edit);
+        options.notes = ReadWindowText(state->notes_edit);
+        options.current_image_heading = state->current_image_heading;
+        options.report_information_heading = state->report_information_heading;
+        options.notes_heading = state->notes_heading;
+        options.measurement_summary_heading = state->measurement_summary_heading;
+        options.measurement_table_heading = state->measurement_table_heading;
+        options.image_details_heading = state->image_details_heading;
+        options.section_order = state->section_order.empty()
+            ? DefaultVisualTemplateSectionOrder()
+            : state->section_order;
+        return options;
+    }
+
+    static void ApplyVisualTemplateOptions(
+        ReportTemplateDesignerState* state,
+        const ImageReportTemplateOptions& options)
+    {
+        if (!state) {
+            return;
+        }
+
+        state->initialized = false;
+        if (state->title_edit) {
+            SetWindowTextW(state->title_edit, options.title.c_str());
+        }
+        if (state->subtitle_edit) {
+            SetWindowTextW(state->subtitle_edit, options.subtitle.c_str());
+        }
+        SetVisualTemplateAccent(state, options.accent);
+        SetVisualTemplateImageSize(state, options.image_size);
+        SetVisualTemplatePageLayout(state, options.page_layout);
+        SetVisualTemplatePrintOrientation(state, options.print_orientation);
+        SetVisualTemplateMeasurementPrecision(state, options.measurement_precision);
+        if (state->image_caption_edit) {
+            SetWindowTextW(state->image_caption_edit, options.image_caption.c_str());
+        }
+        SetCheckbox(state->image_checkbox, options.show_image);
+        SetCheckbox(state->info_checkbox, options.show_report_information);
+        SetCheckbox(state->notes_checkbox, options.show_notes);
+        SetCheckbox(state->summary_checkbox, options.show_measurement_summary);
+        SetCheckbox(state->table_checkbox, options.show_measurement_table);
+        SetCheckbox(state->raw_values_checkbox, options.show_measurement_raw_values);
+        SetCheckbox(state->group_measurements_checkbox, options.group_measurements_by_type);
+        SetCheckbox(state->calibration_checkbox, options.show_calibration_details);
+        SetCheckbox(state->processing_checkbox, options.show_processing_details);
+        SetCheckbox(state->footer_checkbox, options.show_footer);
+        if (state->footer_text_edit) {
+            SetWindowTextW(state->footer_text_edit, options.footer_text.c_str());
+        }
+        if (state->info_edit) {
+            SetWindowTextW(state->info_edit, options.report_information_fields.c_str());
+        }
+        if (state->notes_edit) {
+            SetWindowTextW(state->notes_edit, options.notes.c_str());
+        }
+        state->current_image_heading = options.current_image_heading;
+        state->report_information_heading = options.report_information_heading;
+        state->notes_heading = options.notes_heading;
+        state->measurement_summary_heading = options.measurement_summary_heading;
+        state->measurement_table_heading = options.measurement_table_heading;
+        state->image_details_heading = options.image_details_heading;
+        state->section_order = options.section_order.empty()
+            ? DefaultVisualTemplateSectionOrder()
+            : options.section_order;
+        RefreshTemplateSectionList(state);
+        RefreshTemplateSectionHeadingEdit(state);
+        SyncTemplateDesignerControlAvailability(state);
+        state->initialized = true;
+        if (state->preview) {
+            InvalidateRect(state->preview, nullptr, TRUE);
+        }
+    }
+
+    static void RefreshTemplatePreview(ReportTemplateDesignerState* state)
+    {
+        if (state && state->initialized && state->preview) {
+            InvalidateRect(state->preview, nullptr, TRUE);
+        }
+    }
+
+    static std::wstring PreviewFrameSizeText(const ImageFrame& frame)
+    {
+        if (!frame.IsValid()) {
+            return L"No image loaded";
+        }
+        return std::to_wstring(frame.width) + L"x" + std::to_wstring(frame.height);
+    }
+
+    static RECT FitPreviewImageRect(const RECT& bounds, const ImageFrame& frame)
+    {
+        if (!frame.IsValid()) {
+            return bounds;
+        }
+
+        const int bounds_width = std::max(1, static_cast<int>(bounds.right - bounds.left));
+        const int bounds_height = std::max(1, static_cast<int>(bounds.bottom - bounds.top));
+        const double scale = std::min(
+            static_cast<double>(bounds_width) / static_cast<double>(frame.width),
+            static_cast<double>(bounds_height) / static_cast<double>(frame.height));
+        const int draw_width = std::max(1, static_cast<int>(frame.width * scale));
+        const int draw_height = std::max(1, static_cast<int>(frame.height * scale));
+        const int left = bounds.left + (bounds_width - draw_width) / 2;
+        const int top = bounds.top + (bounds_height - draw_height) / 2;
+        return RECT{left, top, left + draw_width, top + draw_height};
+    }
+
+    static void DrawPreviewImageThumbnail(HDC hdc, const RECT& bounds, const ImageFrame& frame)
+    {
+        FillSolidRect(hdc, bounds, RGB(17, 24, 32));
+        HPEN border_pen = CreatePen(PS_SOLID, 1, RGB(88, 99, 112));
+        HGDIOBJ old_pen = border_pen ? SelectObject(hdc, border_pen) : nullptr;
+        HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, bounds.left, bounds.top, bounds.right, bounds.bottom);
+        if (old_brush) {
+            SelectObject(hdc, old_brush);
+        }
+        if (old_pen) {
+            SelectObject(hdc, old_pen);
+        }
+        if (border_pen) {
+            DeleteObject(border_pen);
+        }
+
+        if (!frame.IsValid()) {
+            RECT empty_text{bounds.left + 12, bounds.top + 12, bounds.right - 12, bounds.bottom - 12};
+            SetTextColor(hdc, RGB(190, 200, 210));
+            DrawTextW(hdc, L"No image loaded", -1, &empty_text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return;
+        }
+
+        const RECT image_rect = FitPreviewImageRect(bounds, frame);
+        BITMAPINFO info = {};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = frame.width;
+        info.bmiHeader.biHeight = -frame.height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 24;
+        info.bmiHeader.biCompression = BI_RGB;
+        SetStretchBltMode(hdc, COLORONCOLOR);
+        StretchDIBits(
+            hdc,
+            image_rect.left,
+            image_rect.top,
+            image_rect.right - image_rect.left,
+            image_rect.bottom - image_rect.top,
+            0,
+            0,
+            frame.width,
+            frame.height,
+            frame.bgr.data(),
+            &info,
+            DIB_RGB_COLORS,
+            SRCCOPY);
+    }
+    static std::wstring PreviewMeasurementSummaryText(const CameraPreviewApp* app)
+    {
+        if (!app) {
+            return L"No application data.";
+        }
+
+        const MeasurementCollection& measurements = app->measurements_;
+        std::wostringstream text;
+        text << L"Objective: " << app->ActiveObjectiveLabel() << L"\n";
+        text << L"Calibration: "
+             << MeasurementDisplayActions::CalibrationStatusLine(app->ActiveObjectiveLabel(), app->calibration_)
+             << L"\n";
+        text << L"Measurements: " << measurements.Count()
+             << L" total, " << measurements.LengthCount() << L" lengths, "
+             << measurements.AngleCount() << L" angles, "
+             << measurements.RectangleCount() << L" rectangle areas, "
+             << measurements.PolygonCount() << L" polygon areas.";
+        return text.str();
+    }
+
+    static std::wstring PreviewMeasurementTableText(
+        const CameraPreviewApp* app,
+        const ImageReportTemplateOptions& options)
+    {
+        const MeasurementCollection* measurements = app ? &app->measurements_ : nullptr;
+        std::wstring table_detail = measurements && !measurements->Empty()
+            ? L"Measurement rows from the current image."
+            : L"No measurements yet. The table will fill when measurements are added.";
+        table_detail += options.show_measurement_raw_values
+            ? L"\nColumns: name, type, value, unit and raw pixel value."
+            : L"\nColumns: name, type, value and unit.";
+        if (options.measurement_precision ==
+            ImageReportTemplateMeasurementPrecision::TwoDecimals) {
+            table_detail += L"\nValues use 2 decimal places.";
+        } else if (options.measurement_precision ==
+            ImageReportTemplateMeasurementPrecision::ThreeDecimals) {
+            table_detail += L"\nValues use 3 decimal places.";
+        } else {
+            table_detail += L"\nValues use automatic precision.";
+        }
+        if (options.group_measurements_by_type) {
+            table_detail += L"\nGrouped by measurement type.";
+        }
+        return table_detail;
+    }
+
+    static std::wstring PreviewImageDetailsText(const CameraPreviewApp* app)
+    {
+        if (!app) {
+            return L"No image details.";
+        }
+
+        const ImageFrame& frame = app->CurrentPreviewFrame();
+        std::wostringstream text;
+        text << L"Image: " << PreviewFrameSizeText(frame) << L"\n";
+        text << L"Objective: " << app->ActiveObjectiveLabel() << L"\n";
+        text << L"Pseudo color: " << PseudoColorMapper::Label(app->pseudo_color_palette_) << L"\n";
+        text << L"Fluorescence channels: " << app->fluorescence_channels_.size()
+             << L", stitch tiles: " << app->stitch_tiles_.size()
+             << L", EDF frames: " << app->edf_stack_.size();
+        return text.str();
+    }
+
+    void ApplyDesignedReportTemplate(ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+
+        const ImageReportTemplateOptions options = ReadVisualTemplateOptions(state);
+        report_template_text_ = DiagnosticReportActions::BuildImageReportTemplate(options);
+        report_template_path_.clear();
+        visual_report_template_options_ = options;
+        SyncReportTemplateStatus();
+        SetDesignerStatus(state->status, L"Visual template applied.");
+        SetStatus(L"Visual report template applied.");
+    }
+
+    void SaveDesignedReportTemplate(HWND owner, ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+
+        const ImageReportTemplateOptions options = ReadVisualTemplateOptions(state);
+        const std::wstring template_text =
+            DiagnosticReportActions::BuildImageReportTemplate(options);
+        std::wstring file_name;
+        if (!FileDialog::SaveTemplate(owner, file_name)) {
+            SetDesignerStatus(state->status, L"Template save canceled.");
+            SetStatus(L"Report template save canceled.");
+            return;
+        }
+
+        const std::filesystem::path path = EnsureFileExtension(std::filesystem::path(file_name), L".html");
+        const ExportActionResult result = ExportActions::SaveReportTemplate(path, template_text);
+        SetDesignerStatus(state->status, result.message);
+        SetStatus(result.message);
+        if (result.saved) {
+            report_template_text_ = template_text;
+            report_template_path_ = path.wstring();
+            visual_report_template_options_ = options;
+            SyncReportTemplateStatus();
+        }
+    }
+
+    static void DrawTemplatePreview(HWND hwnd, const ReportTemplateDesignerState* state)
+    {
+        PAINTSTRUCT paint = {};
+        HDC hdc = BeginPaint(hwnd, &paint);
+        RECT client = {};
+        GetClientRect(hwnd, &client);
+        FillSolidRect(hdc, client, RGB(228, 233, 238));
+
+        const ImageReportTemplateOptions options = ReadVisualTemplateOptions(state);
+        const CameraPreviewApp* app = state ? state->app : nullptr;
+        int preview_side_margin = 24;
+        if (options.page_layout == ImageReportTemplatePageLayout::Wide) {
+            preview_side_margin = 12;
+        } else if (options.page_layout == ImageReportTemplatePageLayout::Compact) {
+            preview_side_margin = 54;
+        }
+
+        RECT page = client;
+        page.left += preview_side_margin;
+        page.top += 18;
+        page.right -= preview_side_margin;
+        page.bottom -= 18;
+        if (page.right <= page.left || page.bottom <= page.top) {
+            EndPaint(hwnd, &paint);
+            return;
+        }
+
+        FillSolidRect(hdc, page, RGB(255, 255, 255));
+        HPEN border_pen = CreatePen(PS_SOLID, 1, RGB(184, 193, 202));
+        HGDIOBJ old_pen = border_pen ? SelectObject(hdc, border_pen) : nullptr;
+        HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, page.left, page.top, page.right, page.bottom);
+        if (old_brush) {
+            SelectObject(hdc, old_brush);
+        }
+        if (old_pen) {
+            SelectObject(hdc, old_pen);
+        }
+        if (border_pen) {
+            DeleteObject(border_pen);
+        }
+
+        const std::wstring title = options.title.empty()
+            ? L"CameraView Image Report"
+            : options.title;
+        const COLORREF accent_color = TemplateAccentColor(options.accent);
+        const COLORREF accent_soft_color = TemplateAccentSoftColor(options.accent);
+
+        HFONT title_font = CreateFontW(
+            24,
+            0,
+            0,
+            0,
+            FW_SEMIBOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_SWISS,
+            L"Segoe UI");
+        HFONT section_font = CreateFontW(
+            17,
+            0,
+            0,
+            0,
+            FW_SEMIBOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH | FF_SWISS,
+            L"Segoe UI");
+        HGDIOBJ old_font = title_font ? SelectObject(hdc, title_font) : nullptr;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(31, 41, 51));
+
+        int y = page.top + 24;
+        RECT text_rect{page.left + 28, y, page.right - 28, y + 34};
+        DrawTextW(hdc, title.c_str(), -1, &text_rect, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += 34;
+        if (old_font) {
+            SelectObject(hdc, old_font);
+        }
+
+        if (!TextInputParser::Trim(options.subtitle).empty()) {
+            RECT subtitle_rect{page.left + 28, y, page.right - 28, y + 42};
+            SetTextColor(hdc, RGB(63, 83, 101));
+            DrawTextW(
+                hdc,
+                options.subtitle.c_str(),
+                -1,
+                &subtitle_rect,
+                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
+            y += 42;
+        }
+
+        RECT meta_rect{page.left + 28, y, page.right - 28, y + 22};
+        SetTextColor(hdc, RGB(96, 112, 128));
+        const std::wstring orientation_text =
+            options.print_orientation == ImageReportTemplatePrintOrientation::Landscape
+                ? L"Preview uses current data | Print: Landscape"
+                : L"Preview uses current data | Print: Portrait";
+        DrawTextW(hdc, orientation_text.c_str(), -1, &meta_rect, DT_LEFT | DT_SINGLELINE);
+        y += 26;
+        RECT accent_line{page.left + 28, y, page.right - 28, y + 2};
+        FillSolidRect(hdc, accent_line, accent_color);
+        y += 18;
+
+        auto draw_image_section = [&](const std::wstring& label, const std::wstring& caption, int height, const ImageFrame& frame) {
+            if (y + height + 12 > page.bottom - 26) {
+                return;
+            }
+            if (section_font) {
+                SelectObject(hdc, section_font);
+            }
+            SetTextColor(hdc, RGB(31, 41, 51));
+            RECT header{page.left + 28, y, page.right - 28, y + 24};
+            DrawTextW(hdc, label.c_str(), -1, &header, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += 28;
+
+            RECT block{page.left + 28, y, page.right - 28, y + height};
+            FillSolidRect(hdc, block, RGB(248, 250, 252));
+            HPEN block_pen = CreatePen(PS_SOLID, 1, RGB(202, 211, 220));
+            HGDIOBJ previous_pen = block_pen ? SelectObject(hdc, block_pen) : nullptr;
+            HGDIOBJ previous_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            Rectangle(hdc, block.left, block.top, block.right, block.bottom);
+            if (previous_brush) {
+                SelectObject(hdc, previous_brush);
+            }
+            if (previous_pen) {
+                SelectObject(hdc, previous_pen);
+            }
+            if (block_pen) {
+                DeleteObject(block_pen);
+            }
+
+            RECT image_rect{block.left + 14, block.top + 12, block.right - 14, block.bottom - 34};
+            if (image_rect.bottom > image_rect.top + 24) {
+                DrawPreviewImageThumbnail(hdc, image_rect, frame);
+                if (frame.IsValid()) {
+                    HPEN overlay_pen = CreatePen(PS_SOLID, 2, accent_color);
+                    HGDIOBJ previous_overlay_pen = overlay_pen ? SelectObject(hdc, overlay_pen) : nullptr;
+                    HGDIOBJ previous_overlay_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                    MoveToEx(hdc, image_rect.left + 24, image_rect.bottom - 24, nullptr);
+                    LineTo(hdc, image_rect.right - 24, image_rect.top + 24);
+                    Ellipse(hdc, image_rect.left + 20, image_rect.bottom - 28, image_rect.left + 28, image_rect.bottom - 20);
+                    Ellipse(hdc, image_rect.right - 28, image_rect.top + 20, image_rect.right - 20, image_rect.top + 28);
+                    if (previous_overlay_brush) {
+                        SelectObject(hdc, previous_overlay_brush);
+                    }
+                    if (previous_overlay_pen) {
+                        SelectObject(hdc, previous_overlay_pen);
+                    }
+                    if (overlay_pen) {
+                        DeleteObject(overlay_pen);
+                    }
+                }
+            }
+
+            if (old_font) {
+                SelectObject(hdc, old_font);
+            }
+            SetTextColor(hdc, RGB(96, 112, 128));
+            RECT caption_rect{block.left + 14, block.bottom - 25, block.right - 14, block.bottom - 8};
+            DrawTextW(hdc, caption.c_str(), -1, &caption_rect, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += height + 18;
+        };
+        auto draw_section = [&](const std::wstring& label, const std::wstring& detail, int height) {
+            if (y + height + 12 > page.bottom - 26) {
+                return;
+            }
+            if (section_font) {
+                SelectObject(hdc, section_font);
+            }
+            SetTextColor(hdc, RGB(31, 41, 51));
+            RECT header{page.left + 28, y, page.right - 28, y + 24};
+            DrawTextW(hdc, label.c_str(), -1, &header, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += 28;
+
+            RECT block{page.left + 28, y, page.right - 28, y + height};
+            FillSolidRect(hdc, block, accent_soft_color);
+            HPEN block_pen = CreatePen(PS_SOLID, 1, RGB(202, 211, 220));
+            HGDIOBJ previous_pen = block_pen ? SelectObject(hdc, block_pen) : nullptr;
+            HGDIOBJ previous_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            Rectangle(hdc, block.left, block.top, block.right, block.bottom);
+            if (previous_brush) {
+                SelectObject(hdc, previous_brush);
+            }
+            if (previous_pen) {
+                SelectObject(hdc, previous_pen);
+            }
+            if (block_pen) {
+                DeleteObject(block_pen);
+            }
+
+            if (old_font) {
+                SelectObject(hdc, old_font);
+            }
+            SetTextColor(hdc, RGB(96, 112, 128));
+            RECT detail_rect{block.left + 14, block.top + 12, block.right - 14, block.bottom - 12};
+            DrawTextW(
+                hdc,
+                detail.c_str(),
+                -1,
+                &detail_rect,
+                DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
+            y += height + 18;
+        };
+
+        for (ImageReportTemplateSection section : options.section_order) {
+            switch (section) {
+            case ImageReportTemplateSection::CurrentImage:
+                if (options.show_image) {
+                    int image_preview_height = 146;
+                    if (options.image_size == ImageReportTemplateImageSize::FitPage) {
+                        image_preview_height = 172;
+                    } else if (options.image_size == ImageReportTemplateImageSize::Compact) {
+                        image_preview_height = 112;
+                    }
+                    const ImageFrame& preview_frame = app ? app->CurrentPreviewFrame() : ImageFrame{};
+                    const std::wstring image_caption =
+                        TextInputParser::Trim(options.image_caption).empty()
+                            ? L"Current image: " + PreviewFrameSizeText(preview_frame)
+                            : options.image_caption;
+                    draw_image_section(
+                        VisualTemplateSectionHeading(options, section),
+                        image_caption,
+                        image_preview_height,
+                        preview_frame);
+                }
+                break;
+            case ImageReportTemplateSection::ReportInformation:
+                if (options.show_report_information) {
+                    const std::wstring fields =
+                        TextInputParser::Trim(options.report_information_fields).empty()
+                            ? L"No report information."
+                            : options.report_information_fields;
+                    draw_section(VisualTemplateSectionHeading(options, section), fields, 76);
+                }
+                break;
+            case ImageReportTemplateSection::ReportNotes:
+                if (options.show_notes) {
+                    const std::wstring notes = TextInputParser::Trim(options.notes).empty()
+                        ? L"No notes."
+                        : options.notes;
+                    draw_section(VisualTemplateSectionHeading(options, section), notes, 76);
+                }
+                break;
+            case ImageReportTemplateSection::MeasurementSummary:
+                if (options.show_measurement_summary) {
+                    draw_section(
+                        VisualTemplateSectionHeading(options, section),
+                        PreviewMeasurementSummaryText(app),
+                        88);
+                }
+                break;
+            case ImageReportTemplateSection::MeasurementTable:
+                if (options.show_measurement_table) {
+                    std::wstring table_detail = PreviewMeasurementTableText(app, options);
+                    draw_section(
+                        VisualTemplateSectionHeading(options, section),
+                        table_detail,
+                        92);
+                }
+                break;
+            case ImageReportTemplateSection::ImageDetails:
+                if (options.show_calibration_details || options.show_processing_details) {
+                    draw_section(
+                        VisualTemplateSectionHeading(options, section),
+                        PreviewImageDetailsText(app),
+                        96);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        if (options.show_footer && page.bottom - y > 26) {
+            RECT footer{page.left + 28, page.bottom - 38, page.right - 28, page.bottom - 18};
+            SetTextColor(hdc, RGB(96, 112, 128));
+            const std::wstring footer_text = TextInputParser::Trim(options.footer_text).empty()
+                ? L"Generated by CameraView."
+                : options.footer_text;
+            DrawTextW(hdc, footer_text.c_str(), -1, &footer, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+
+        if (old_font) {
+            SelectObject(hdc, old_font);
+        }
+        if (title_font) {
+            DeleteObject(title_font);
+        }
+        if (section_font) {
+            DeleteObject(section_font);
+        }
+        EndPaint(hwnd, &paint);
+    }
+
+    static bool ScrollReportTemplateDesignerLeftTo(
+        HWND hwnd,
+        ReportTemplateDesignerState* state,
+        int target_offset)
+    {
+        if (!state) {
+            return false;
+        }
+
+        const int old_offset = state->left_scroll_offset;
+        state->left_scroll_offset = std::clamp(target_offset, 0, state->left_scroll_max);
+        if (state->left_scroll_offset == old_offset) {
+            return false;
+        }
+
+        LayoutReportTemplateDesigner(hwnd, state);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return true;
+    }
+
+    static bool HandleReportTemplateDesignerLeftScroll(
+        HWND hwnd,
+        ReportTemplateDesignerState* state,
+        int scroll_request)
+    {
+        if (!state) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd, &client);
+        const int margin = 12;
+        const int gap = 8;
+        const int button_height = 26;
+        const int bottom_top = static_cast<int>(client.bottom) - margin - button_height;
+        const int page_size = std::max(1, bottom_top - margin - gap);
+        int target_offset = state->left_scroll_offset;
+        switch (scroll_request) {
+        case SB_LINEUP:
+            target_offset -= 36;
+            break;
+        case SB_LINEDOWN:
+            target_offset += 36;
+            break;
+        case SB_PAGEUP:
+            target_offset -= page_size;
+            break;
+        case SB_PAGEDOWN:
+            target_offset += page_size;
+            break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK: {
+            SCROLLINFO info = {};
+            info.cbSize = sizeof(info);
+            info.fMask = SIF_TRACKPOS;
+            if (state->left_scroll_bar && GetScrollInfo(state->left_scroll_bar, SB_CTL, &info)) {
+                target_offset = info.nTrackPos;
+            }
+            break;
+        }
+        case SB_TOP:
+            target_offset = 0;
+            break;
+        case SB_BOTTOM:
+            target_offset = state->left_scroll_max;
+            break;
+        default:
+            return false;
+        }
+
+        return ScrollReportTemplateDesignerLeftTo(hwnd, state, target_offset);
+    }
+    static void LayoutReportTemplateDesigner(HWND hwnd, ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd, &client);
+        const int client_right = static_cast<int>(client.right);
+        const int client_bottom = static_cast<int>(client.bottom);
+        const int margin = 12;
+        const int gap = 8;
+        const int button_height = 26;
+        const int scroll_bar_width = 16;
+        const int left_panel_width = std::clamp(client_right / 3, 310, 360);
+        const int left_width = left_panel_width - scroll_bar_width - 6;
+        const int preview_left = margin + left_panel_width + margin;
+        const int bottom_top = client_bottom - margin - button_height;
+        const int left_visible_height = std::max(1, bottom_top - margin - gap);
+        state->left_scroll_offset = std::clamp(
+            state->left_scroll_offset,
+            0,
+            state->left_scroll_max);
+        const int scroll_offset = state->left_scroll_offset;
+        const int left_clip_top = margin;
+        const int left_clip_bottom = margin + left_visible_height;
+        auto move_left_control = [&](HWND control, int x, int top, int width, int height, BOOL repaint = TRUE) {
+            if (control) {
+                const int moved_top = top - scroll_offset;
+                const bool fully_visible =
+                    moved_top >= left_clip_top && moved_top + height <= left_clip_bottom;
+                ShowWindow(control, fully_visible ? SW_SHOW : SW_HIDE);
+                MoveWindow(control, x, moved_top, width, height, repaint);
+            }
+        };
+
+        int y = margin;
+        if (state->title_label) {
+            move_left_control(state->title_label, margin, y + 5, left_width, 20, TRUE);
+        }
+        y += 24;
+        if (state->title_edit) {
+            move_left_control(state->title_edit, margin, y, left_width, button_height, TRUE);
+        }
+        y += button_height + 8;
+
+        if (state->subtitle_label) {
+            move_left_control(state->subtitle_label, margin, y + 5, left_width, 20, TRUE);
+        }
+        y += 24;
+        if (state->subtitle_edit) {
+            move_left_control(state->subtitle_edit, margin, y, left_width, button_height, TRUE);
+        }
+        y += button_height + 8;
+
+        if (state->page_layout_label) {
+            move_left_control(state->page_layout_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        const int page_layout_width = (left_width - gap * 2) / 3;
+        auto move_page_layout = [&](HWND control, int column, int width) {
+            if (control) {
+                move_left_control(
+                    control,
+                    margin + column * (page_layout_width + gap),
+                    y,
+                    width,
+                    24,
+                    TRUE);
+            }
+        };
+        move_page_layout(state->page_layout_standard, 0, page_layout_width);
+        move_page_layout(state->page_layout_wide, 1, page_layout_width);
+        move_page_layout(
+            state->page_layout_compact,
+            2,
+            left_width - page_layout_width * 2 - gap * 2);
+        y += 28;
+
+        if (state->print_orientation_label) {
+            move_left_control(state->print_orientation_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        const int orientation_width = (left_width - gap) / 2;
+        if (state->print_orientation_portrait) {
+            move_left_control(state->print_orientation_portrait, margin, y, orientation_width, 24, TRUE);
+        }
+        if (state->print_orientation_landscape) {
+            move_left_control(
+                state->print_orientation_landscape,
+                margin + orientation_width + gap,
+                y,
+                left_width - orientation_width - gap,
+                24,
+                TRUE);
+        }
+        y += 30;
+
+        auto move_checkbox = [&](HWND control) {
+            if (control) {
+                move_left_control(control, margin, y, left_width, 24, TRUE);
+            }
+            y += 26;
+        };
+        move_checkbox(state->image_checkbox);
+
+        if (state->image_size_label) {
+            move_left_control(state->image_size_label, margin + 18, y + 4, left_width - 18, 20, TRUE);
+        }
+        y += 24;
+        const int image_size_width = (left_width - 18 - gap * 2) / 3;
+        auto move_image_size = [&](HWND control, int column, int width) {
+            if (control) {
+                move_left_control(
+                    control,
+                    margin + 18 + column * (image_size_width + gap),
+                    y,
+                    width,
+                    24,
+                    TRUE);
+            }
+        };
+        move_image_size(state->image_size_original, 0, image_size_width);
+        move_image_size(state->image_size_fit, 1, image_size_width);
+        move_image_size(
+            state->image_size_compact,
+            2,
+            left_width - 18 - image_size_width * 2 - gap * 2);
+        y += 28;
+
+        if (state->image_caption_label) {
+            move_left_control(state->image_caption_label, margin + 18, y + 4, left_width - 18, 20, TRUE);
+        }
+        y += 24;
+        if (state->image_caption_edit) {
+            move_left_control(state->image_caption_edit, margin + 18, y, left_width - 18, button_height, TRUE);
+        }
+        y += button_height + 8;
+
+        move_checkbox(state->info_checkbox);
+        move_checkbox(state->notes_checkbox);
+        move_checkbox(state->summary_checkbox);
+        move_checkbox(state->table_checkbox);
+        move_checkbox(state->raw_values_checkbox);
+        move_checkbox(state->group_measurements_checkbox);
+        if (state->measurement_precision_label) {
+            move_left_control(
+                state->measurement_precision_label,
+                margin + 18,
+                y + 4,
+                left_width - 18,
+                20,
+                TRUE);
+        }
+        y += 24;
+        const int precision_width = (left_width - 18 - gap * 2) / 3;
+        auto move_precision = [&](HWND control, int column, int width) {
+            if (control) {
+                move_left_control(
+                    control,
+                    margin + 18 + column * (precision_width + gap),
+                    y,
+                    width,
+                    24,
+                    TRUE);
+            }
+        };
+        move_precision(state->measurement_precision_auto, 0, precision_width);
+        move_precision(state->measurement_precision_two, 1, precision_width);
+        move_precision(
+            state->measurement_precision_three,
+            2,
+            left_width - 18 - precision_width * 2 - gap * 2);
+        y += 30;
+        move_checkbox(state->calibration_checkbox);
+        move_checkbox(state->processing_checkbox);
+        move_checkbox(state->footer_checkbox);
+        if (state->footer_text_label) {
+            move_left_control(state->footer_text_label, margin + 18, y + 4, left_width - 18, 20, TRUE);
+        }
+        y += 24;
+        if (state->footer_text_edit) {
+            move_left_control(state->footer_text_edit, margin + 18, y, left_width - 18, button_height, TRUE);
+        }
+        y += button_height + 8;
+
+        if (state->accent_label) {
+            move_left_control(state->accent_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        const int accent_half_width = (left_width - gap) / 2;
+        auto move_accent = [&](HWND control, int column, int row) {
+            if (control) {
+                move_left_control(
+                    control,
+                    margin + column * (accent_half_width + gap),
+                    y + row * 26,
+                    column == 0 ? accent_half_width : left_width - accent_half_width - gap,
+                    24,
+                    TRUE);
+            }
+        };
+        move_accent(state->accent_blue, 0, 0);
+        move_accent(state->accent_green, 1, 0);
+        move_accent(state->accent_gold, 0, 1);
+        move_accent(state->accent_magenta, 1, 1);
+        y += 54;
+
+        const int fields_height = 62;
+        const int notes_height = 74;
+
+        if (state->info_label) {
+            move_left_control(state->info_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        if (state->info_edit) {
+            move_left_control(state->info_edit, margin, y, left_width, fields_height, TRUE);
+        }
+        y += fields_height + 8;
+
+        if (state->notes_label) {
+            move_left_control(state->notes_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        if (state->notes_edit) {
+            move_left_control(state->notes_edit, margin, y, left_width, notes_height, TRUE);
+        }
+        y += notes_height + 8;
+
+        if (state->section_label) {
+            move_left_control(state->section_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        const int list_height = 76;
+        if (state->section_list) {
+            move_left_control(state->section_list, margin, y, left_width, list_height, TRUE);
+        }
+        y += list_height + gap;
+        const int half_width = (left_width - gap) / 2;
+        HWND move_up = GetDlgItem(hwnd, kTemplateDesignerMoveUp);
+        HWND move_down = GetDlgItem(hwnd, kTemplateDesignerMoveDown);
+        if (move_up) {
+            move_left_control(move_up, margin, y, half_width, button_height, TRUE);
+        }
+        if (move_down) {
+            move_left_control(move_down, margin + half_width + gap, y, left_width - half_width - gap, button_height, TRUE);
+        }
+        y += button_height + gap;
+
+        if (state->section_heading_label) {
+            move_left_control(state->section_heading_label, margin, y + 4, left_width, 20, TRUE);
+        }
+        y += 24;
+        if (state->section_heading_edit) {
+            move_left_control(state->section_heading_edit, margin, y, left_width, button_height, TRUE);
+        }
+        y += button_height + margin;
+
+        const int content_height = std::max(1, y - margin);
+        const int new_max_scroll = std::max(0, content_height - left_visible_height);
+        if (state->left_scroll_offset > new_max_scroll) {
+            state->left_scroll_offset = new_max_scroll;
+            state->left_scroll_max = new_max_scroll;
+            LayoutReportTemplateDesigner(hwnd, state);
+            return;
+        }
+        state->left_scroll_max = new_max_scroll;
+        if (state->left_scroll_bar) {
+            MoveWindow(
+                state->left_scroll_bar,
+                margin + left_width + 4,
+                margin,
+                scroll_bar_width,
+                left_visible_height,
+                TRUE);
+            ShowWindow(state->left_scroll_bar, new_max_scroll > 0 ? SW_SHOW : SW_HIDE);
+            SCROLLINFO scroll_info = {};
+            scroll_info.cbSize = sizeof(scroll_info);
+            scroll_info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+            scroll_info.nMin = 0;
+            scroll_info.nMax = new_max_scroll + left_visible_height - 1;
+            scroll_info.nPage = static_cast<UINT>(left_visible_height);
+            scroll_info.nPos = state->left_scroll_offset;
+            SetScrollInfo(state->left_scroll_bar, SB_CTL, &scroll_info, TRUE);
+        }
+
+        if (state->preview) {
+            MoveWindow(
+                state->preview,
+                preview_left,
+                margin,
+                std::max(0, client_right - preview_left - margin),
+                std::max(0, bottom_top - margin - gap),
+                TRUE);
+        }
+
+        if (state->status) {
+            MoveWindow(
+                state->status,
+                margin,
+                bottom_top + 5,
+                std::max(0, client_right - margin * 2 - 530),
+                22,
+                TRUE);
+        }
+
+        int right = client_right - margin;
+        auto move_bottom_button = [&](int control_id, int width) {
+            right -= width;
+            HWND control = GetDlgItem(hwnd, control_id);
+            if (control) {
+                MoveWindow(control, right, bottom_top, width, button_height, TRUE);
+            }
+            right -= gap;
+        };
+        move_bottom_button(kTemplateDesignerClose, 80);
+        move_bottom_button(kTemplateDesignerSave, 106);
+        move_bottom_button(kTemplateDesignerApply, 86);
+        move_bottom_button(kTemplateDesignerDefault, 90);
+        move_bottom_button(kTemplateDesignerInsertField, 96);
+    }
+
+    static void RegisterReportTemplateDesignerClass()
+    {
+        static bool registered = false;
+        if (registered) {
+            return;
+        }
+
+        WNDCLASSEXW window_class = {};
+        window_class.cbSize = sizeof(window_class);
+        window_class.lpfnWndProc = &CameraPreviewApp::ReportTemplateDesignerWindowProc;
+        window_class.hInstance = GetModuleHandleW(nullptr);
+        window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        window_class.lpszClassName = kReportTemplateDesignerClassName;
+        registered =
+            RegisterClassExW(&window_class) != 0 ||
+            GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+
+        WNDCLASSEXW preview_class = {};
+        preview_class.cbSize = sizeof(preview_class);
+        preview_class.lpfnWndProc = &CameraPreviewApp::ReportTemplatePreviewWindowProc;
+        preview_class.hInstance = GetModuleHandleW(nullptr);
+        preview_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        preview_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        preview_class.lpszClassName = kReportTemplatePreviewClassName;
+        RegisterClassExW(&preview_class);
+    }
+
+    static LRESULT CALLBACK ReportTemplatePreviewWindowProc(
+        HWND hwnd,
+        UINT message,
+        WPARAM wparam,
+        LPARAM lparam)
+    {
+        switch (message) {
+        case WM_CREATE: {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(create ? create->lpCreateParams : nullptr));
+            return 0;
+        }
+        case WM_PAINT: {
+            auto* state =
+                reinterpret_cast<ReportTemplateDesignerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            DrawTemplatePreview(hwnd, state);
+            return 0;
+        }
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    static LRESULT CALLBACK ReportTemplateDesignerWindowProc(
+        HWND hwnd,
+        UINT message,
+        WPARAM wparam,
+        LPARAM lparam)
+    {
+        auto* state = reinterpret_cast<ReportTemplateDesignerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        switch (message) {
+        case WM_CREATE: {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+            state = static_cast<ReportTemplateDesignerState*>(create ? create->lpCreateParams : nullptr);
+            if (!state || !state->app) {
+                return -1;
+            }
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+            state->app->report_template_designer_ = hwnd;
+
+            HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            const DWORD button_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
+            const DWORD checkbox_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX;
+            auto create_button = [&](int control_id, const wchar_t* text) {
+                HWND control = CreateWindowW(
+                    L"BUTTON",
+                    text,
+                    button_style,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(control_id)),
+                    GetModuleHandleW(nullptr),
+                    nullptr);
+                if (control) {
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                }
+            };
+            auto create_checkbox = [&](int control_id, const wchar_t* text) -> HWND {
+                HWND control = CreateWindowW(
+                    L"BUTTON",
+                    text,
+                    checkbox_style,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(control_id)),
+                    GetModuleHandleW(nullptr),
+                    nullptr);
+                if (control) {
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                }
+                return control;
+            };
+            auto create_radio = [&](int control_id, const wchar_t* text, bool starts_group = false) -> HWND {
+                HWND control = CreateWindowW(
+                    L"BUTTON",
+                    text,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON |
+                        (starts_group ? WS_GROUP : 0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(control_id)),
+                    GetModuleHandleW(nullptr),
+                    nullptr);
+                if (control) {
+                    SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                }
+                return control;
+            };
+
+            create_button(kTemplateDesignerDefault, L"Default");
+            create_button(kTemplateDesignerApply, L"Apply");
+            create_button(kTemplateDesignerSave, L"Save Template");
+            create_button(kTemplateDesignerClose, L"Close");
+            create_button(kTemplateDesignerMoveUp, L"Move Up");
+            create_button(kTemplateDesignerMoveDown, L"Move Down");
+            create_button(kTemplateDesignerInsertField, L"Insert Field");
+
+            state->title_label = CreateWindowW(
+                L"STATIC",
+                L"Report title",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerTitleLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->title_label) {
+                SendMessageW(state->title_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->title_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerTitleEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->title_edit) {
+                SendMessageW(state->title_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->title_edit, EM_SETLIMITTEXT, 120, 0);
+            }
+
+            state->subtitle_label = CreateWindowW(
+                L"STATIC",
+                L"Subtitle",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSubtitleLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->subtitle_label) {
+                SendMessageW(state->subtitle_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->subtitle_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSubtitleEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->subtitle_edit) {
+                SendMessageW(state->subtitle_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->subtitle_edit, EM_SETLIMITTEXT, 180, 0);
+            }
+
+            state->page_layout_label = CreateWindowW(
+                L"STATIC",
+                L"Page layout",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerPageLayoutLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->page_layout_label) {
+                SendMessageW(state->page_layout_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+            state->page_layout_standard =
+                create_radio(kTemplateDesignerPageLayoutStandard, L"Standard", true);
+            state->page_layout_wide =
+                create_radio(kTemplateDesignerPageLayoutWide, L"Wide");
+            state->page_layout_compact =
+                create_radio(kTemplateDesignerPageLayoutCompact, L"Compact");
+
+            state->print_orientation_label = CreateWindowW(
+                L"STATIC",
+                L"Print",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerPrintOrientationLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->print_orientation_label) {
+                SendMessageW(
+                    state->print_orientation_label,
+                    WM_SETFONT,
+                    reinterpret_cast<WPARAM>(font),
+                    TRUE);
+            }
+            state->print_orientation_portrait =
+                create_radio(kTemplateDesignerPrintOrientationPortrait, L"Portrait", true);
+            state->print_orientation_landscape =
+                create_radio(kTemplateDesignerPrintOrientationLandscape, L"Landscape");
+
+            state->image_checkbox = create_checkbox(kTemplateDesignerImage, L"Current image");
+            state->image_size_label = CreateWindowW(
+                L"STATIC",
+                L"Image size",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerImageSizeLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->image_size_label) {
+                SendMessageW(state->image_size_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+            state->image_size_original =
+                create_radio(kTemplateDesignerImageSizeOriginal, L"Original", true);
+            state->image_size_fit =
+                create_radio(kTemplateDesignerImageSizeFit, L"Fit page");
+            state->image_size_compact =
+                create_radio(kTemplateDesignerImageSizeCompact, L"Compact");
+            state->image_caption_label = CreateWindowW(
+                L"STATIC",
+                L"Image caption",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerImageCaptionLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->image_caption_label) {
+                SendMessageW(state->image_caption_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+            state->image_caption_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerImageCaptionEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->image_caption_edit) {
+                SendMessageW(state->image_caption_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->image_caption_edit, EM_SETLIMITTEXT, 240, 0);
+            }
+            state->info_checkbox = create_checkbox(kTemplateDesignerInfo, L"Report information");
+            state->notes_checkbox = create_checkbox(kTemplateDesignerNotes, L"Notes");
+            state->summary_checkbox = create_checkbox(kTemplateDesignerSummary, L"Measurement summary");
+            state->table_checkbox = create_checkbox(kTemplateDesignerTable, L"Measurement data table");
+            state->raw_values_checkbox = create_checkbox(kTemplateDesignerRawValues, L"Raw pixel values");
+            state->group_measurements_checkbox =
+                create_checkbox(kTemplateDesignerGroupMeasurements, L"Group by type");
+            state->measurement_precision_label = CreateWindowW(
+                L"STATIC",
+                L"Value decimals",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(
+                    static_cast<INT_PTR>(kTemplateDesignerMeasurementPrecisionLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->measurement_precision_label) {
+                SendMessageW(
+                    state->measurement_precision_label,
+                    WM_SETFONT,
+                    reinterpret_cast<WPARAM>(font),
+                    TRUE);
+            }
+            state->measurement_precision_auto =
+                create_radio(kTemplateDesignerMeasurementPrecisionAuto, L"Auto", true);
+            state->measurement_precision_two =
+                create_radio(kTemplateDesignerMeasurementPrecisionTwo, L"2");
+            state->measurement_precision_three =
+                create_radio(kTemplateDesignerMeasurementPrecisionThree, L"3");
+            state->calibration_checkbox = create_checkbox(kTemplateDesignerCalibration, L"Calibration and image fields");
+            state->processing_checkbox = create_checkbox(kTemplateDesignerProcessing, L"Image processing fields");
+            state->footer_checkbox = create_checkbox(kTemplateDesignerFooter, L"Footer");
+            state->footer_text_label = CreateWindowW(
+                L"STATIC",
+                L"Footer text",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerFooterTextLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->footer_text_label) {
+                SendMessageW(state->footer_text_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+            state->footer_text_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerFooterTextEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->footer_text_edit) {
+                SendMessageW(state->footer_text_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->footer_text_edit, EM_SETLIMITTEXT, 220, 0);
+            }
+
+            state->accent_label = CreateWindowW(
+                L"STATIC",
+                L"Accent color",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerAccentLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->accent_label) {
+                SendMessageW(state->accent_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+            state->accent_blue = create_radio(kTemplateDesignerAccentBlue, L"Blue", true);
+            state->accent_green = create_radio(kTemplateDesignerAccentGreen, L"Green");
+            state->accent_gold = create_radio(kTemplateDesignerAccentGold, L"Gold");
+            state->accent_magenta = create_radio(kTemplateDesignerAccentMagenta, L"Magenta");
+
+            state->info_label = CreateWindowW(
+                L"STATIC",
+                L"Information fields",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerInfoLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->info_label) {
+                SendMessageW(state->info_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->info_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerInfoEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->info_edit) {
+                SendMessageW(state->info_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->info_edit, EM_SETLIMITTEXT, 1200, 0);
+            }
+
+            state->notes_label = CreateWindowW(
+                L"STATIC",
+                L"Notes text",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerNotesLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->notes_label) {
+                SendMessageW(state->notes_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->notes_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerNotesEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->notes_edit) {
+                SendMessageW(state->notes_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->notes_edit, EM_SETLIMITTEXT, 1000, 0);
+            }
+
+            state->section_label = CreateWindowW(
+                L"STATIC",
+                L"Report sections",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSectionLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->section_label) {
+                SendMessageW(state->section_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->section_list = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"LISTBOX",
+                nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOINTEGRALHEIGHT,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSectionList)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->section_list) {
+                SendMessageW(state->section_list, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->section_heading_label = CreateWindowW(
+                L"STATIC",
+                L"Selected heading",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSectionHeadingLabel)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->section_heading_label) {
+                SendMessageW(state->section_heading_label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            state->section_heading_edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                L"EDIT",
+                L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerSectionHeadingEdit)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->section_heading_edit) {
+                SendMessageW(state->section_heading_edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                SendMessageW(state->section_heading_edit, EM_SETLIMITTEXT, 120, 0);
+            }
+
+            state->left_scroll_bar = CreateWindowW(
+                L"SCROLLBAR",
+                nullptr,
+                WS_CHILD | WS_VISIBLE | SBS_VERT,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerLeftScrollBar)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+
+            state->preview = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                kReportTemplatePreviewClassName,
+                nullptr,
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerPreview)),
+                GetModuleHandleW(nullptr),
+                state);
+
+            state->status = CreateWindowW(
+                L"STATIC",
+                L"Visual template ready.",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTemplateDesignerStatus)),
+                GetModuleHandleW(nullptr),
+                nullptr);
+            if (state->status) {
+                SendMessageW(state->status, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            }
+
+            ApplyVisualTemplateOptions(state, state->app->visual_report_template_options_);
+            LayoutReportTemplateDesigner(hwnd, state);
+            return 0;
+        }
+        case WM_SIZE:
+            LayoutReportTemplateDesigner(hwnd, state);
+            return 0;
+        case WM_GETMINMAXINFO: {
+            auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+            if (limits) {
+                limits->ptMinTrackSize.x = kReportTemplateDesignerMinWidth;
+                limits->ptMinTrackSize.y = kReportTemplateDesignerMinHeight;
+            }
+            return 0;
+        }
+        case WM_VSCROLL:
+            if (state && reinterpret_cast<HWND>(lparam) == state->left_scroll_bar) {
+                HandleReportTemplateDesignerLeftScroll(hwnd, state, LOWORD(wparam));
+                return 0;
+            }
+            break;
+        case WM_MOUSEWHEEL:
+            if (state) {
+                POINT point = {
+                    static_cast<int>(static_cast<short>(LOWORD(lparam))),
+                    static_cast<int>(static_cast<short>(HIWORD(lparam)))
+                };
+                ScreenToClient(hwnd, &point);
+                RECT client = {};
+                GetClientRect(hwnd, &client);
+                const int left_panel_width = std::clamp(static_cast<int>(client.right) / 3, 310, 360);
+                if (point.x >= 0 && point.x <= 12 + left_panel_width + 12) {
+                    const int wheel_delta = static_cast<short>(HIWORD(wparam));
+                    const int wheel_steps = std::max(1, std::abs(wheel_delta) / WHEEL_DELTA);
+                    const int target_offset = state->left_scroll_offset -
+                        (wheel_delta > 0 ? 1 : -1) * wheel_steps * 72;
+                    ScrollReportTemplateDesignerLeftTo(hwnd, state, target_offset);
+                    return 0;
+                }
+            }
+            break;
+        case WM_COMMAND:
+            if (!state || !state->app) {
+                break;
+            }
+            if (HIWORD(wparam) == EN_SETFOCUS && IsTemplateTextTargetId(LOWORD(wparam))) {
+                state->last_text_target = reinterpret_cast<HWND>(lparam);
+                return 0;
+            }
+            if (HIWORD(wparam) == EN_CHANGE &&
+                (LOWORD(wparam) == kTemplateDesignerTitleEdit ||
+                 LOWORD(wparam) == kTemplateDesignerSubtitleEdit ||
+                 LOWORD(wparam) == kTemplateDesignerImageCaptionEdit ||
+                 LOWORD(wparam) == kTemplateDesignerFooterTextEdit ||
+                 LOWORD(wparam) == kTemplateDesignerInfoEdit ||
+                 LOWORD(wparam) == kTemplateDesignerNotesEdit)) {
+                RefreshTemplatePreview(state);
+                return 0;
+            }
+            if (LOWORD(wparam) == kTemplateDesignerSectionHeadingEdit &&
+                HIWORD(wparam) == EN_CHANGE) {
+                SaveSelectedTemplateSectionHeading(state);
+                RefreshTemplatePreview(state);
+                return 0;
+            }
+            if (LOWORD(wparam) == kTemplateDesignerSectionList &&
+                HIWORD(wparam) == LBN_SELCHANGE) {
+                RefreshTemplateSectionHeadingEdit(state);
+                return 0;
+            }
+            switch (LOWORD(wparam)) {
+            case kTemplateDesignerImage:
+            case kTemplateDesignerInfo:
+            case kTemplateDesignerNotes:
+            case kTemplateDesignerSummary:
+            case kTemplateDesignerTable:
+            case kTemplateDesignerRawValues:
+            case kTemplateDesignerGroupMeasurements:
+            case kTemplateDesignerCalibration:
+            case kTemplateDesignerProcessing:
+            case kTemplateDesignerFooter:
+            case kTemplateDesignerAccentBlue:
+            case kTemplateDesignerAccentGreen:
+            case kTemplateDesignerAccentGold:
+            case kTemplateDesignerAccentMagenta:
+            case kTemplateDesignerPageLayoutStandard:
+            case kTemplateDesignerPageLayoutWide:
+            case kTemplateDesignerPageLayoutCompact:
+            case kTemplateDesignerPrintOrientationPortrait:
+            case kTemplateDesignerPrintOrientationLandscape:
+            case kTemplateDesignerMeasurementPrecisionAuto:
+            case kTemplateDesignerMeasurementPrecisionTwo:
+            case kTemplateDesignerMeasurementPrecisionThree:
+            case kTemplateDesignerImageSizeOriginal:
+            case kTemplateDesignerImageSizeFit:
+            case kTemplateDesignerImageSizeCompact:
+                SyncTemplateDesignerControlAvailability(state);
+                RefreshTemplatePreview(state);
+                return 0;
+            case kTemplateDesignerDefault:
+                ApplyVisualTemplateOptions(state, ImageReportTemplateOptions{});
+                SetDesignerStatus(state->status, L"Default visual layout restored.");
+                return 0;
+            case kTemplateDesignerMoveUp:
+                MoveSelectedTemplateSection(state, -1);
+                return 0;
+            case kTemplateDesignerMoveDown:
+                MoveSelectedTemplateSection(state, 1);
+                return 0;
+            case kTemplateDesignerInsertField:
+                ShowTemplatePlaceholderMenu(hwnd, state);
+                return 0;
+            case kTemplateDesignerApply:
+                state->app->ApplyDesignedReportTemplate(state);
+                return 0;
+            case kTemplateDesignerSave:
+                state->app->SaveDesignedReportTemplate(hwnd, state);
+                return 0;
+            case kTemplateDesignerClose:
+                DestroyWindow(hwnd);
+                return 0;
+            default:
+                break;
+            }
+            break;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            if (state) {
+                if (state->app && state->app->report_template_designer_ == hwnd) {
+                    state->app->report_template_designer_ = nullptr;
+                }
+                delete state;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+        default:
+            break;
+        }
+        return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
     static bool ReadPositiveNumber(HWND edit, double& value)
     {
         return TextInputParser::TryParsePositiveDouble(ReadEditText(edit, 64), value);
@@ -2226,6 +4903,119 @@ private:
     static bool ReadByteValue(HWND edit, int& value)
     {
         return TextInputParser::TryParseByte(ReadEditText(edit, 32), value);
+    }
+
+    static bool DecodeUtf8(const std::string& bytes, std::wstring& text)
+    {
+        if (bytes.empty()) {
+            text.clear();
+            return true;
+        }
+        const int size = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            bytes.data(),
+            static_cast<int>(bytes.size()),
+            nullptr,
+            0);
+        if (size <= 0) {
+            return false;
+        }
+        text.assign(static_cast<std::size_t>(size), L'\0');
+        MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            bytes.data(),
+            static_cast<int>(bytes.size()),
+            text.data(),
+            size);
+        return true;
+    }
+
+    static bool DecodeAnsi(const std::string& bytes, std::wstring& text)
+    {
+        if (bytes.empty()) {
+            text.clear();
+            return true;
+        }
+        const int size = MultiByteToWideChar(
+            CP_ACP,
+            0,
+            bytes.data(),
+            static_cast<int>(bytes.size()),
+            nullptr,
+            0);
+        if (size <= 0) {
+            return false;
+        }
+        text.assign(static_cast<std::size_t>(size), L'\0');
+        MultiByteToWideChar(
+            CP_ACP,
+            0,
+            bytes.data(),
+            static_cast<int>(bytes.size()),
+            text.data(),
+            size);
+        return true;
+    }
+
+    static bool DecodeUtf16Le(const std::string& bytes, std::wstring& text)
+    {
+        const std::size_t first = bytes.size() >= 2U &&
+            static_cast<unsigned char>(bytes[0]) == 0xFF &&
+            static_cast<unsigned char>(bytes[1]) == 0xFE
+                ? 2U
+                : 0U;
+        if (((bytes.size() - first) % 2U) != 0U) {
+            return false;
+        }
+
+        text.clear();
+        text.reserve((bytes.size() - first) / 2U);
+        for (std::size_t index = first; index + 1U < bytes.size(); index += 2U) {
+            const wchar_t value = static_cast<wchar_t>(
+                static_cast<unsigned char>(bytes[index]) |
+                (static_cast<unsigned char>(bytes[index + 1U]) << 8));
+            text.push_back(value);
+        }
+        return true;
+    }
+
+    static bool ReadTextFile(
+        const std::filesystem::path& path,
+        std::wstring& text,
+        std::wstring& error)
+    {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            error = L"Failed to open report template.";
+            return false;
+        }
+
+        std::ostringstream stream;
+        stream << input.rdbuf();
+        std::string bytes = stream.str();
+        if (bytes.size() >= 3U &&
+            static_cast<unsigned char>(bytes[0]) == 0xEF &&
+            static_cast<unsigned char>(bytes[1]) == 0xBB &&
+            static_cast<unsigned char>(bytes[2]) == 0xBF) {
+            bytes.erase(0, 3);
+        }
+
+        if (bytes.size() >= 2U &&
+            static_cast<unsigned char>(bytes[0]) == 0xFF &&
+            static_cast<unsigned char>(bytes[1]) == 0xFE) {
+            if (!DecodeUtf16Le(bytes, text)) {
+                error = L"Failed to read report template text.";
+                return false;
+            }
+        } else if (!DecodeUtf8(bytes, text) && !DecodeAnsi(bytes, text)) {
+            error = L"Failed to read report template text.";
+            return false;
+        }
+
+        error.clear();
+        return true;
     }
 
     static std::vector<CalibrationProfile> MakeDefaultObjectiveCalibrations()
@@ -2323,6 +5113,22 @@ private:
         const std::wstring status =
             MeasurementDisplayActions::CalibrationStatusLine(ActiveObjectiveLabel(), calibration_);
         SetWindowTextW(label, status.c_str());
+    }
+
+    void SyncReportTemplateStatus() const
+    {
+        HWND label = GetDlgItem(hwnd_, kIdReportTemplateStatus);
+        if (!label) {
+            return;
+        }
+
+        std::wstring text = L"Template: default";
+        if (!report_template_path_.empty()) {
+            text = L"Template: " + std::filesystem::path(report_template_path_).filename().wstring();
+        } else if (!report_template_text_.empty()) {
+            text = L"Template: custom";
+        }
+        SetWindowTextW(label, text.c_str());
     }
 
     static void ApplyCameraDeviceListPresentation(
@@ -2654,7 +5460,7 @@ private:
         SetStatus(final_status);
     }
 
-    std::wstring BuildDiagnosticsReport()
+    DiagnosticReportActionInput BuildDiagnosticsInput()
     {
         SYSTEMTIME now = {};
         GetLocalTime(&now);
@@ -2690,6 +5496,7 @@ private:
         input.enumerated_devices = camera_devices_;
         input.latest_frame_source = frame_source_text;
         input.latest_frame = std::move(frame);
+        input.objective_label = ActiveObjectiveLabel();
         input.calibration = calibration_;
         input.display_unit = DisplayUnit();
         input.preview_display_mode = PreviewDisplayActions::PreviewModeLabel(
@@ -2716,7 +5523,26 @@ private:
             input.processing_result_source = processing_frames_.DisplaySourceLabel();
         }
 
-        return DiagnosticReportActions::BuildReport(std::move(input), measurements_);
+        return input;
+    }
+
+    std::wstring BuildDiagnosticsReport()
+    {
+        DiagnosticReportActionInput input = BuildDiagnosticsInput();
+        return DiagnosticReportActions::BuildReport(std::move(input), measurements_, report_template_text_);
+    }
+
+    std::wstring BuildImageReport(
+        const std::wstring& image_file_name,
+        const ImageFrame& report_image)
+    {
+        DiagnosticReportActionInput input = BuildDiagnosticsInput();
+        return DiagnosticReportActions::BuildImageReport(
+            std::move(input),
+            measurements_,
+            image_file_name,
+            report_image,
+            report_template_text_);
     }
 
     std::wstring BuildSdkTelemetry() const
@@ -2836,6 +5662,10 @@ private:
     std::wstring status_ = L"Ready.";
     std::wstring preview_telemetry_;
     std::wstring latest_frame_source_;
+    std::wstring report_template_text_;
+    std::wstring report_template_path_;
+    ImageReportTemplateOptions visual_report_template_options_;
+    HWND report_template_designer_ = nullptr;
     float requested_exposure_ms_ = 10.0f;
     std::atomic_int camera_count_ = 0;
     std::atomic_int selected_camera_index_ = -1;
@@ -3216,6 +6046,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdSaveDiagnostics:
             app->SaveDiagnosticsReport();
+            return 0;
+        case kIdDesignReportTemplate:
+            app->ShowReportTemplateDesigner();
+            return 0;
+        case kIdLoadReportTemplate:
+            app->LoadReportTemplate();
+            return 0;
+        case kIdClearReportTemplate:
+            app->ClearReportTemplate();
             return 0;
         case kIdSaveDye:
             app->SaveDyeProfile(
