@@ -383,6 +383,11 @@ class CameraPreviewApp {
         HWND preview = nullptr;
         HWND status = nullptr;
         HWND last_text_target = nullptr;
+        struct PreviewSectionHitArea {
+            ImageReportTemplateSection section = ImageReportTemplateSection::CurrentImage;
+            RECT bounds{};
+        };
+        std::vector<PreviewSectionHitArea> preview_hit_areas;
         int left_scroll_offset = 0;
         int left_scroll_max = 0;
         std::vector<ImageReportTemplateSection> section_order;
@@ -3299,6 +3304,75 @@ private:
         }
     }
 
+    static std::optional<std::size_t> SelectedTemplateSectionIndex(
+        const ReportTemplateDesignerState* state)
+    {
+        if (!state || !state->section_list) {
+            return std::nullopt;
+        }
+
+        const LRESULT selection = SendMessageW(state->section_list, LB_GETCURSEL, 0, 0);
+        if (selection == LB_ERR ||
+            selection < 0 ||
+            selection >= static_cast<LRESULT>(state->section_order.size())) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(selection);
+    }
+
+    static bool SelectTemplateSectionIndex(
+        ReportTemplateDesignerState* state,
+        std::size_t selected_index)
+    {
+        if (!state || !state->section_list || selected_index >= state->section_order.size()) {
+            return false;
+        }
+
+        SendMessageW(state->section_list, LB_SETCURSEL, selected_index, 0);
+        RefreshTemplateSectionHeadingEdit(state);
+        RefreshTemplatePreview(state);
+        return true;
+    }
+
+    static bool SelectTemplateSection(
+        ReportTemplateDesignerState* state,
+        ImageReportTemplateSection section)
+    {
+        if (!state) {
+            return false;
+        }
+
+        const auto section_match = std::find(
+            state->section_order.begin(),
+            state->section_order.end(),
+            section);
+        if (section_match == state->section_order.end()) {
+            return false;
+        }
+
+        return SelectTemplateSectionIndex(
+            state,
+            static_cast<std::size_t>(section_match - state->section_order.begin()));
+    }
+
+    static std::optional<ImageReportTemplateSection> HitTestTemplatePreviewSection(
+        const ReportTemplateDesignerState* state,
+        POINT point)
+    {
+        if (!state) {
+            return std::nullopt;
+        }
+
+        for (auto area = state->preview_hit_areas.rbegin();
+             area != state->preview_hit_areas.rend();
+             ++area) {
+            if (PtInRect(&area->bounds, point)) {
+                return area->section;
+            }
+        }
+        return std::nullopt;
+    }
+
     static std::wstring PreviewFrameSizeText(const ImageFrame& frame)
     {
         if (!frame.IsValid()) {
@@ -3479,13 +3553,17 @@ private:
         }
     }
 
-    static void DrawTemplatePreview(HWND hwnd, const ReportTemplateDesignerState* state)
+    static void DrawTemplatePreview(HWND hwnd, ReportTemplateDesignerState* state)
     {
         PAINTSTRUCT paint = {};
         HDC hdc = BeginPaint(hwnd, &paint);
         RECT client = {};
         GetClientRect(hwnd, &client);
         FillSolidRect(hdc, client, RGB(228, 233, 238));
+
+        if (state) {
+            state->preview_hit_areas.clear();
+        }
 
         const ImageReportTemplateOptions options = ReadVisualTemplateOptions(state);
         const CameraPreviewApp* app = state ? state->app : nullptr;
@@ -3526,6 +3604,10 @@ private:
             : options.title;
         const COLORREF accent_color = TemplateAccentColor(options.accent);
         const COLORREF accent_soft_color = TemplateAccentSoftColor(options.accent);
+        const auto selected_index = SelectedTemplateSectionIndex(state);
+        const ImageReportTemplateSection selected_section = selected_index.has_value()
+            ? state->section_order[*selected_index]
+            : ImageReportTemplateSection::CurrentImage;
 
         HFONT title_font = CreateFontW(
             24,
@@ -3593,10 +3675,35 @@ private:
         FillSolidRect(hdc, accent_line, accent_color);
         y += 18;
 
-        auto draw_image_section = [&](const std::wstring& label, const std::wstring& caption, int height, const ImageFrame& frame) {
+        auto draw_selection_outline = [&](const RECT& bounds, bool selected) {
+            if (!selected) {
+                return;
+            }
+            HPEN selected_pen = CreatePen(PS_SOLID, 2, accent_color);
+            HGDIOBJ previous_pen = selected_pen ? SelectObject(hdc, selected_pen) : nullptr;
+            HGDIOBJ previous_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            Rectangle(hdc, bounds.left, bounds.top, bounds.right, bounds.bottom);
+            if (previous_brush) {
+                SelectObject(hdc, previous_brush);
+            }
+            if (previous_pen) {
+                SelectObject(hdc, previous_pen);
+            }
+            if (selected_pen) {
+                DeleteObject(selected_pen);
+            }
+        };
+
+        auto draw_image_section = [&](
+            ImageReportTemplateSection section,
+            const std::wstring& label,
+            const std::wstring& caption,
+            int height,
+            const ImageFrame& frame) {
             if (y + height + 12 > page.bottom - 26) {
                 return;
             }
+            const int section_top = y;
             if (section_font) {
                 SelectObject(hdc, section_font);
             }
@@ -3650,12 +3757,26 @@ private:
             SetTextColor(hdc, RGB(96, 112, 128));
             RECT caption_rect{block.left + 14, block.bottom - 25, block.right - 14, block.bottom - 8};
             DrawTextW(hdc, caption.c_str(), -1, &caption_rect, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            RECT hit_bounds{page.left + 24, section_top - 2, page.right - 24, block.bottom + 4};
+            if (state) {
+                state->preview_hit_areas.push_back(
+                    ReportTemplateDesignerState::PreviewSectionHitArea{section, hit_bounds});
+            }
+            draw_selection_outline(
+                hit_bounds,
+                selected_index.has_value() && selected_section == section);
             y += height + 18;
         };
-        auto draw_section = [&](const std::wstring& label, const std::wstring& detail, int height) {
+        auto draw_section = [&](
+            ImageReportTemplateSection section,
+            const std::wstring& label,
+            const std::wstring& detail,
+            int height) {
             if (y + height + 12 > page.bottom - 26) {
                 return;
             }
+            const int section_top = y;
             if (section_font) {
                 SelectObject(hdc, section_font);
             }
@@ -3691,6 +3812,15 @@ private:
                 -1,
                 &detail_rect,
                 DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
+
+            RECT hit_bounds{page.left + 24, section_top - 2, page.right - 24, block.bottom + 4};
+            if (state) {
+                state->preview_hit_areas.push_back(
+                    ReportTemplateDesignerState::PreviewSectionHitArea{section, hit_bounds});
+            }
+            draw_selection_outline(
+                hit_bounds,
+                selected_index.has_value() && selected_section == section);
             y += height + 18;
         };
 
@@ -3710,6 +3840,7 @@ private:
                             ? L"Current image: " + PreviewFrameSizeText(preview_frame)
                             : options.image_caption;
                     draw_image_section(
+                        section,
                         VisualTemplateSectionHeading(options, section),
                         image_caption,
                         image_preview_height,
@@ -3722,7 +3853,7 @@ private:
                         TextInputParser::Trim(options.report_information_fields).empty()
                             ? L"No report information."
                             : options.report_information_fields;
-                    draw_section(VisualTemplateSectionHeading(options, section), fields, 76);
+                    draw_section(section, VisualTemplateSectionHeading(options, section), fields, 76);
                 }
                 break;
             case ImageReportTemplateSection::ReportNotes:
@@ -3730,12 +3861,13 @@ private:
                     const std::wstring notes = TextInputParser::Trim(options.notes).empty()
                         ? L"No notes."
                         : options.notes;
-                    draw_section(VisualTemplateSectionHeading(options, section), notes, 76);
+                    draw_section(section, VisualTemplateSectionHeading(options, section), notes, 76);
                 }
                 break;
             case ImageReportTemplateSection::MeasurementSummary:
                 if (options.show_measurement_summary) {
                     draw_section(
+                        section,
                         VisualTemplateSectionHeading(options, section),
                         PreviewMeasurementSummaryText(app),
                         88);
@@ -3745,6 +3877,7 @@ private:
                 if (options.show_measurement_table) {
                     std::wstring table_detail = PreviewMeasurementTableText(app, options);
                     draw_section(
+                        section,
                         VisualTemplateSectionHeading(options, section),
                         table_detail,
                         92);
@@ -3753,6 +3886,7 @@ private:
             case ImageReportTemplateSection::ImageDetails:
                 if (options.show_calibration_details || options.show_processing_details) {
                     draw_section(
+                        section,
                         VisualTemplateSectionHeading(options, section),
                         PreviewImageDetailsText(app),
                         96);
@@ -4225,6 +4359,37 @@ private:
                 reinterpret_cast<ReportTemplateDesignerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
             DrawTemplatePreview(hwnd, state);
             return 0;
+        }
+        case WM_LBUTTONDOWN: {
+            auto* state =
+                reinterpret_cast<ReportTemplateDesignerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            POINT point = {
+                static_cast<int>(static_cast<short>(LOWORD(lparam))),
+                static_cast<int>(static_cast<short>(HIWORD(lparam)))
+            };
+            const auto section = HitTestTemplatePreviewSection(state, point);
+            if (section.has_value() && SelectTemplateSection(state, *section)) {
+                const std::wstring message =
+                    L"Selected preview section: " + TemplateSectionHeadingText(state, *section);
+                SetDesignerStatus(state->status, message);
+                SetFocus(state->section_heading_edit ? state->section_heading_edit : hwnd);
+                return 0;
+            }
+            break;
+        }
+        case WM_SETCURSOR: {
+            if (LOWORD(lparam) == HTCLIENT) {
+                auto* state =
+                    reinterpret_cast<ReportTemplateDesignerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+                POINT point = {};
+                GetCursorPos(&point);
+                ScreenToClient(hwnd, &point);
+                if (HitTestTemplatePreviewSection(state, point).has_value()) {
+                    SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                    return TRUE;
+                }
+            }
+            break;
         }
         default:
             break;
