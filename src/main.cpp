@@ -390,6 +390,8 @@ class CameraPreviewApp {
         std::vector<PreviewSectionHitArea> preview_hit_areas;
         int left_scroll_offset = 0;
         int left_scroll_max = 0;
+        int section_heading_anchor_top = 0;
+        int section_heading_anchor_height = 0;
         std::vector<ImageReportTemplateSection> section_order;
         std::wstring current_image_heading;
         std::wstring report_information_heading;
@@ -660,7 +662,7 @@ public:
         SetFunctionPanelVisible(!function_panel_visible_);
     }
 
-    void SetFunctionPanelDockedLeft(bool dock_left)
+    void ApplyFunctionPanelDockedLeft(bool dock_left, bool announce)
     {
         if (function_panel_docked_left_ == dock_left) {
             SyncFunctionPanelChrome();
@@ -672,12 +674,83 @@ public:
         SyncFunctionPanelChrome();
         LayoutControls(hwnd_);
         InvalidateRect(hwnd_, nullptr, FALSE);
-        SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+        if (announce) {
+            SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+        }
+    }
+
+    void SetFunctionPanelDockedLeft(bool dock_left)
+    {
+        ApplyFunctionPanelDockedLeft(dock_left, true);
     }
 
     void ToggleFunctionPanelDock()
     {
         SetFunctionPanelDockedLeft(!function_panel_docked_left_);
+    }
+
+    RECT FunctionPanelTitleRect() const
+    {
+        RECT title = GetSidePanelRect(hwnd_);
+        if (!function_panel_visible_ || title.right <= title.left || title.bottom <= title.top) {
+            return RECT{};
+        }
+        title.bottom = std::min(title.bottom, title.top + kPanelTitleHeight);
+        return title;
+    }
+
+    bool PointInFunctionPanelTitle(POINT point) const
+    {
+        const RECT title = FunctionPanelTitleRect();
+        return title.right > title.left && title.bottom > title.top && PtInRect(&title, point);
+    }
+
+    bool ShouldShowFunctionPanelDockCursor(POINT point) const
+    {
+        return function_panel_drag_active_ || PointInFunctionPanelTitle(point);
+    }
+
+    bool BeginFunctionPanelDockDrag(POINT point)
+    {
+        if (!PointInFunctionPanelTitle(point)) {
+            return false;
+        }
+
+        function_panel_drag_active_ = true;
+        SetCapture(hwnd_);
+        SetStatus(L"Dragging function panel.");
+        return true;
+    }
+
+    bool ContinueFunctionPanelDockDrag(POINT point)
+    {
+        if (!function_panel_drag_active_) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd_, &client);
+        const int middle = client.left + (client.right - client.left) / 2;
+        const bool target_left = point.x < middle;
+        if (target_left != function_panel_docked_left_) {
+            ApplyFunctionPanelDockedLeft(target_left, false);
+            SetStatus(target_left ? L"Release to dock panel left." : L"Release to dock panel right.");
+        }
+        return true;
+    }
+
+    bool EndFunctionPanelDockDrag()
+    {
+        if (!function_panel_drag_active_) {
+            return false;
+        }
+
+        function_panel_drag_active_ = false;
+        if (GetCapture() == hwnd_) {
+            ReleaseCapture();
+        }
+        SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+        return true;
     }
 
     int PanelScrollOffset() const
@@ -3937,6 +4010,51 @@ private:
         return true;
     }
 
+    static bool ScrollReportTemplateDesignerLeftRangeIntoView(
+        HWND hwnd,
+        ReportTemplateDesignerState* state,
+        int content_top,
+        int content_height)
+    {
+        if (!state) {
+            return false;
+        }
+
+        RECT client = {};
+        GetClientRect(hwnd, &client);
+        const int margin = 12;
+        const int gap = 8;
+        const int button_height = 26;
+        const int bottom_top = static_cast<int>(client.bottom) - margin - button_height;
+        const int visible_height = std::max(1, bottom_top - margin - gap);
+        const int padding = 10;
+        const int current_top = state->left_scroll_offset;
+        const int current_bottom = current_top + visible_height;
+        const int content_bottom = content_top + std::max(1, content_height);
+
+        int target_offset = current_top;
+        if (content_top < current_top + padding) {
+            target_offset = content_top - padding;
+        } else if (content_bottom > current_bottom - padding) {
+            target_offset = content_bottom - visible_height + padding;
+        }
+        return ScrollReportTemplateDesignerLeftTo(hwnd, state, target_offset);
+    }
+
+    static void ScrollReportTemplateDesignerToSectionHeading(
+        HWND hwnd,
+        ReportTemplateDesignerState* state)
+    {
+        if (!state) {
+            return;
+        }
+        ScrollReportTemplateDesignerLeftRangeIntoView(
+            hwnd,
+            state,
+            state->section_heading_anchor_top,
+            state->section_heading_anchor_height);
+    }
+
     static bool HandleReportTemplateDesignerLeftScroll(
         HWND hwnd,
         ReportTemplateDesignerState* state,
@@ -4238,6 +4356,8 @@ private:
         }
         y += button_height + gap;
 
+        state->section_heading_anchor_top = y;
+        state->section_heading_anchor_height = 24 + button_height;
         if (state->section_heading_label) {
             move_left_control(state->section_heading_label, margin, y + 4, left_width, 20, TRUE);
         }
@@ -4369,6 +4489,8 @@ private:
             };
             const auto section = HitTestTemplatePreviewSection(state, point);
             if (section.has_value() && SelectTemplateSection(state, *section)) {
+                HWND designer = GetParent(hwnd);
+                ScrollReportTemplateDesignerToSectionHeading(designer ? designer : hwnd, state);
                 const std::wstring message =
                     L"Selected preview section: " + TemplateSectionHeadingText(state, *section);
                 SetDesignerStatus(state->status, message);
@@ -4985,6 +5107,7 @@ private:
             if (LOWORD(wparam) == kTemplateDesignerSectionList &&
                 HIWORD(wparam) == LBN_SELCHANGE) {
                 RefreshTemplateSectionHeadingEdit(state);
+                RefreshTemplatePreview(state);
                 return 0;
             }
             switch (LOWORD(wparam)) {
@@ -5858,6 +5981,7 @@ private:
     bool show_fusion_preview_ = false;
     bool function_panel_visible_ = true;
     bool function_panel_docked_left_ = true;
+    bool function_panel_drag_active_ = false;
     int panel_category_ = 0;
     int panel_scroll_offset_ = 0;
     ViewportPanState viewport_pan_;
@@ -6304,6 +6428,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         break;
     }
+    case WM_SETCURSOR: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        if (app && LOWORD(lparam) == HTCLIENT) {
+            POINT point = {};
+            GetCursorPos(&point);
+            ScreenToClient(hwnd, &point);
+            if (app->ShouldShowFunctionPanelDockCursor(point)) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+                return TRUE;
+            }
+        }
+        break;
+    }
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wparam);
         CameraPreviewApp* app = GetApp(hwnd);
@@ -6334,6 +6471,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 static_cast<int>(static_cast<short>(LOWORD(lparam))),
                 static_cast<int>(static_cast<short>(HIWORD(lparam)))
             };
+            if (app->BeginFunctionPanelDockDrag(point)) {
+                return 0;
+            }
             if (app->BeginMeasurementEdit(point, GetDlgItem(hwnd, kIdResultsList))) {
                 return 0;
             }
@@ -6377,6 +6517,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 static_cast<int>(static_cast<short>(LOWORD(lparam))),
                 static_cast<int>(static_cast<short>(HIWORD(lparam)))
             };
+            if (app->ContinueFunctionPanelDockDrag(point)) {
+                return 0;
+            }
             if (app->ContinueMeasurementEdit(point)) {
                 return 0;
             }
@@ -6389,6 +6532,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_LBUTTONUP: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app) {
+            if (app->EndFunctionPanelDockDrag()) {
+                return 0;
+            }
             app->EndMeasurementEdit();
             return 0;
         }
@@ -6406,6 +6552,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_CAPTURECHANGED: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app) {
+            app->EndFunctionPanelDockDrag();
             app->EndMeasurementEdit();
             app->EndPan();
         }

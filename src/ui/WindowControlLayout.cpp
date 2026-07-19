@@ -108,7 +108,7 @@ void AddSidePanel(
         };
         const bool visible =
             bounds.top >= viewport_top &&
-            bounds.top < viewport_bottom;
+            bounds.bottom <= viewport_bottom;
         placements.push_back(WindowControlPlacement{
             control_id,
             visible ? bounds : RECT{0, 0, 0, 0},
