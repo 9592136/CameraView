@@ -3,6 +3,7 @@
 #include "ControlIds.h"
 
 #include <algorithm>
+#include <commctrl.h>
 
 namespace {
 
@@ -16,6 +17,8 @@ constexpr DWORD kComboStyle = kChildStyle | WS_TABSTOP | CBS_DROPDOWNLIST | WS_V
 constexpr DWORD kCheckboxStyle = kChildStyle | WS_TABSTOP | BS_AUTOCHECKBOX;
 constexpr DWORD kListStyle = kChildStyle | WS_BORDER | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
 constexpr DWORD kPanelScrollStyle = kChildStyle | SBS_VERT;
+constexpr DWORD kTrackbarStyle = kChildStyle | TBS_HORZ | TBS_AUTOTICKS | TBS_BOTTOM | WS_TABSTOP;
+constexpr DWORD kSmallStaticStyle = kChildStyle | SS_CENTER;
 
 } // namespace
 
@@ -68,6 +71,7 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdProcessingPanelCard, L"BUTTON", L"Processing", kPanelHeaderStyle},
         {kIdMeasurementPanelCard, L"BUTTON", L"Measurement", kPanelHeaderStyle},
         {kIdProjectPanelCard, L"BUTTON", L"Project", kPanelHeaderStyle},
+        {kIdHistogramPanelCard, L"BUTTON", L"Histogram", kPanelHeaderStyle},
         {kIdAutoExposure, L"BUTTON", L"Auto Exposure", kButtonStyle},
         {kIdCameraExposureLabel, L"STATIC", L"Exposure", kStaticStyle},
         {kIdCameraExposureEdit, L"EDIT", L"10", kEditStyle},
@@ -76,6 +80,24 @@ const std::vector<WindowControlDefinition>& WindowControlDefinitions::All()
         {kIdCameraGainEdit, L"EDIT", L"1.0", kEditStyle},
         {kIdCameraGainApply, L"BUTTON", L"Apply", kButtonStyle},
         {kIdWhiteBalance, L"BUTTON", L"White Balance", kButtonStyle},
+        {kIdHistogramChannelLabel, L"STATIC", L"Channel", kStaticStyle},
+        {kIdHistogramChannelCombo, L"COMBOBOX", nullptr, kComboStyle},
+        {kIdHistogramBrightnessLabel, L"STATIC", L"Brightness", kStaticStyle},
+        {kIdHistogramBrightnessSlider, TRACKBAR_CLASS, nullptr, kTrackbarStyle},
+        {kIdHistogramBrightnessValue, L"STATIC", L"0", kSmallStaticStyle},
+        {kIdHistogramContrastLabel, L"STATIC", L"Contrast", kStaticStyle},
+        {kIdHistogramContrastSlider, TRACKBAR_CLASS, nullptr, kTrackbarStyle},
+        {kIdHistogramContrastValue, L"STATIC", L"0", kSmallStaticStyle},
+        {kIdHistogramGammaLabel, L"STATIC", L"Gamma", kStaticStyle},
+        {kIdHistogramGammaSlider, TRACKBAR_CLASS, nullptr, kTrackbarStyle},
+        {kIdHistogramGammaValue, L"STATIC", L"1.0", kSmallStaticStyle},
+        {kIdHistogramResetAdjust, L"BUTTON", L"Reset", kButtonStyle},
+        {kIdHistogramWindowLevelLabel, L"STATIC", L"Window Level", kStaticStyle},
+        {kIdHistogramWindowLevelSlider, TRACKBAR_CLASS, nullptr, kTrackbarStyle},
+        {kIdHistogramWindowLevelValue, L"STATIC", L"128", kSmallStaticStyle},
+        {kIdHistogramWindowWidthLabel, L"STATIC", L"Window Width", kStaticStyle},
+        {kIdHistogramWindowWidthSlider, TRACKBAR_CLASS, nullptr, kTrackbarStyle},
+        {kIdHistogramWindowWidthValue, L"STATIC", L"256", kSmallStaticStyle},
         {kIdPseudoColorLabel, L"STATIC", L"Pseudo color", kStaticStyle},
         {kIdPseudoColorCombo, L"COMBOBOX", nullptr, kComboStyle},
         {kIdDyeLabel, L"STATIC", L"Dye", kStaticStyle},

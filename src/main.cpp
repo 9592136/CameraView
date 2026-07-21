@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <commctrl.h>
 
 #include "app/DiagnosticReportActions.h"
 #include "app/ExportActions.h"
@@ -65,6 +66,9 @@
 #include "ui/WindowControlDefinitions.h"
 #include "ui/WindowControlLayout.h"
 #include "ui/WindowLayout.h"
+#include "imaging/HistogramCalculator.h"
+#include "ui/HistogramRenderer.h"
+#include "imaging/ImageAdjuster.h"
 
 #include <algorithm>
 #include <atomic>
@@ -610,6 +614,84 @@ public:
         SetStatus(result.message);
     }
 
+    void UpdateHistogramChannel(HWND combo)
+    {
+        const LRESULT sel = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+        if (sel >= 0 && sel < 4) {
+            histogram_channel_ = static_cast<HistogramChannel>(sel);
+        }
+        InvalidatePreview(hwnd_);
+    }
+
+    void UpdateAdjustValueLabels(HWND hwnd)
+    {
+        WCHAR buf[32];
+        const int b = image_adjust_.brightness;
+        wsprintfW(buf, L"%+d", b);
+        SetWindowTextW(GetDlgItem(hwnd, kIdHistogramBrightnessValue), buf);
+
+        const int c = image_adjust_.contrast;
+        wsprintfW(buf, c >= 0 ? L"+%d%%" : L"%d%%", c);
+        SetWindowTextW(GetDlgItem(hwnd, kIdHistogramContrastValue), buf);
+
+        swprintf_s(buf, L"%.1f", image_adjust_.gamma_tenths / 10.0);
+        SetWindowTextW(GetDlgItem(hwnd, kIdHistogramGammaValue), buf);
+
+        wsprintfW(buf, L"%d", image_adjust_.window_level);
+        SetWindowTextW(GetDlgItem(hwnd, kIdHistogramWindowLevelValue), buf);
+
+        wsprintfW(buf, L"%d", image_adjust_.window_width);
+        SetWindowTextW(GetDlgItem(hwnd, kIdHistogramWindowWidthValue), buf);
+    }
+
+    void ResetImageAdjust(HWND hwnd)
+    {
+        image_adjust_ = ImageAdjustParams{};
+        SendMessageW(GetDlgItem(hwnd, kIdHistogramBrightnessSlider), TBM_SETPOS, TRUE, 100);
+        SendMessageW(GetDlgItem(hwnd, kIdHistogramContrastSlider), TBM_SETPOS, TRUE, 100);
+        SendMessageW(GetDlgItem(hwnd, kIdHistogramGammaSlider), TBM_SETPOS, TRUE, 10);
+        SendMessageW(GetDlgItem(hwnd, kIdHistogramWindowLevelSlider), TBM_SETPOS, TRUE, 128);
+        SendMessageW(GetDlgItem(hwnd, kIdHistogramWindowWidthSlider), TBM_SETPOS, TRUE, 256);
+        UpdateAdjustValueLabels(hwnd);
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+    }
+
+    void OnHistogramSlider(HWND hwnd, LPARAM lp)
+    {
+        HWND slider = reinterpret_cast<HWND>(lp);
+        const int pos = static_cast<int>(SendMessageW(slider, TBM_GETPOS, 0, 0));
+        const int id = GetDlgCtrlID(slider);
+
+        if (id == kIdHistogramBrightnessSlider) {
+            image_adjust_.brightness = pos - 100;
+        } else if (id == kIdHistogramContrastSlider) {
+            image_adjust_.contrast = pos - 100;
+        } else if (id == kIdHistogramGammaSlider) {
+            image_adjust_.gamma_tenths = pos;
+        } else if (id == kIdHistogramWindowLevelSlider) {
+            image_adjust_.window_level = pos;
+            // Clamp window-width to stay within 0..255
+            ConstrainWindowWidth(hwnd);
+        } else if (id == kIdHistogramWindowWidthSlider) {
+            image_adjust_.window_width = pos;
+        }
+
+        UpdateAdjustValueLabels(hwnd);
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+    }
+
+    void ConstrainWindowWidth(HWND hwnd)
+    {
+        const int wl = image_adjust_.window_level;
+        const int max_ww = 2 * (std::min)(wl, 255 - wl);
+        if (image_adjust_.window_width > max_ww) {
+            image_adjust_.window_width = (std::max)(1, max_ww);
+            SendMessageW(GetDlgItem(hwnd, kIdHistogramWindowWidthSlider), TBM_SETPOS, TRUE, image_adjust_.window_width);
+        }
+    }
+
     void SyncPanelCardButtons() const
     {
         const int card_ids[] = {
@@ -618,7 +700,8 @@ public:
             kIdFluorescencePanelCard,
             kIdProcessingPanelCard,
             kIdMeasurementPanelCard,
-            kIdProjectPanelCard
+            kIdProjectPanelCard,
+            kIdHistogramPanelCard
         };
         const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
         for (std::size_t i = 0; i < labels.size(); ++i) {
@@ -1518,7 +1601,12 @@ public:
             FillSolidRect(hdc, separator, RGB(168, 174, 181));
         }
 
-        const ImageFrame& display_frame = CurrentPreviewFrame();
+        const ImageFrame& raw_frame = CurrentPreviewFrame();
+        bool use_adjusted = (panel_category_ == 6 && !image_adjust_.IsIdentity() && raw_frame.IsValid());
+        if (use_adjusted) {
+            ApplyAdjustments(raw_frame, adjusted_preview_, image_adjust_);
+        }
+        const ImageFrame& display_frame = use_adjusted ? adjusted_preview_ : raw_frame;
         if (display_frame.IsValid()) {
             image_viewport_.DrawFrame(hdc, preview, display_frame);
             overlay_renderer_.DrawMeasurementOverlay(
@@ -1531,6 +1619,80 @@ public:
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(210, 216, 224));
             DrawTextW(hdc, L"No frame", -1, &preview, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        if (panel_category_ == 6) {
+            constexpr int kHeaderH = 30;
+            constexpr int kHeaderGap = 3;
+            constexpr int kCardCount = 7;
+            const RECT panel = GetSidePanelRect(hwnd_);
+            const int content_start_y = panel.top + kPanelTitleHeight + 5
+                                      + kCardCount * kHeaderH
+                                      + (kCardCount - 1) * kHeaderGap
+                                      + 8;
+            // Controls layout offsets (matching case 6):
+            //   channel:       24 + kControlHeight(28) + kControlGap(8) = 60
+            //   b/c/g/wl rows: 22 + kControlHeight(28) + 2 = 52 (×4)
+            //   ww row:        22 + kControlHeight(28) + kControlGap(8) = 58
+            //   reset:         kControlHeight(28) + kControlGap(8) = 36
+            //   total: 60 + 52*4 + 58 + 36 = 362
+            constexpr int kHistoControlsEnd = 362;
+            const int chart_y = content_start_y + kHistoControlsEnd + 8
+                                - panel_scroll_offset_;
+            const int chart_bot = (std::min)(chart_y + 140, static_cast<int>(panel.bottom - 28));
+            RECT chart_rect = {panel.left + 12, chart_y, panel.right - 12, chart_bot};
+            if (chart_rect.bottom > panel.top + 4 && chart_rect.right > chart_rect.left) {
+                const ImageFrame& src = use_adjusted ? adjusted_preview_ : raw_frame;
+                if (src.IsValid()) {
+                    // --- Histogram cache ---
+                    const unsigned long long seq = src.sequence;
+                    if (histogram_cache_seq_ != seq ||
+                        histogram_cache_ch_ != histogram_channel_ ||
+                        histogram_cache_adjust_.brightness != image_adjust_.brightness ||
+                        histogram_cache_adjust_.contrast != image_adjust_.contrast ||
+                        histogram_cache_adjust_.gamma_tenths != image_adjust_.gamma_tenths ||
+                        histogram_cache_adjust_.window_level != image_adjust_.window_level ||
+                        histogram_cache_adjust_.window_width != image_adjust_.window_width) {
+                        histogram_data_ = ComputeHistogram(src, histogram_channel_);
+                        histogram_cache_seq_ = seq;
+                        histogram_cache_ch_ = histogram_channel_;
+                        histogram_cache_adjust_ = image_adjust_;
+                    }
+
+                    histo_renderer_.Draw(hdc, chart_rect, histogram_data_, histogram_channel_);
+
+                    // --- Stats ---
+                    int stats_y = chart_bot + 2;
+                    int stats_h = 22;
+                    int stats_bot = (std::min)(stats_y + stats_h, static_cast<int>(panel.bottom - 4));
+                    RECT stats_rect = {panel.left + 12, stats_y, panel.right - 12, stats_bot};
+                    if (stats_rect.bottom > stats_rect.top) {
+                        FillSolidRect(hdc, stats_rect, RGB(32, 32, 36));
+                        histo_renderer_.DrawStats(
+                            hdc, stats_rect.left + 4, stats_rect.top,
+                            stats_rect.right - stats_rect.left - 8,
+                            histogram_data_.stats, histogram_channel_);
+                    }
+                }
+            }
+
+            if (!image_adjust_.IsIdentity()) {
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, RGB(255, 200, 60));
+                HFONT hint_font = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                               CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                               DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                HGDIOBJ old = SelectObject(hdc, hint_font);
+                RECT hint_rect = {panel.left + 12, (std::min)(chart_bot + 24, static_cast<int>(panel.bottom - 20)),
+                                  panel.right - 12, panel.bottom - 2};
+                if (hint_rect.bottom > hint_rect.top) {
+                    DrawTextW(hdc, L"Adjustments applied to preview", -1,
+                              &hint_rect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+                }
+                SelectObject(hdc, old);
+                DeleteObject(hint_font);
+            }
         }
 
         std::wstring status_text;
@@ -6075,6 +6237,14 @@ private:
     ImageViewport image_viewport_;
     OverlayRenderer overlay_renderer_;
     PseudoColorPalette pseudo_color_palette_ = PseudoColorPalette::Original;
+    HistogramData histogram_data_;
+    HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
+    HistogramRenderer histo_renderer_;
+    ImageAdjustParams image_adjust_;
+    mutable ImageFrame adjusted_preview_;
+    mutable unsigned long long histogram_cache_seq_ = 0;
+    mutable HistogramChannel histogram_cache_ch_ = static_cast<HistogramChannel>(-1);
+    mutable ImageAdjustParams histogram_cache_adjust_;
     std::vector<DyeProfile> dye_library_ = DyeLibrary::DefaultDyes();
     std::vector<FluorescenceChannel> fluorescence_channels_;
     std::vector<StitchTile> stitch_tiles_;
@@ -6250,6 +6420,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         HWND objective_name_edit = GetDlgItem(hwnd, kIdObjectiveNameEdit);
         HWND calibration_unit = GetDlgItem(hwnd, kIdCalibrationUnitCombo);
         HWND pseudo_color_combo = GetDlgItem(hwnd, kIdPseudoColorCombo);
+        HWND histogram_channel_combo = GetDlgItem(hwnd, kIdHistogramChannelCombo);
         HWND dye_combo = GetDlgItem(hwnd, kIdDyeCombo);
         HWND dye_name_edit = GetDlgItem(hwnd, kIdDyeNameEdit);
         HWND dye_excitation_edit = GetDlgItem(hwnd, kIdDyeExcitationEdit);
@@ -6268,6 +6439,43 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             SendMessageW(pseudo_color_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label_text.c_str()));
         }
         SendMessageW(pseudo_color_combo, CB_SETCURSEL, 0, 0);
+
+        for (int ch = 0; ch < 4; ++ch) {
+            SendMessageW(histogram_channel_combo, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(HistogramChannelLabel(static_cast<HistogramChannel>(ch))));
+        }
+        SendMessageW(histogram_channel_combo, CB_SETCURSEL, 0, 0);
+
+        // Brightness trackbar: range 0-200 → maps to -100..+100
+        HWND brightness_slider = GetDlgItem(hwnd, kIdHistogramBrightnessSlider);
+        SendMessageW(brightness_slider, TBM_SETRANGE, TRUE, MAKELONG(0, 200));
+        SendMessageW(brightness_slider, TBM_SETPOS, TRUE, 100);
+        SendMessageW(brightness_slider, TBM_SETTICFREQ, 25, 0);
+
+        // Contrast trackbar: range 0-200 → maps to -100..+100
+        HWND contrast_slider = GetDlgItem(hwnd, kIdHistogramContrastSlider);
+        SendMessageW(contrast_slider, TBM_SETRANGE, TRUE, MAKELONG(0, 200));
+        SendMessageW(contrast_slider, TBM_SETPOS, TRUE, 100);
+        SendMessageW(contrast_slider, TBM_SETTICFREQ, 25, 0);
+
+        // Gamma trackbar: range 1-30 → maps to 0.1..3.0
+        HWND gamma_slider = GetDlgItem(hwnd, kIdHistogramGammaSlider);
+        SendMessageW(gamma_slider, TBM_SETRANGE, TRUE, MAKELONG(1, 30));
+        SendMessageW(gamma_slider, TBM_SETPOS, TRUE, 10);
+        SendMessageW(gamma_slider, TBM_SETTICFREQ, 5, 0);
+
+        // Window Level trackbar: range 0-255, default 128
+        HWND wl_slider = GetDlgItem(hwnd, kIdHistogramWindowLevelSlider);
+        SendMessageW(wl_slider, TBM_SETRANGE, TRUE, MAKELONG(0, 255));
+        SendMessageW(wl_slider, TBM_SETPOS, TRUE, 128);
+        SendMessageW(wl_slider, TBM_SETTICFREQ, 32, 0);
+
+        // Window Width trackbar: range 1-256, default 256
+        HWND ww_slider = GetDlgItem(hwnd, kIdHistogramWindowWidthSlider);
+        SendMessageW(ww_slider, TBM_SETRANGE, TRUE, MAKELONG(1, 256));
+        SendMessageW(ww_slider, TBM_SETPOS, TRUE, 256);
+        SendMessageW(ww_slider, TBM_SETTICFREQ, 32, 0);
+
         app->SyncPanelCardButtons();
         app->SyncFunctionPanelChrome();
         app->InitializeDyeCombo(dye_combo);
@@ -6298,6 +6506,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         break;
     }
+    case WM_HSCROLL: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        if (app) {
+            app->OnHistogramSlider(hwnd, lparam);
+        }
+        return 0;
+    }
     case WM_VSCROLL: {
         CameraPreviewApp* app = GetApp(hwnd);
         if (app && reinterpret_cast<HWND>(lparam) == GetDlgItem(hwnd, kIdPanelScrollBar)) {
@@ -6324,6 +6539,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         if (LOWORD(wparam) == kIdPseudoColorCombo && HIWORD(wparam) == CBN_SELCHANGE) {
             app->UpdatePseudoColor(GetDlgItem(hwnd, kIdPseudoColorCombo));
+            return 0;
+        }
+        if (LOWORD(wparam) == kIdHistogramChannelCombo && HIWORD(wparam) == CBN_SELCHANGE) {
+            app->UpdateHistogramChannel(GetDlgItem(hwnd, kIdHistogramChannelCombo));
+            return 0;
+        }
+        if (LOWORD(wparam) == kIdHistogramResetAdjust && HIWORD(wparam) == BN_CLICKED) {
+            app->ResetImageAdjust(hwnd);
             return 0;
         }
         if (LOWORD(wparam) == kIdObjectiveCombo && HIWORD(wparam) == CBN_SELCHANGE) {
@@ -6731,6 +6954,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command)
 {
+    InitCommonControls();
+
     const wchar_t* class_name = L"MUCamCameraViewWindow";
 
     WNDCLASSEXW wc = {};

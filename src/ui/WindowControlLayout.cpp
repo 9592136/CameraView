@@ -270,6 +270,48 @@ void AddSidePanel(
         add(kIdSaveDiagnostics, x, content_y, w, kControlHeight);
         content_y += kControlHeight;
         break;
+    case 6:
+        add(kIdHistogramChannelLabel, x, content_y, w, 20);
+        content_y += 24;
+        add(kIdHistogramChannelCombo, x, content_y, w, 120);
+        content_y += kControlHeight + kControlGap;
+
+        add(kIdHistogramBrightnessLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdHistogramBrightnessSlider, x, content_y, w - 60, kControlHeight);
+        add(kIdHistogramBrightnessValue, x + w - 56, content_y, 56, kControlHeight);
+        content_y += kControlHeight + 2;
+
+        add(kIdHistogramContrastLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdHistogramContrastSlider, x, content_y, w - 60, kControlHeight);
+        add(kIdHistogramContrastValue, x + w - 56, content_y, 56, kControlHeight);
+        content_y += kControlHeight + 2;
+
+        add(kIdHistogramGammaLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdHistogramGammaSlider, x, content_y, w - 60, kControlHeight);
+        add(kIdHistogramGammaValue, x + w - 56, content_y, 56, kControlHeight);
+        content_y += kControlHeight + 2;
+
+        add(kIdHistogramWindowLevelLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdHistogramWindowLevelSlider, x, content_y, w - 60, kControlHeight);
+        add(kIdHistogramWindowLevelValue, x + w - 56, content_y, 56, kControlHeight);
+        content_y += kControlHeight + 2;
+
+        add(kIdHistogramWindowWidthLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdHistogramWindowWidthSlider, x, content_y, w - 60, kControlHeight);
+        add(kIdHistogramWindowWidthValue, x + w - 56, content_y, 56, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+
+        add(kIdHistogramResetAdjust, x, content_y, w, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+
+        // Reserve space for histogram chart + stats drawn in Paint
+        content_y += 170;  // 140 chart + 22 stats + 8 padding
+        break;
     case 0:
     default:
         add(kIdDeviceLabel, x, content_y, w, 20);
@@ -302,9 +344,10 @@ void AddSidePanel(
         kIdFluorescencePanelCard,
         kIdProcessingPanelCard,
         kIdMeasurementPanelCard,
-        kIdProjectPanelCard
+        kIdProjectPanelCard,
+        kIdHistogramPanelCard
     };
-    constexpr int kHeaderCount = 6;
+    constexpr int kHeaderCount = 7;
     for (int category = 0; category < kHeaderCount; ++category) {
         add(header_ids[category], header_x, y, header_w, kPanelHeaderHeight);
         y += kPanelHeaderHeight;
@@ -392,7 +435,8 @@ const std::vector<std::wstring>& WindowControlLayout::PanelCategoryLabels()
         L"Fluorescence",
         L"Processing",
         L"Measurement",
-        L"Project"
+        L"Project",
+        L"Histogram"
     };
     return labels;
 }
@@ -421,6 +465,8 @@ int WindowControlLayout::PanelCategoryFromCardControl(int control_id)
         return 4;
     case kIdProjectPanelCard:
         return 5;
+    case kIdHistogramPanelCard:
+        return 6;
     default:
         return -1;
     }
@@ -443,6 +489,7 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdProcessingPanelCard,
         kIdMeasurementPanelCard,
         kIdProjectPanelCard,
+        kIdHistogramPanelCard,
         kIdAutoExposure,
         kIdCameraExposureLabel,
         kIdCameraExposureEdit,
@@ -451,6 +498,24 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdCameraGainEdit,
         kIdCameraGainApply,
         kIdWhiteBalance,
+        kIdHistogramChannelLabel,
+        kIdHistogramChannelCombo,
+        kIdHistogramBrightnessLabel,
+        kIdHistogramBrightnessSlider,
+        kIdHistogramBrightnessValue,
+        kIdHistogramContrastLabel,
+        kIdHistogramContrastSlider,
+        kIdHistogramContrastValue,
+        kIdHistogramGammaLabel,
+        kIdHistogramGammaSlider,
+        kIdHistogramGammaValue,
+        kIdHistogramResetAdjust,
+        kIdHistogramWindowLevelLabel,
+        kIdHistogramWindowLevelSlider,
+        kIdHistogramWindowLevelValue,
+        kIdHistogramWindowWidthLabel,
+        kIdHistogramWindowWidthSlider,
+        kIdHistogramWindowWidthValue,
         kIdPseudoColorLabel,
         kIdPseudoColorCombo,
         kIdDyeLabel,

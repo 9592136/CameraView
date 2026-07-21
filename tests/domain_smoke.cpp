@@ -607,7 +607,7 @@ int main()
         return Fail("WindowControlLayout did not expose a full-height side-panel scrollbar.");
     }
     const std::vector<std::wstring>& panel_categories = WindowControlLayout::PanelCategoryLabels();
-    if (panel_categories.size() != 6 ||
+    if (panel_categories.size() != 7 ||
         panel_categories[0] != L"Camera" ||
         panel_categories[1] != L"Image" ||
         panel_categories[4] != L"Measurement" ||

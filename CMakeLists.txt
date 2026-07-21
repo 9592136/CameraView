@@ -99,6 +99,9 @@ add_executable(CameraView WIN32
     src/imaging/ProcessingStatusFormatter.h
     src/imaging/PseudoColorMapper.cpp
     src/imaging/PseudoColorMapper.h
+    src/imaging/HistogramCalculator.cpp
+    src/imaging/HistogramCalculator.h
+    src/imaging/ImageAdjuster.h
     src/imaging/StitchTileListActions.cpp
     src/imaging/StitchTileListActions.h
     src/imaging/StitchTilePlacementPlanner.cpp
@@ -169,6 +172,8 @@ add_executable(CameraView WIN32
     src/ui/WindowControlLayout.h
     src/ui/WindowLayout.cpp
     src/ui/WindowLayout.h
+    src/ui/HistogramRenderer.cpp
+    src/ui/HistogramRenderer.h
 )
 
 target_compile_features(CameraView PRIVATE cxx_std_17)
@@ -179,7 +184,11 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs shell32)
+target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs shell32 comctl32)
+
+if(MINGW)
+    target_link_options(CameraView PRIVATE -municode)
+endif()
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(MUCAM_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/MUCamSDK/bin/x64")

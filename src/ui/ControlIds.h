@@ -107,3 +107,24 @@ inline constexpr int kIdLoadReportTemplate = 1104;
 inline constexpr int kIdClearReportTemplate = 1105;
 inline constexpr int kIdReportTemplateStatus = 1106;
 inline constexpr int kIdDesignReportTemplate = 1107;
+
+// Histogram panel
+inline constexpr int kIdHistogramPanelCard = 1108;
+inline constexpr int kIdHistogramChannelLabel = 1109;
+inline constexpr int kIdHistogramChannelCombo = 1110;
+inline constexpr int kIdHistogramBrightnessLabel = 1111;
+inline constexpr int kIdHistogramBrightnessSlider = 1112;
+inline constexpr int kIdHistogramBrightnessValue = 1113;
+inline constexpr int kIdHistogramContrastLabel = 1114;
+inline constexpr int kIdHistogramContrastSlider = 1115;
+inline constexpr int kIdHistogramContrastValue = 1116;
+inline constexpr int kIdHistogramGammaLabel = 1117;
+inline constexpr int kIdHistogramGammaSlider = 1118;
+inline constexpr int kIdHistogramGammaValue = 1119;
+inline constexpr int kIdHistogramResetAdjust = 1120;
+inline constexpr int kIdHistogramWindowLevelLabel = 1121;
+inline constexpr int kIdHistogramWindowLevelSlider = 1122;
+inline constexpr int kIdHistogramWindowLevelValue = 1123;
+inline constexpr int kIdHistogramWindowWidthLabel = 1124;
+inline constexpr int kIdHistogramWindowWidthSlider = 1125;
+inline constexpr int kIdHistogramWindowWidthValue = 1126;
