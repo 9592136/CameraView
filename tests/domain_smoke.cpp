@@ -20,6 +20,8 @@
 #include "../src/imaging/FluorescenceChannelSettings.h"
 #include "../src/imaging/FluorescenceChannelUpdater.h"
 #include "../src/imaging/FluorescenceFormatter.h"
+#include "../src/imaging/HistogramCalculator.h"
+#include "../src/imaging/ImageAdjuster.h"
 #include "../src/imaging/ImageRegistration.h"
 #include "../src/imaging/ImageStitcher.h"
 #include "../src/imaging/ImageViewport.h"
@@ -317,6 +319,46 @@ ImageFrame MakePatternImage(int width, int height)
     return image;
 }
 
+ImageFrame MakeFeaturePatternImage(int width, int height)
+{
+    ImageFrame image;
+    image.width = width;
+    image.height = height;
+    image.stride = (width * 3 + 3) & ~3;
+    image.bgr.assign(static_cast<std::size_t>(image.stride) * static_cast<std::size_t>(height), 0);
+    for (int y = 0; y < height; ++y) {
+        unsigned char* row = image.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.stride);
+        for (int x = 0; x < width; ++x) {
+            const unsigned char base = static_cast<unsigned char>(36 + ((x * 5 + y * 7 + (x * y) % 19) & 0x1F));
+            row[x * 3 + 0] = base;
+            row[x * 3 + 1] = static_cast<unsigned char>(base + 4);
+            row[x * 3 + 2] = static_cast<unsigned char>(base + 8);
+        }
+    }
+
+    std::uint32_t seed = 0xC0FFEE31U;
+    for (int mark = 0; mark < 180; ++mark) {
+        seed = seed * 1664525U + 1013904223U;
+        const int cx = 8 + static_cast<int>(seed % static_cast<std::uint32_t>(std::max(1, width - 16)));
+        seed = seed * 1664525U + 1013904223U;
+        const int cy = 8 + static_cast<int>(seed % static_cast<std::uint32_t>(std::max(1, height - 16)));
+        seed = seed * 1664525U + 1013904223U;
+        const int radius = 1 + static_cast<int>(seed % 4U);
+        const unsigned char bright = static_cast<unsigned char>(150 + (seed % 90U));
+        const unsigned char dark = static_cast<unsigned char>(8 + ((seed >> 8) % 40U));
+        for (int y = std::max(1, cy - radius); y <= std::min(height - 2, cy + radius); ++y) {
+            unsigned char* row = image.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(image.stride);
+            for (int x = std::max(1, cx - radius); x <= std::min(width - 2, cx + radius); ++x) {
+                const bool edge = x == cx - radius || x == cx + radius || y == cy - radius || y == cy + radius;
+                const unsigned char value = edge ? bright : dark;
+                row[x * 3 + 0] = value;
+                row[x * 3 + 1] = static_cast<unsigned char>(std::min(255, static_cast<int>(value) + 5));
+                row[x * 3 + 2] = static_cast<unsigned char>(std::min(255, static_cast<int>(value) + 11));
+            }
+        }
+    }
+    return image;
+}
 ImageFrame CropImage(const ImageFrame& source, int x0, int y0, int width, int height)
 {
     ImageFrame image;
@@ -3771,6 +3813,24 @@ int main()
         return Fail("Image registration did not refine translation under exposure changes.");
     }
 
+    const ImageFrame orb_pattern = MakeFeaturePatternImage(180, 132);
+    const ImageFrame orb_reference_crop = CropImage(orb_pattern, 0, 0, 112, 96);
+    const ImageFrame orb_moving_crop = CropImage(orb_pattern, 37, 21, 112, 96);
+    const TranslationOffset orb_translation = ImageRegistration::EstimateOrbTranslation(
+        orb_reference_crop,
+        orb_moving_crop,
+        -90,
+        90,
+        -70,
+        70);
+    if (!orb_translation.valid ||
+        std::abs(orb_translation.dx - 37) > 1 ||
+        std::abs(orb_translation.dy - 21) > 1) {
+        return Fail(
+            "ORB image registration did not recover feature-based translation; got " +
+            std::to_string(orb_translation.dx) + "," +
+            std::to_string(orb_translation.dy) + ".");
+    }
     const StitchTilePlacementResult first_placement =
         StitchTilePlacementPlanner::PlaceNext(MakeSolidImage(3, 2, 1, 2, 3), {}, 50);
     if (first_placement.registered ||
@@ -4952,6 +5012,38 @@ int main()
         return Fail("ExportActions did not save a report template.");
     }
     std::filesystem::remove(template_path);
+
+    ImageFrame mono_like_frame;
+    mono_like_frame.width = 4;
+    mono_like_frame.height = 2;
+    mono_like_frame.stride = 4;
+    mono_like_frame.bgr.assign(8, 96);
+    const HistogramData skipped_mono_like_histogram =
+        ComputeHistogram(mono_like_frame, HistogramChannel::Luminance);
+    if (skipped_mono_like_histogram.total_pixels != 0 || skipped_mono_like_histogram.max_count != 0) {
+        return Fail("Histogram calculation should ignore frames without readable BGR rows.");
+    }
+
+    ImageFrame histogram_frame;
+    histogram_frame.width = 2;
+    histogram_frame.height = 1;
+    histogram_frame.stride = 8;
+    histogram_frame.bgr.assign(8, 0);
+    histogram_frame.bgr[0] = 10;
+    histogram_frame.bgr[1] = 20;
+    histogram_frame.bgr[2] = 30;
+    histogram_frame.bgr[3] = 40;
+    histogram_frame.bgr[4] = 50;
+    histogram_frame.bgr[5] = 60;
+    const HistogramData red_histogram = ComputeHistogram(histogram_frame, HistogramChannel::Red);
+    if (red_histogram.total_pixels != 2 || red_histogram.bins[30] != 1 || red_histogram.bins[60] != 1) {
+        return Fail("Histogram calculation did not read BGR channel data correctly.");
+    }
+
+    const ImageFrame identity_adjusted = ApplyAdjustments(histogram_frame, ImageAdjustParams{});
+    if (!identity_adjusted.IsValid() || identity_adjusted.bgr != histogram_frame.bgr) {
+        return Fail("Identity image adjustment should preserve the source frame.");
+    }
 
     std::cout << "domain smoke tests passed\n";
     return 0;

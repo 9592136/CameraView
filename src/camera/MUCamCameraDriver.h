@@ -39,6 +39,7 @@ private:
     static bool BuildDisplayFrame(
         const unsigned char* source,
         int source_format,
+        int source_bytes_per_channel,
         int width,
         int height,
         unsigned long timestamp,
@@ -53,6 +54,7 @@ private:
     MUCamApi::Handle camera_ = nullptr;
     CameraOpenInfo open_info_;
     int frame_format_ = MUCamApi::MUCAM_FORMAT_COLOR_BGR;
+    int input_bytes_per_channel_ = 1;
     std::vector<unsigned char> raw_;
     std::vector<unsigned char> rgb_;
 };

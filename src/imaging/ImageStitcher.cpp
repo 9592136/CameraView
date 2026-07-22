@@ -122,6 +122,28 @@ TranslationOffset EstimateConstraintTranslation(
         std::max(wide_radius_x, wide_radius_y) / kWideRegistrationTargetSteps,
         2,
         8);
+
+    const TranslationOffset orb_candidate = ImageRegistration::EstimateOrbTranslation(
+        reference,
+        moving,
+        -wide_radius_x,
+        wide_radius_x,
+        -wide_radius_y,
+        wide_radius_y);
+    if (IsUsableConstraintTranslation(orb_candidate)) {
+        const int orb_refinement_radius = std::max(2, std::min(12, offset_step * 3));
+        const TranslationOffset orb_refined = ImageRegistration::RefineTranslation(
+            reference,
+            moving,
+            orb_candidate.dx,
+            orb_candidate.dy,
+            orb_refinement_radius,
+            orb_refinement_radius);
+        if (IsBetterConstraintTranslation(orb_refined, best)) {
+            best = orb_refined;
+        }
+    }
+
     const std::vector<TranslationOffset> candidates = ImageRegistration::EstimateTranslationCandidates(
         reference,
         moving,

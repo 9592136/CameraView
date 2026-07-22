@@ -1,5 +1,23 @@
 #include "ImageViewport.h"
 
+#include <cstddef>
+
+namespace {
+
+bool HasReadableBgrRows(const ImageFrame& frame)
+{
+    if (!frame.IsValid() || frame.stride < frame.width * 3) {
+        return false;
+    }
+
+    const std::size_t required =
+        static_cast<std::size_t>(frame.height - 1) * static_cast<std::size_t>(frame.stride) +
+        static_cast<std::size_t>(frame.width) * 3U;
+    return frame.bgr.size() >= required;
+}
+
+} // namespace
+
 void ImageViewport::Reset()
 {
     transform_.Reset();
@@ -49,7 +67,7 @@ void ImageViewport::DrawFrame(HDC hdc, const RECT& viewport, const ImageFrame& f
 {
     const int area_width = viewport.right - viewport.left;
     const int area_height = viewport.bottom - viewport.top;
-    if (area_width <= 0 || area_height <= 0 || !frame.IsValid()) {
+    if (area_width <= 0 || area_height <= 0 || !HasReadableBgrRows(frame)) {
         return;
     }
 

@@ -299,6 +299,9 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/imaging/ProcessingStatusFormatter.h
         src/imaging/PseudoColorMapper.cpp
         src/imaging/PseudoColorMapper.h
+        src/imaging/HistogramCalculator.cpp
+        src/imaging/HistogramCalculator.h
+        src/imaging/ImageAdjuster.h
         src/imaging/StitchTileListActions.cpp
         src/imaging/StitchTileListActions.h
         src/imaging/StitchTilePlacementPlanner.cpp

@@ -4,6 +4,35 @@
 #include <cstddef>
 #include <cstring>
 
+namespace {
+
+std::size_t CaptureBufferByteCount(int width, int height, int channels, int bytes_per_channel)
+{
+    const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    const std::size_t source_bytes =
+        pixels * static_cast<std::size_t>((std::max)(channels, 1)) *
+        static_cast<std::size_t>((std::max)(bytes_per_channel, 1));
+    const std::size_t display_stride = static_cast<std::size_t>((width * 3 + 3) & ~3);
+    return (std::max)(source_bytes, display_stride * static_cast<std::size_t>(height));
+}
+
+unsigned char SampleTo8Bit(const unsigned char* sample, int bytes_per_channel)
+{
+    if (!sample) {
+        return 0;
+    }
+    if (bytes_per_channel <= 1) {
+        return sample[0];
+    }
+
+    const unsigned int value =
+        static_cast<unsigned int>(sample[0]) |
+        (static_cast<unsigned int>(sample[1]) << 8);
+    return static_cast<unsigned char>((value >> 8) & 0xFFU);
+}
+
+} // namespace
+
 MUCamCameraDriver::~MUCamCameraDriver()
 {
     Close();
@@ -109,6 +138,7 @@ bool MUCamCameraDriver::Open(int device_index, float initial_exposure_ms)
     }
 
     sdk_.SetTriggerType(camera_, 0);
+    input_bytes_per_channel_ = 1;
     if (sdk_.HasBitDepthControl()) {
         sdk_.SetBitCount(camera_, 8);
     }
@@ -142,9 +172,7 @@ bool MUCamCameraDriver::Open(int device_index, float initial_exposure_ms)
 
     const int input_channels = IsColorFormat(frame_format_) ? 3 : 1;
     raw_.assign(
-        static_cast<std::size_t>(open_info_.width) *
-        static_cast<std::size_t>(open_info_.height) *
-        static_cast<std::size_t>(input_channels),
+        CaptureBufferByteCount(open_info_.width, open_info_.height, input_channels, 2),
         0);
     rgb_.clear();
     ApplyExposureLocked(initial_exposure_ms);
@@ -244,6 +272,7 @@ bool MUCamCameraDriver::GrabFrame(unsigned long long sequence, ImageFrame& frame
     unsigned long timestamp = 0;
     bool got_frame = false;
     int display_format = frame_format_;
+    int display_bytes_per_channel = input_bytes_per_channel_;
     const unsigned char* display_source = raw_.data();
 
     int bayer_format = frame_format_;
@@ -262,6 +291,7 @@ bool MUCamCameraDriver::GrabFrame(unsigned long long sequence, ImageFrame& frame
         if (sdk_.BayerToRgb(camera_, raw_.data(), bayer_format, open_info_.width, open_info_.height, 8, rgb_.data())) {
             display_source = rgb_.data();
             display_format = MUCamApi::MUCAM_FORMAT_COLOR_RGB;
+            display_bytes_per_channel = 1;
         } else {
             rgb_.clear();
         }
@@ -270,6 +300,7 @@ bool MUCamCameraDriver::GrabFrame(unsigned long long sequence, ImageFrame& frame
     return got_frame && BuildDisplayFrame(
         display_source,
         display_format,
+        display_bytes_per_channel,
         open_info_.width,
         open_info_.height,
         timestamp,
@@ -290,6 +321,7 @@ bool MUCamCameraDriver::IsColorFormat(int format)
 bool MUCamCameraDriver::BuildDisplayFrame(
     const unsigned char* source,
     int source_format,
+    int source_bytes_per_channel,
     int width,
     int height,
     unsigned long timestamp,
@@ -299,6 +331,8 @@ bool MUCamCameraDriver::BuildDisplayFrame(
     if (!source || width <= 0 || height <= 0) {
         return false;
     }
+
+    const int bytes_per_channel = source_bytes_per_channel > 1 ? 2 : 1;
 
     output.width = width;
     output.height = height;
@@ -310,20 +344,41 @@ bool MUCamCameraDriver::BuildDisplayFrame(
     for (int y = 0; y < height; ++y) {
         unsigned char* dst = output.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(output.stride);
         if (source_format == MUCamApi::MUCAM_FORMAT_COLOR_BGR) {
-            std::memcpy(dst, source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U, static_cast<std::size_t>(width) * 3U);
+            const unsigned char* src =
+                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U *
+                static_cast<std::size_t>(bytes_per_channel);
+            if (bytes_per_channel == 1) {
+                std::memcpy(dst, src, static_cast<std::size_t>(width) * 3U);
+            } else {
+                for (int x = 0; x < width; ++x) {
+                    const std::size_t pixel = static_cast<std::size_t>(x) * 3U * 2U;
+                    dst[x * 3 + 0] = SampleTo8Bit(src + pixel + 0U, bytes_per_channel);
+                    dst[x * 3 + 1] = SampleTo8Bit(src + pixel + 2U, bytes_per_channel);
+                    dst[x * 3 + 2] = SampleTo8Bit(src + pixel + 4U, bytes_per_channel);
+                }
+            }
         } else if (source_format == MUCamApi::MUCAM_FORMAT_COLOR_RGB) {
-            const unsigned char* src = source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U;
+            const unsigned char* src =
+                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U *
+                static_cast<std::size_t>(bytes_per_channel);
             for (int x = 0; x < width; ++x) {
-                dst[x * 3 + 0] = src[x * 3 + 2];
-                dst[x * 3 + 1] = src[x * 3 + 1];
-                dst[x * 3 + 2] = src[x * 3 + 0];
+                const std::size_t pixel =
+                    static_cast<std::size_t>(x) * 3U * static_cast<std::size_t>(bytes_per_channel);
+                dst[x * 3 + 0] = SampleTo8Bit(src + pixel + 2U * static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
+                dst[x * 3 + 1] = SampleTo8Bit(src + pixel + 1U * static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
+                dst[x * 3 + 2] = SampleTo8Bit(src + pixel + 0U, bytes_per_channel);
             }
         } else {
-            const unsigned char* src = source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width);
+            const unsigned char* src =
+                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) *
+                static_cast<std::size_t>(bytes_per_channel);
             for (int x = 0; x < width; ++x) {
-                dst[x * 3 + 0] = src[x];
-                dst[x * 3 + 1] = src[x];
-                dst[x * 3 + 2] = src[x];
+                const unsigned char gray = SampleTo8Bit(
+                    src + static_cast<std::size_t>(x) * static_cast<std::size_t>(bytes_per_channel),
+                    bytes_per_channel);
+                dst[x * 3 + 0] = gray;
+                dst[x * 3 + 1] = gray;
+                dst[x * 3 + 2] = gray;
             }
         }
     }
@@ -339,6 +394,7 @@ void MUCamCameraDriver::CloseLocked()
         camera_ = nullptr;
     }
     open_info_ = CameraOpenInfo();
+    input_bytes_per_channel_ = 1;
     raw_.clear();
     rgb_.clear();
 }

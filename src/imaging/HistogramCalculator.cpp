@@ -1,11 +1,28 @@
 #include "HistogramCalculator.h"
 
 #include <algorithm>
+#include <cstddef>
+
+namespace {
+
+bool HasReadableBgrRows(const ImageFrame& frame)
+{
+    if (!frame.IsValid() || frame.stride < frame.width * 3) {
+        return false;
+    }
+
+    const std::size_t row_stride = static_cast<std::size_t>(frame.stride);
+    const std::size_t last_row = static_cast<std::size_t>(frame.height - 1) * row_stride;
+    const std::size_t required = last_row + static_cast<std::size_t>(frame.width) * 3U;
+    return frame.bgr.size() >= required;
+}
+
+} // namespace
 
 HistogramData ComputeHistogram(const ImageFrame& frame, HistogramChannel channel)
 {
     HistogramData result;
-    if (!frame.IsValid()) {
+    if (!HasReadableBgrRows(frame)) {
         return result;
     }
 
@@ -24,7 +41,6 @@ HistogramData ComputeHistogram(const ImageFrame& frame, HistogramChannel channel
                 const unsigned char b = row[idx];
                 const unsigned char g = row[idx + 1];
                 const unsigned char r = row[idx + 2];
-                // ITU-R BT.601 luminance
                 const int lum = (static_cast<int>(r) * 77 + static_cast<int>(g) * 150 + static_cast<int>(b) * 29) >> 8;
                 ++bins[lum];
             }
@@ -55,28 +71,34 @@ HistogramData ComputeHistogram(const ImageFrame& frame, HistogramChannel channel
     result.max_count = *std::max_element(bins.begin(), bins.end());
     result.total_pixels = static_cast<unsigned long long>(width) * static_cast<unsigned long long>(height);
 
-    // Compute summary statistics in a single pass
-    auto& s = result.stats;
-    // Min
+    HistogramStats& stats = result.stats;
     for (int i = 0; i < 256; ++i) {
-        if (bins[i] > 0) { s.min_value = i; break; }
+        if (bins[i] > 0) {
+            stats.min_value = i;
+            break;
+        }
     }
-    // Max
     for (int i = 255; i >= 0; --i) {
-        if (bins[i] > 0) { s.max_value = i; break; }
+        if (bins[i] > 0) {
+            stats.max_value = i;
+            break;
+        }
     }
-    // Mean
+
     unsigned long long sum = 0;
     for (int i = 0; i < 256; ++i) {
         sum += bins[i] * static_cast<unsigned long long>(i);
     }
-    s.mean = static_cast<double>(sum) / static_cast<double>(result.total_pixels);
-    // Median
-    unsigned long long half = result.total_pixels / 2;
-    unsigned long long cum = 0;
+    stats.mean = static_cast<double>(sum) / static_cast<double>(result.total_pixels);
+
+    const unsigned long long median_target = (result.total_pixels + 1ULL) / 2ULL;
+    unsigned long long cumulative = 0;
     for (int i = 0; i < 256; ++i) {
-        cum += bins[i];
-        if (cum >= half) { s.median = i; break; }
+        cumulative += bins[i];
+        if (cumulative >= median_target) {
+            stats.median = i;
+            break;
+        }
     }
 
     return result;

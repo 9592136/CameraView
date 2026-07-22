@@ -41,6 +41,20 @@ public:
         int offset_step_x = 1,
         int offset_step_y = 1);
 
+    static TranslationOffset EstimateOrbTranslation(
+        const ImageFrame& reference,
+        const ImageFrame& moving,
+        int max_shift_x,
+        int max_shift_y);
+
+    static TranslationOffset EstimateOrbTranslation(
+        const ImageFrame& reference,
+        const ImageFrame& moving,
+        int min_dx,
+        int max_dx,
+        int min_dy,
+        int max_dy);
+
     static TranslationOffset RefineTranslation(
         const ImageFrame& reference,
         const ImageFrame& moving,

@@ -52,14 +52,14 @@ bool MUCamApi::Load()
 #else
     const wchar_t* platform_dir = L"x86";
 #endif
-    AppendUnique(candidates, exe_dir + L"\\MUCam32Ex.dll");
     AppendUnique(candidates, exe_dir + L"\\MUCam32.dll");
-    AppendUnique(candidates, L"MUCam32Ex.dll");
+    AppendUnique(candidates, exe_dir + L"\\MUCam32Ex.dll");
     AppendUnique(candidates, L"MUCam32.dll");
-    AppendUnique(candidates, std::wstring(L"MUCamSDK\\bin\\") + platform_dir + L"\\MUCam32Ex.dll");
-    AppendUnique(candidates, std::wstring(L"MUCamSDK\\lib\\") + platform_dir + L"\\MUCam32Ex.dll");
+    AppendUnique(candidates, L"MUCam32Ex.dll");
     AppendUnique(candidates, std::wstring(L"MUCamSDK\\bin\\") + platform_dir + L"\\MUCam32.dll");
     AppendUnique(candidates, std::wstring(L"MUCamSDK\\lib\\") + platform_dir + L"\\MUCam32.dll");
+    AppendUnique(candidates, std::wstring(L"MUCamSDK\\bin\\") + platform_dir + L"\\MUCam32Ex.dll");
+    AppendUnique(candidates, std::wstring(L"MUCamSDK\\lib\\") + platform_dir + L"\\MUCam32Ex.dll");
 
     DWORD last_error = ERROR_MOD_NOT_FOUND;
     for (const auto& candidate : candidates) {
