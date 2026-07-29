@@ -1,4 +1,4 @@
-﻿#include "../src/app/DiagnosticReportActions.h"
+#include "../src/app/DiagnosticReportActions.h"
 #include "../src/app/ExportActions.h"
 #include "../src/app/ProjectActions.h"
 #include "../src/app/ProjectSessionRestorer.h"
@@ -24,6 +24,7 @@
 #include "../src/imaging/ImageAdjuster.h"
 #include "../src/imaging/ImageRegistration.h"
 #include "../src/imaging/ImageStitcher.h"
+#include "../src/imaging/OpenCvStitchBackend.h"
 #include "../src/imaging/ImageViewport.h"
 #include "../src/imaging/OverlayRenderer.h"
 #include "../src/imaging/PreviewDisplayActions.h"
@@ -4291,6 +4292,39 @@ int main()
             std::to_string(photometric_stitch.tiles[1].offset_y) + ".");
     }
 
+    if (OpenCvStitchBackend::IsAvailable()) {
+        const ImageFrame opencv_pattern = MakeFeaturePatternImage(256, 128);
+        StitchTile opencv_left_tile;
+        opencv_left_tile.frame = CropImage(opencv_pattern, 0, 16, 128, 96);
+        StitchTile opencv_right_tile;
+        opencv_right_tile.frame = CropImage(opencv_pattern, 64, 16, 128, 96);
+        StitchProcessingOptions opencv_options;
+        opencv_options.layout_mode = StitchLayoutMode::Linear;
+        opencv_options.overlap_percent = 50;
+        opencv_options.registration_method = StitchRegistrationMethod::Phase;
+        opencv_options.transform_model = StitchTransformModel::Translation;
+        opencv_options.blend_mode = StitchBlendMode::Linear;
+        std::vector<int> opencv_stitch_progress;
+        const OpenCvStitchResult opencv_stitch = OpenCvStitchBackend::Stitch(
+            {opencv_left_tile, opencv_right_tile},
+            opencv_options,
+            nullptr,
+            [&](int percent) { opencv_stitch_progress.push_back(percent); });
+        if (!opencv_stitch.available ||
+            !opencv_stitch.succeeded ||
+            !opencv_stitch.image.IsValid() ||
+            opencv_stitch.image.width != 192 ||
+            opencv_stitch.image.height != 96 ||
+            opencv_stitch.constraint_count != 1 ||
+            opencv_stitch.positioned_tiles.size() != 2U ||
+            std::abs(opencv_stitch.positioned_tiles[1].offset_x - 64) > 1 ||
+            std::abs(opencv_stitch.positioned_tiles[1].offset_y) > 1) {
+            return Fail("OpenCV stitch backend did not recover a linear microscope overlap.");
+        }
+        if (!NonDecreasingProgress(opencv_stitch_progress)) {
+            return Fail("OpenCV stitch backend did not report monotonic progress.");
+        }
+    }
     std::atomic_bool cancel_stitch = true;
     if (ImageStitcher::StitchAverage({left_tile, right_tile}, StitchBlendMode::Linear, &cancel_stitch).IsValid()) {
         return Fail("Image stitching did not honor cancellation.");

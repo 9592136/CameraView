@@ -1,4 +1,4 @@
-﻿#include "ImageStitcher.h"
+#include "ImageStitcher.h"
 
 #include "ImageRegistration.h"
 
@@ -499,6 +499,7 @@ TranslationOffset EstimateMethodTranslationInRange(
         const TranslationOffset phase = EstimatePhaseTranslationInRange(reference, moving, range);
         return IsUsableConstraintTranslation(phase) ? phase : feature;
     }
+    case StitchRegistrationMethod::Sift:
     case StitchRegistrationMethod::Micro:
         return EstimateMicroscopyTranslationInRange(reference, moving, range);
     case StitchRegistrationMethod::Phase:
@@ -520,7 +521,9 @@ std::vector<TranslationSearchRange> SearchRangesForPair(
         ranges,
         MicroscopeSearchRangeForInitialOffset(reference, moving, initial_dx, initial_dy, options));
 
-    if (method == StitchRegistrationMethod::Auto || method == StitchRegistrationMethod::Micro) {
+    if (method == StitchRegistrationMethod::Auto ||
+        method == StitchRegistrationMethod::Sift ||
+        method == StitchRegistrationMethod::Micro) {
         for (SearchDirection direction :
              {SearchDirection::Right, SearchDirection::Left, SearchDirection::Down, SearchDirection::Up}) {
             AppendUniqueSearchRange(

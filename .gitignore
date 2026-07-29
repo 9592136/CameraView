@@ -40,3 +40,7 @@ Thumbs.db
 Desktop.ini
 *.tmp
 *.bak
+
+# Local third-party binary dependencies
+/third_party/opencv/
+/third_party/*.exe

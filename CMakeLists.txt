@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CameraView LANGUAGES CXX)
 
+option(CAMERAVIEW_WITH_OPENCV "Enable the OpenCV microscopy stitching backend" ON)
+if(CAMERAVIEW_WITH_OPENCV)
+    find_package(OpenCV QUIET COMPONENTS core imgproc features2d calib3d video)
+    if(OpenCV_FOUND)
+        set(CAMERAVIEW_OPENCV_AVAILABLE ON)
+        message(STATUS "CameraView: OpenCV backend enabled (${OpenCV_VERSION})")
+    else()
+        message(WARNING "CameraView: OpenCV not found; microscopy stitching will use the built-in fallback backend")
+    endif()
+endif()
+
 add_executable(CameraView WIN32
     src/main.cpp
     src/MUCamApi.cpp
@@ -61,6 +72,8 @@ add_executable(CameraView WIN32
     src/imaging/ImageRegistration.h
     src/imaging/ImageStitcher.cpp
     src/imaging/ImageStitcher.h
+    src/imaging/OpenCvStitchBackend.cpp
+    src/imaging/OpenCvStitchBackend.h
     src/imaging/ImageViewport.cpp
     src/imaging/ImageViewport.h
     src/imaging/OverlayRenderer.cpp
@@ -185,6 +198,30 @@ target_compile_definitions(CameraView PRIVATE
 )
 
 target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs shell32 comctl32)
+if(CAMERAVIEW_OPENCV_AVAILABLE)
+    target_compile_definitions(CameraView PRIVATE CAMERAVIEW_WITH_OPENCV)
+    target_include_directories(CameraView PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(CameraView PRIVATE ${OpenCV_LIBS})
+endif()
+
+if(CAMERAVIEW_OPENCV_AVAILABLE AND WIN32)
+    set(CAMERAVIEW_OPENCV_RUNTIME_DIR "")
+    if(EXISTS "${OpenCV_DIR}/../bin")
+        get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/../bin" ABSOLUTE)
+    elseif(EXISTS "${OpenCV_DIR}/x64/vc16/bin")
+        get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/x64/vc16/bin" ABSOLUTE)
+    endif()
+    if(CAMERAVIEW_OPENCV_RUNTIME_DIR)
+        file(GLOB CAMERAVIEW_OPENCV_RUNTIME_DLLS "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/opencv_world*.dll")
+        if(CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraView POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraView>"
+            )
+        endif()
+    endif()
+endif()
 
 if(MINGW)
     target_link_options(CameraView PRIVATE -municode)
@@ -261,6 +298,8 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/imaging/ImageRegistration.h
         src/imaging/ImageStitcher.cpp
         src/imaging/ImageStitcher.h
+        src/imaging/OpenCvStitchBackend.cpp
+        src/imaging/OpenCvStitchBackend.h
         src/imaging/ImageViewport.cpp
         src/imaging/ImageViewport.h
         src/imaging/OverlayRenderer.cpp
@@ -379,5 +418,17 @@ if(CAMERAVIEW_BUILD_TESTS)
         NOMINMAX
     )
     target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs)
+    if(CAMERAVIEW_OPENCV_AVAILABLE)
+        target_compile_definitions(CameraViewDomainTests PRIVATE CAMERAVIEW_WITH_OPENCV)
+        target_include_directories(CameraViewDomainTests PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(CameraViewDomainTests PRIVATE ${OpenCV_LIBS})
+        if(WIN32 AND CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraViewDomainTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraViewDomainTests>"
+            )
+        endif()
+    endif()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
 endif()

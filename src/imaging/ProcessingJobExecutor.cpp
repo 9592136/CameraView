@@ -1,7 +1,8 @@
-﻿#include "ProcessingJobExecutor.h"
+#include "ProcessingJobExecutor.h"
 
 #include "ProcessingParameterRules.h"
 #include "ProcessingStatusFormatter.h"
+#include "OpenCvStitchBackend.h"
 
 #include <algorithm>
 #include <cmath>
@@ -183,13 +184,31 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
     options.overlap_percent = ProcessingParameterRules::ClampStitchOverlapPercent(options.overlap_percent);
     options.grid_rows = std::clamp(options.grid_rows, 1, 50);
     options.grid_cols = std::clamp(options.grid_cols, 1, 50);
-    tiles = ApplyStitchInitialLayout(std::move(tiles), options);
-    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(options.overlap_percent);
-    const bool use_orb_registration = options.registration_method != StitchRegistrationMethod::Phase;
 
     ProcessingJobResult result;
     result.job_id = job_id;
     result.kind = ProcessingJobKind::Stitch;
+
+    OpenCvStitchResult open_cv_result = OpenCvStitchBackend::Stitch(
+        tiles,
+        options,
+        cancel_requested,
+        progress_callback);
+    if (open_cv_result.available) {
+        const bool canceled = IsCanceled(cancel_requested);
+        result.image = std::move(open_cv_result.image);
+        result.succeeded = open_cv_result.succeeded && !canceled;
+        result.status = canceled
+            ? ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch)
+            : result.succeeded
+            ? ProcessingStatusFormatter::FormatReady(ProcessingJobKind::Stitch, result.image, open_cv_result.constraint_count)
+            : ProcessingStatusFormatter::FormatFailed(ProcessingJobKind::Stitch);
+        return result;
+    }
+
+    tiles = ApplyStitchInitialLayout(std::move(tiles), options);
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(options.overlap_percent);
+    const bool use_orb_registration = options.registration_method != StitchRegistrationMethod::Phase;
 
     const int optimization_scale = OptimizationPreviewScale(tiles);
     const std::vector<StitchTile> optimization_tiles =

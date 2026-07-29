@@ -1,4 +1,4 @@
-﻿#ifndef WIN32_LEAN_AND_MEAN
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #ifndef NOMINMAX
@@ -1595,6 +1595,8 @@ public:
                 selection = 1;
             } else if (stitch_options_.registration_method == StitchRegistrationMethod::Auto) {
                 selection = 2;
+            } else if (stitch_options_.registration_method == StitchRegistrationMethod::Sift) {
+                selection = 3;
             }
             SendMessageW(method, CB_SETCURSEL, selection, 0);
         }
@@ -1699,6 +1701,8 @@ public:
             options.registration_method = StitchRegistrationMethod::Auto;
             break;
         case 3:
+            options.registration_method = StitchRegistrationMethod::Sift;
+            break;
         case 4:
         default:
             options.registration_method = StitchRegistrationMethod::Micro;
@@ -2092,7 +2096,7 @@ public:
                                       + 8;
             // Controls layout offsets (matching case 6):
             //   channel:       24 + kControlHeight(28) + kControlGap(8) = 60
-            //   b/c/g/wl rows: 22 + kControlHeight(28) + 2 = 52 (×4)
+            //   b/c/g/wl rows: 22 + kControlHeight(28) + 2 = 52 (x4)
             //   ww row:        22 + kControlHeight(28) + kControlGap(8) = 58
             //   reset:         kControlHeight(28) + kControlGap(8) = 36
             //   total: 60 + 52*4 + 58 + 36 = 362
@@ -6922,19 +6926,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         SendMessageW(histogram_channel_combo, CB_SETCURSEL, 0, 0);
 
-        // Brightness trackbar: range 0-200 → maps to -100..+100
+        // Brightness trackbar: range 0-200 maps to -100..+100
         HWND brightness_slider = GetDlgItem(hwnd, kIdHistogramBrightnessSlider);
         SendMessageW(brightness_slider, TBM_SETRANGE, TRUE, MAKELONG(0, 200));
         SendMessageW(brightness_slider, TBM_SETPOS, TRUE, 100);
         SendMessageW(brightness_slider, TBM_SETTICFREQ, 25, 0);
 
-        // Contrast trackbar: range 0-200 → maps to -100..+100
+        // Contrast trackbar: range 0-200 maps to -100..+100
         HWND contrast_slider = GetDlgItem(hwnd, kIdHistogramContrastSlider);
         SendMessageW(contrast_slider, TBM_SETRANGE, TRUE, MAKELONG(0, 200));
         SendMessageW(contrast_slider, TBM_SETPOS, TRUE, 100);
         SendMessageW(contrast_slider, TBM_SETTICFREQ, 25, 0);
 
-        // Gamma trackbar: range 1-30 → maps to 0.1..3.0
+        // Gamma trackbar: range 1-30 maps to 0.1..3.0
         HWND gamma_slider = GetDlgItem(hwnd, kIdHistogramGammaSlider);
         SendMessageW(gamma_slider, TBM_SETRANGE, TRUE, MAKELONG(1, 30));
         SendMessageW(gamma_slider, TBM_SETPOS, TRUE, 10);

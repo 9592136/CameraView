@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "../domain/ImageFrame.h"
 
@@ -10,6 +10,7 @@ enum class StitchRegistrationMethod {
     Phase,
     Feature,
     Auto,
+    Sift,
     Micro
 };
 
