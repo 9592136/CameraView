@@ -14,7 +14,8 @@ ProjectActionResult ProjectActions::SaveProject(
     int stitch_search_percent,
     const std::vector<std::wstring>& objective_labels,
     const std::vector<CalibrationProfile>& objective_calibrations,
-    int selected_objective_index)
+    int selected_objective_index,
+    bool stitch_use_orb_registration)
 {
     const ProjectDocument document = ProjectSessionMapper::ToDocument(
         calibration,
@@ -25,7 +26,8 @@ ProjectActionResult ProjectActions::SaveProject(
         stitch_search_percent,
         objective_labels,
         objective_calibrations,
-        selected_objective_index);
+        selected_objective_index,
+        stitch_use_orb_registration);
 
     std::wstring error;
     if (!ProjectRepository::Save(path, document, error)) {

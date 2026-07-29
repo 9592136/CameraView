@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "EdfProcessor.h"
 #include "ImageStitcher.h"
@@ -18,6 +18,14 @@ public:
         ProcessingJobLaunch launch,
         std::vector<StitchTile> tiles,
         int search_percent,
+        StatusCallback status_callback,
+        PublishCallback publish_callback,
+        bool use_orb_registration = true);
+
+    static std::thread StartStitch(
+        ProcessingJobLaunch launch,
+        std::vector<StitchTile> tiles,
+        StitchProcessingOptions options,
         StatusCallback status_callback,
         PublishCallback publish_callback);
 

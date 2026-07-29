@@ -1,8 +1,9 @@
-#include "ImageStitcher.h"
+﻿#include "ImageStitcher.h"
 
 #include "ImageRegistration.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -22,6 +23,19 @@ struct TileConstraint {
     int dx = 0;
     int dy = 0;
     double weight = 1.0;
+};
+
+struct TilePair {
+    std::size_t reference_index = 0;
+    std::size_t moving_index = 0;
+};
+
+struct TranslationSearchRange {
+    int min_dx = 0;
+    int max_dx = 0;
+    int min_dy = 0;
+    int max_dy = 0;
+    bool valid = false;
 };
 
 struct ColorCorrection {
@@ -53,9 +67,16 @@ constexpr double kBlendScoreTolerance = 0.025;
 constexpr double kBlendColorDistanceThreshold = 10.0;
 constexpr double kMinimumConstraintConfidence = 0.01;
 constexpr int kMaxWideRegistrationEdge = 512;
-constexpr int kWideRegistrationCandidates = 8;
-constexpr int kWideRegistrationRefinementCandidates = 4;
+constexpr int kWideRegistrationCandidates = 12;
+constexpr int kWideRegistrationRefinementCandidates = 6;
 constexpr int kWideRegistrationTargetSteps = 64;
+constexpr double kMicroscopeCrossAxisToleranceFraction = 0.30;
+constexpr double kMicroscopeMinimumStepFraction = 0.05;
+constexpr double kMicroscopeMaximumStepFraction = 0.98;
+constexpr double kMinimumLinearBlendWeight = 0.01;
+constexpr double kAutoFeatureConfidenceThreshold = 0.30;
+constexpr double kMeasuredOriginalOffsetWeight = 0.05;
+constexpr double kEstimatedOriginalOffsetWeight = 0.001;
 
 bool HasReadablePixels(const ImageFrame& frame)
 {
@@ -97,73 +118,296 @@ bool ShouldUseWideRegistrationSearch(
         (options.search_radius_x >= 16 || options.search_radius_y >= 16);
 }
 
-TranslationOffset EstimateConstraintTranslation(
+int RoundedFraction(int value, double fraction)
+{
+    return static_cast<int>(std::lround(static_cast<double>(std::max(1, value)) * fraction));
+}
+
+enum class SearchDirection {
+    Right,
+    Left,
+    Down,
+    Up
+};
+
+StitchRegistrationMethod NormalizedRegistrationMethod(const StitchOptimizationOptions& options)
+{
+    if (!options.use_orb_registration) {
+        return StitchRegistrationMethod::Phase;
+    }
+    return options.registration_method;
+}
+
+unsigned char LuminanceByteAt(const ImageFrame& frame, int x, int y)
+{
+    const unsigned char* pixel =
+        frame.bgr.data() +
+        static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.stride) +
+        static_cast<std::size_t>(x) * 3U;
+    const int blue = pixel[0];
+    const int green = pixel[1];
+    const int red = pixel[2];
+    return static_cast<unsigned char>((red * 77 + green * 150 + blue * 29) >> 8);
+}
+
+ImageFrame BuildMicroscopyPreprocessedFrame(const ImageFrame& source)
+{
+    if (!HasReadablePixels(source)) {
+        return {};
+    }
+
+    const int pixel_count = source.width * source.height;
+    std::vector<unsigned char> gray(static_cast<std::size_t>(pixel_count));
+    std::array<int, 256> histogram{};
+    for (int y = 0; y < source.height; ++y) {
+        for (int x = 0; x < source.width; ++x) {
+            const unsigned char value = LuminanceByteAt(source, x, y);
+            gray[static_cast<std::size_t>(y) * static_cast<std::size_t>(source.width) + static_cast<std::size_t>(x)] = value;
+            ++histogram[static_cast<std::size_t>(value)];
+        }
+    }
+
+    std::array<unsigned char, 256> equalization_map{};
+    int cumulative = 0;
+    int first_non_zero = 0;
+    while (first_non_zero < 255 && histogram[static_cast<std::size_t>(first_non_zero)] == 0) {
+        ++first_non_zero;
+    }
+    const int cdf_min = histogram[static_cast<std::size_t>(first_non_zero)];
+    const int denominator = std::max(1, pixel_count - cdf_min);
+    for (int value = 0; value < 256; ++value) {
+        cumulative += histogram[static_cast<std::size_t>(value)];
+        const int mapped = ((cumulative - cdf_min) * 255) / denominator;
+        equalization_map[static_cast<std::size_t>(value)] = static_cast<unsigned char>(std::clamp(mapped, 0, 255));
+    }
+
+    std::vector<unsigned char> equalized(static_cast<std::size_t>(pixel_count));
+    double sum = 0.0;
+    double squared_sum = 0.0;
+    for (int index = 0; index < pixel_count; ++index) {
+        const unsigned char value = equalization_map[static_cast<std::size_t>(gray[static_cast<std::size_t>(index)])];
+        equalized[static_cast<std::size_t>(index)] = value;
+        sum += value;
+        squared_sum += static_cast<double>(value) * static_cast<double>(value);
+    }
+
+    const double mean = sum / static_cast<double>(std::max(1, pixel_count));
+    const double variance = std::max(0.0, squared_sum / static_cast<double>(std::max(1, pixel_count)) - mean * mean);
+    const double stddev = std::sqrt(variance);
+
+    ImageFrame output;
+    output.width = source.width;
+    output.height = source.height;
+    output.stride = (output.width * 3 + 3) & ~3;
+    output.timestamp = source.timestamp;
+    output.sequence = source.sequence;
+    output.bgr.assign(static_cast<std::size_t>(output.stride) * static_cast<std::size_t>(output.height), 0);
+    for (int y = 0; y < output.height; ++y) {
+        unsigned char* row = output.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(output.stride);
+        for (int x = 0; x < output.width; ++x) {
+            const unsigned char equalized_value =
+                equalized[static_cast<std::size_t>(y) * static_cast<std::size_t>(output.width) + static_cast<std::size_t>(x)];
+            const double normalized = stddev > 1e-6 ?
+                128.0 + (static_cast<double>(equalized_value) - mean) * 48.0 / stddev :
+                static_cast<double>(equalized_value);
+            const unsigned char out = static_cast<unsigned char>(std::lround(std::clamp(normalized, 0.0, 255.0)));
+            row[x * 3 + 0] = out;
+            row[x * 3 + 1] = out;
+            row[x * 3 + 2] = out;
+        }
+    }
+    return output;
+}
+
+TranslationSearchRange DirectionalMicroscopeSearchRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    SearchDirection direction,
+    const StitchOptimizationOptions& options)
+{
+    const int min_width = std::min(reference.width, moving.width);
+    const int min_height = std::min(reference.height, moving.height);
+    const int min_step_x = std::max(1, RoundedFraction(min_width, kMicroscopeMinimumStepFraction));
+    const int min_step_y = std::max(1, RoundedFraction(min_height, kMicroscopeMinimumStepFraction));
+    const int max_step_x = std::max(1, RoundedFraction(
+        direction == SearchDirection::Left ? moving.width : reference.width,
+        kMicroscopeMaximumStepFraction));
+    const int max_step_y = std::max(1, RoundedFraction(
+        direction == SearchDirection::Up ? moving.height : reference.height,
+        kMicroscopeMaximumStepFraction));
+    const int drift_x = std::max(options.search_radius_x, RoundedFraction(min_width, kMicroscopeCrossAxisToleranceFraction));
+    const int drift_y = std::max(options.search_radius_y, RoundedFraction(min_height, kMicroscopeCrossAxisToleranceFraction));
+
+    TranslationSearchRange range;
+    switch (direction) {
+    case SearchDirection::Right:
+        range.min_dx = min_step_x;
+        range.max_dx = max_step_x;
+        range.min_dy = -drift_y;
+        range.max_dy = drift_y;
+        break;
+    case SearchDirection::Left:
+        range.min_dx = -max_step_x;
+        range.max_dx = -min_step_x;
+        range.min_dy = -drift_y;
+        range.max_dy = drift_y;
+        break;
+    case SearchDirection::Down:
+        range.min_dx = -drift_x;
+        range.max_dx = drift_x;
+        range.min_dy = min_step_y;
+        range.max_dy = max_step_y;
+        break;
+    case SearchDirection::Up:
+        range.min_dx = -drift_x;
+        range.max_dx = drift_x;
+        range.min_dy = -max_step_y;
+        range.max_dy = -min_step_y;
+        break;
+    }
+    range.valid = range.min_dx <= range.max_dx && range.min_dy <= range.max_dy;
+    return range;
+}
+
+TranslationSearchRange HorizontalMicroscopeSearchRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    int initial_dx,
+    int,
+    const StitchOptimizationOptions& options)
+{
+    return DirectionalMicroscopeSearchRange(
+        reference,
+        moving,
+        initial_dx >= 0 ? SearchDirection::Right : SearchDirection::Left,
+        options);
+}
+
+TranslationSearchRange VerticalMicroscopeSearchRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    int,
+    int initial_dy,
+    const StitchOptimizationOptions& options)
+{
+    return DirectionalMicroscopeSearchRange(
+        reference,
+        moving,
+        initial_dy >= 0 ? SearchDirection::Down : SearchDirection::Up,
+        options);
+}
+
+TranslationSearchRange MicroscopeSearchRangeForInitialOffset(
     const ImageFrame& reference,
     const ImageFrame& moving,
     int initial_dx,
     int initial_dy,
     const StitchOptimizationOptions& options)
 {
-    TranslationOffset best = ImageRegistration::RefineTranslation(
-        reference,
-        moving,
-        initial_dx,
-        initial_dy,
-        options.search_radius_x,
-        options.search_radius_y);
-
-    if (!ShouldUseWideRegistrationSearch(reference, moving, options)) {
-        return best;
+    if (std::abs(initial_dx) >= std::abs(initial_dy) && initial_dx != 0) {
+        return HorizontalMicroscopeSearchRange(reference, moving, initial_dx, initial_dy, options);
+    }
+    if (initial_dy != 0) {
+        return VerticalMicroscopeSearchRange(reference, moving, initial_dx, initial_dy, options);
     }
 
-    const int wide_radius_x = std::max(options.search_radius_x, std::max(reference.width, moving.width));
-    const int wide_radius_y = std::max(options.search_radius_y, std::max(reference.height, moving.height));
-    const int offset_step = std::clamp(
-        std::max(wide_radius_x, wide_radius_y) / kWideRegistrationTargetSteps,
+    TranslationSearchRange range;
+    range.min_dx = -options.search_radius_x;
+    range.max_dx = options.search_radius_x;
+    range.min_dy = -options.search_radius_y;
+    range.max_dy = options.search_radius_y;
+    range.valid = true;
+    return range;
+}
+
+bool SameSearchRange(const TranslationSearchRange& left, const TranslationSearchRange& right)
+{
+    return left.valid == right.valid &&
+        left.min_dx == right.min_dx &&
+        left.max_dx == right.max_dx &&
+        left.min_dy == right.min_dy &&
+        left.max_dy == right.max_dy;
+}
+
+void AppendUniqueSearchRange(std::vector<TranslationSearchRange>& ranges, TranslationSearchRange range)
+{
+    if (!range.valid) {
+        return;
+    }
+    const bool exists = std::any_of(
+        ranges.begin(),
+        ranges.end(),
+        [&](const TranslationSearchRange& existing) { return SameSearchRange(existing, range); });
+    if (!exists) {
+        ranges.push_back(range);
+    }
+}
+
+int OffsetStepForRange(const TranslationSearchRange& range)
+{
+    return std::clamp(
+        std::max(range.max_dx - range.min_dx, range.max_dy - range.min_dy) / kWideRegistrationTargetSteps,
         2,
         8);
+}
 
-    const TranslationOffset orb_candidate = ImageRegistration::EstimateOrbTranslation(
+TranslationOffset BetterTranslation(const TranslationOffset& left, const TranslationOffset& right)
+{
+    return IsBetterConstraintTranslation(left, right) ? left : right;
+}
+
+TranslationOffset RefineCandidate(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    const TranslationOffset& candidate,
+    int radius_x,
+    int radius_y)
+{
+    if (!IsUsableConstraintTranslation(candidate)) {
+        return {};
+    }
+    const TranslationOffset refined = ImageRegistration::RefineTranslation(
         reference,
         moving,
-        -wide_radius_x,
-        wide_radius_x,
-        -wide_radius_y,
-        wide_radius_y);
-    if (IsUsableConstraintTranslation(orb_candidate)) {
-        const int orb_refinement_radius = std::max(2, std::min(12, offset_step * 3));
-        const TranslationOffset orb_refined = ImageRegistration::RefineTranslation(
-            reference,
-            moving,
-            orb_candidate.dx,
-            orb_candidate.dy,
-            orb_refinement_radius,
-            orb_refinement_radius);
-        if (IsBetterConstraintTranslation(orb_refined, best)) {
-            best = orb_refined;
-        }
+        candidate.dx,
+        candidate.dy,
+        radius_x,
+        radius_y);
+    if (IsUsableConstraintTranslation(refined)) {
+        return BetterTranslation(refined, candidate);
+    }
+    return candidate;
+}
+
+TranslationOffset EstimatePhaseTranslationInRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    const TranslationSearchRange& range)
+{
+    if (!range.valid) {
+        return {};
     }
 
+    const int offset_step = OffsetStepForRange(range);
     const std::vector<TranslationOffset> candidates = ImageRegistration::EstimateTranslationCandidates(
         reference,
         moving,
-        -wide_radius_x,
-        wide_radius_x,
-        -wide_radius_y,
-        wide_radius_y,
+        range.min_dx,
+        range.max_dx,
+        range.min_dy,
+        range.max_dy,
         kWideRegistrationCandidates,
         offset_step,
         offset_step);
+    TranslationOffset best;
     const int refinement_count = std::min(
         static_cast<int>(candidates.size()),
         kWideRegistrationRefinementCandidates);
     for (int index = 0; index < refinement_count; ++index) {
-        const TranslationOffset& candidate = candidates[static_cast<std::size_t>(index)];
-        const TranslationOffset refined = ImageRegistration::RefineTranslation(
+        const TranslationOffset refined = RefineCandidate(
             reference,
             moving,
-            candidate.dx,
-            candidate.dy,
+            candidates[static_cast<std::size_t>(index)],
             std::max(2, offset_step * 2),
             std::max(2, offset_step * 2));
         if (IsBetterConstraintTranslation(refined, best)) {
@@ -173,6 +417,168 @@ TranslationOffset EstimateConstraintTranslation(
     return best;
 }
 
+TranslationOffset EstimateFeatureTranslationInRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    const TranslationSearchRange& range)
+{
+    if (!range.valid) {
+        return {};
+    }
+    const int offset_step = OffsetStepForRange(range);
+    const TranslationOffset candidate = ImageRegistration::EstimateOrbTranslation(
+        reference,
+        moving,
+        range.min_dx,
+        range.max_dx,
+        range.min_dy,
+        range.max_dy);
+    return RefineCandidate(
+        reference,
+        moving,
+        candidate,
+        std::max(2, std::min(12, offset_step * 3)),
+        std::max(2, std::min(12, offset_step * 3)));
+}
+
+TranslationOffset EstimateMicroscopyTranslationInRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    const TranslationSearchRange& range)
+{
+    TranslationOffset best = EstimateFeatureTranslationInRange(reference, moving, range);
+    if (IsUsableConstraintTranslation(best) && best.confidence >= kAutoFeatureConfidenceThreshold) {
+        return best;
+    }
+
+    const ImageFrame reference_preprocessed = BuildMicroscopyPreprocessedFrame(reference);
+    const ImageFrame moving_preprocessed = BuildMicroscopyPreprocessedFrame(moving);
+    const TranslationOffset preprocessed_phase = EstimatePhaseTranslationInRange(
+        reference_preprocessed.IsValid() ? reference_preprocessed : reference,
+        moving_preprocessed.IsValid() ? moving_preprocessed : moving,
+        range);
+    if (IsUsableConstraintTranslation(preprocessed_phase)) {
+        const int offset_step = OffsetStepForRange(range);
+        TranslationOffset refined = ImageRegistration::RefineTranslation(
+            reference,
+            moving,
+            preprocessed_phase.dx,
+            preprocessed_phase.dy,
+            std::max(3, offset_step * 2),
+            std::max(3, offset_step * 2));
+        if (!IsUsableConstraintTranslation(refined)) {
+            refined = preprocessed_phase;
+        } else {
+            refined.confidence = std::max(refined.confidence, preprocessed_phase.confidence);
+        }
+        if (IsBetterConstraintTranslation(refined, best)) {
+            best = refined;
+        }
+    }
+
+    if (!IsUsableConstraintTranslation(best)) {
+        best = EstimatePhaseTranslationInRange(reference, moving, range);
+    }
+    return best;
+}
+
+TranslationOffset EstimateMethodTranslationInRange(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    const TranslationSearchRange& range,
+    StitchRegistrationMethod method)
+{
+    switch (method) {
+    case StitchRegistrationMethod::Feature:
+        return EstimateFeatureTranslationInRange(reference, moving, range);
+    case StitchRegistrationMethod::Auto: {
+        const TranslationOffset feature = EstimateFeatureTranslationInRange(reference, moving, range);
+        if (IsUsableConstraintTranslation(feature) && feature.confidence >= kAutoFeatureConfidenceThreshold) {
+            return feature;
+        }
+        const TranslationOffset phase = EstimatePhaseTranslationInRange(reference, moving, range);
+        return IsUsableConstraintTranslation(phase) ? phase : feature;
+    }
+    case StitchRegistrationMethod::Micro:
+        return EstimateMicroscopyTranslationInRange(reference, moving, range);
+    case StitchRegistrationMethod::Phase:
+    default:
+        return EstimatePhaseTranslationInRange(reference, moving, range);
+    }
+}
+
+std::vector<TranslationSearchRange> SearchRangesForPair(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    int initial_dx,
+    int initial_dy,
+    StitchRegistrationMethod method,
+    const StitchOptimizationOptions& options)
+{
+    std::vector<TranslationSearchRange> ranges;
+    AppendUniqueSearchRange(
+        ranges,
+        MicroscopeSearchRangeForInitialOffset(reference, moving, initial_dx, initial_dy, options));
+
+    if (method == StitchRegistrationMethod::Auto || method == StitchRegistrationMethod::Micro) {
+        for (SearchDirection direction :
+             {SearchDirection::Right, SearchDirection::Left, SearchDirection::Down, SearchDirection::Up}) {
+            AppendUniqueSearchRange(
+                ranges,
+                DirectionalMicroscopeSearchRange(reference, moving, direction, options));
+        }
+    }
+    return ranges;
+}
+
+TranslationOffset EstimateConstraintTranslation(
+    const ImageFrame& reference,
+    const ImageFrame& moving,
+    int initial_dx,
+    int initial_dy,
+    const StitchOptimizationOptions& options)
+{
+    const StitchRegistrationMethod method = NormalizedRegistrationMethod(options);
+    TranslationOffset best;
+    if (method != StitchRegistrationMethod::Feature) {
+        best = ImageRegistration::RefineTranslation(
+            reference,
+            moving,
+            initial_dx,
+            initial_dy,
+            options.search_radius_x,
+            options.search_radius_y);
+    }
+
+    if (!ShouldUseWideRegistrationSearch(reference, moving, options)) {
+        TranslationSearchRange local_range;
+        local_range.min_dx = initial_dx - options.search_radius_x;
+        local_range.max_dx = initial_dx + options.search_radius_x;
+        local_range.min_dy = initial_dy - options.search_radius_y;
+        local_range.max_dy = initial_dy + options.search_radius_y;
+        local_range.valid = true;
+        const TranslationOffset candidate = EstimateMethodTranslationInRange(reference, moving, local_range, method);
+        if (IsBetterConstraintTranslation(candidate, best)) {
+            best = candidate;
+        }
+        return best;
+    }
+
+    const std::vector<TranslationSearchRange> ranges = SearchRangesForPair(
+        reference,
+        moving,
+        initial_dx,
+        initial_dy,
+        method,
+        options);
+    for (const TranslationSearchRange& range : ranges) {
+        const TranslationOffset candidate = EstimateMethodTranslationInRange(reference, moving, range, method);
+        if (IsBetterConstraintTranslation(candidate, best)) {
+            best = candidate;
+        }
+    }
+    return best;
+}
 bool ExpandBounds(const StitchTile& tile, Bounds& bounds, bool first)
 {
     if (!HasReadablePixels(tile.frame)) {
@@ -255,6 +661,18 @@ int EdgeDistance(const StitchTile& tile, int x, int y)
         y + 1,
         tile.frame.width - x,
         tile.frame.height - y});
+}
+
+double LinearBlendWeight(const StitchTile& tile, int x, int y)
+{
+    if (x < 0 || y < 0 || x >= tile.frame.width || y >= tile.frame.height) {
+        return 0.0;
+    }
+    const int edge_distance = std::max(0, EdgeDistance(tile, x, y) - 1);
+    const int max_distance = std::max(1, std::min(tile.frame.width, tile.frame.height) / 2);
+    return std::max(
+        kMinimumLinearBlendWeight,
+        std::min(1.0, static_cast<double>(edge_distance) / static_cast<double>(max_distance)));
 }
 
 double InteriorConfidence(const StitchTile& tile, int x, int y)
@@ -417,6 +835,68 @@ void ReportProgress(const std::function<void(int)>& progress_callback, int perce
         progress_callback(std::clamp(percent, 0, 100));
     }
 }
+bool SameTilePair(const TilePair& left, const TilePair& right)
+{
+    return left.reference_index == right.reference_index && left.moving_index == right.moving_index;
+}
+
+void AppendUniqueTilePair(std::vector<TilePair>& pairs, TilePair pair)
+{
+    if (pair.reference_index == pair.moving_index) {
+        return;
+    }
+    const bool exists = std::any_of(
+        pairs.begin(),
+        pairs.end(),
+        [&](const TilePair& existing) { return SameTilePair(existing, pair); });
+    if (!exists) {
+        pairs.push_back(pair);
+    }
+}
+
+bool IsLikelyMicroscopeNeighbor(const StitchTile& reference, const StitchTile& moving)
+{
+    if (!HasReadablePixels(reference.frame) || !HasReadablePixels(moving.frame)) {
+        return false;
+    }
+
+    const int dx = moving.offset_x - reference.offset_x;
+    const int dy = moving.offset_y - reference.offset_y;
+    const int min_width = std::min(reference.frame.width, moving.frame.width);
+    const int min_height = std::min(reference.frame.height, moving.frame.height);
+    const int min_step_x = std::max(1, RoundedFraction(min_width, kMicroscopeMinimumStepFraction));
+    const int min_step_y = std::max(1, RoundedFraction(min_height, kMicroscopeMinimumStepFraction));
+    const int max_step_x = std::max(1, RoundedFraction(std::max(reference.frame.width, moving.frame.width), kMicroscopeMaximumStepFraction));
+    const int max_step_y = std::max(1, RoundedFraction(std::max(reference.frame.height, moving.frame.height), kMicroscopeMaximumStepFraction));
+    const int drift_x = std::max(1, RoundedFraction(min_width, kMicroscopeCrossAxisToleranceFraction));
+    const int drift_y = std::max(1, RoundedFraction(min_height, kMicroscopeCrossAxisToleranceFraction));
+
+    const bool horizontal = std::abs(dx) >= min_step_x && std::abs(dx) <= max_step_x && std::abs(dy) <= drift_y;
+    const bool vertical = std::abs(dy) >= min_step_y && std::abs(dy) <= max_step_y && std::abs(dx) <= drift_x;
+    return horizontal || vertical;
+}
+
+std::vector<TilePair> BuildMicroscopeNeighborPairs(const std::vector<StitchTile>& tiles)
+{
+    std::vector<TilePair> pairs;
+    if (tiles.size() < 2) {
+        return pairs;
+    }
+
+    pairs.reserve(tiles.size() * 2U);
+    for (std::size_t index = 1; index < tiles.size(); ++index) {
+        AppendUniqueTilePair(pairs, TilePair{index - 1U, index});
+    }
+
+    for (std::size_t reference_index = 0; reference_index < tiles.size(); ++reference_index) {
+        for (std::size_t moving_index = reference_index + 1U; moving_index < tiles.size(); ++moving_index) {
+            if (IsLikelyMicroscopeNeighbor(tiles[reference_index], tiles[moving_index])) {
+                AppendUniqueTilePair(pairs, TilePair{reference_index, moving_index});
+            }
+        }
+    }
+    return pairs;
+}
 
 } // namespace
 
@@ -437,47 +917,47 @@ StitchOptimizationResult ImageStitcher::OptimizeTileOffsets(
     options.search_radius_y = std::max(0, options.search_radius_y);
     options.iterations = std::max(1, options.iterations);
 
-    const int pair_count = static_cast<int>((tiles.size() * (tiles.size() - 1U)) / 2U);
+    const std::vector<TilePair> tile_pairs = BuildMicroscopeNeighborPairs(tiles);
+    const int pair_count = static_cast<int>(tile_pairs.size());
     int processed_pairs = 0;
     std::vector<TileConstraint> constraints;
     constraints.reserve(static_cast<std::size_t>(pair_count));
 
-    for (std::size_t reference_index = 0; reference_index < tiles.size(); ++reference_index) {
-        if (!tiles[reference_index].frame.IsValid()) {
+    for (const TilePair& pair : tile_pairs) {
+        if (IsCancelled(cancel_requested)) {
+            return result;
+        }
+        ++processed_pairs;
+        const std::size_t reference_index = pair.reference_index;
+        const std::size_t moving_index = pair.moving_index;
+        if (reference_index >= tiles.size() ||
+            moving_index >= tiles.size() ||
+            !tiles[reference_index].frame.IsValid() ||
+            !tiles[moving_index].frame.IsValid()) {
+            ReportProgress(progress_callback, (processed_pairs * 70) / std::max(1, pair_count));
             continue;
         }
-        for (std::size_t moving_index = reference_index + 1U; moving_index < tiles.size(); ++moving_index) {
-            if (IsCancelled(cancel_requested)) {
-                return result;
-            }
-            ++processed_pairs;
-            if (!tiles[moving_index].frame.IsValid()) {
-                ReportProgress(progress_callback, (processed_pairs * 70) / std::max(1, pair_count));
-                continue;
-            }
 
-            const int initial_dx = tiles[moving_index].offset_x - tiles[reference_index].offset_x;
-            const int initial_dy = tiles[moving_index].offset_y - tiles[reference_index].offset_y;
-            const TranslationOffset refined = EstimateConstraintTranslation(
-                tiles[reference_index].frame,
-                tiles[moving_index].frame,
-                initial_dx,
-                initial_dy,
-                options);
-            if (IsUsableConstraintTranslation(refined)) {
-                TileConstraint constraint;
-                constraint.reference_index = reference_index;
-                constraint.moving_index = moving_index;
-                constraint.dx = refined.dx;
-                constraint.dy = refined.dy;
-                constraint.weight =
-                    std::max(0.05, refined.confidence) / (1.0 + std::max(0.0, refined.score));
-                constraints.push_back(constraint);
-            }
-            ReportProgress(progress_callback, (processed_pairs * 70) / std::max(1, pair_count));
+        const int initial_dx = tiles[moving_index].offset_x - tiles[reference_index].offset_x;
+        const int initial_dy = tiles[moving_index].offset_y - tiles[reference_index].offset_y;
+        const TranslationOffset refined = EstimateConstraintTranslation(
+            tiles[reference_index].frame,
+            tiles[moving_index].frame,
+            initial_dx,
+            initial_dy,
+            options);
+        if (IsUsableConstraintTranslation(refined)) {
+            TileConstraint constraint;
+            constraint.reference_index = reference_index;
+            constraint.moving_index = moving_index;
+            constraint.dx = refined.dx;
+            constraint.dy = refined.dy;
+            constraint.weight =
+                std::max(0.05, refined.confidence) / (1.0 + std::max(0.0, refined.score));
+            constraints.push_back(constraint);
         }
+        ReportProgress(progress_callback, (processed_pairs * 70) / std::max(1, pair_count));
     }
-
     result.constraint_count = static_cast<int>(constraints.size());
     if (constraints.empty() || IsCancelled(cancel_requested)) {
         ReportProgress(progress_callback, 100);
@@ -492,8 +972,6 @@ StitchOptimizationResult ImageStitcher::OptimizeTileOffsets(
         x[index] = original_x[index] = static_cast<double>(tiles[index].offset_x);
         y[index] = original_y[index] = static_cast<double>(tiles[index].offset_y);
     }
-
-    constexpr double kOriginalOffsetWeight = 0.05;
     for (int iteration = 0; iteration < options.iterations; ++iteration) {
         if (IsCancelled(cancel_requested)) {
             return result;
@@ -502,9 +980,12 @@ StitchOptimizationResult ImageStitcher::OptimizeTileOffsets(
         std::vector<double> next_x = x;
         std::vector<double> next_y = y;
         for (std::size_t tile_index = 1; tile_index < tiles.size(); ++tile_index) {
-            double sum_x = original_x[tile_index] * kOriginalOffsetWeight;
-            double sum_y = original_y[tile_index] * kOriginalOffsetWeight;
-            double sum_weight = kOriginalOffsetWeight;
+            const double original_offset_weight = tiles[tile_index].estimated_position ?
+                kEstimatedOriginalOffsetWeight :
+                kMeasuredOriginalOffsetWeight;
+            double sum_x = original_x[tile_index] * original_offset_weight;
+            double sum_y = original_y[tile_index] * original_offset_weight;
+            double sum_weight = original_offset_weight;
 
             for (const TileConstraint& constraint : constraints) {
                 if (constraint.reference_index == tile_index) {
@@ -544,6 +1025,7 @@ StitchOptimizationResult ImageStitcher::OptimizeTileOffsets(
 
 ImageFrame ImageStitcher::StitchAverage(
     const std::vector<StitchTile>& tiles,
+    StitchBlendMode blend_mode,
     const std::atomic_bool* cancel_requested,
     const std::function<void(int)>& progress_callback)
 {
@@ -598,38 +1080,39 @@ ImageFrame ImageStitcher::StitchAverage(
         }
         for (int x = 0; x < output.width; ++x) {
             const int canvas_x = bounds.left + x;
-            PixelCandidate best;
-            PixelCandidate second_best;
+            double blue_sum = 0.0;
+            double green_sum = 0.0;
+            double red_sum = 0.0;
+            double weight_sum = 0.0;
 
             for (std::size_t tile_index : active_tile_indices) {
                 const StitchTile& tile = tiles[tile_index];
-                const PixelCandidate candidate = CandidateForPixel(
-                    tile,
-                    corrections[tile_index],
-                    canvas_x - tile.offset_x,
-                    canvas_y - tile.offset_y);
-                if (!candidate.valid) {
+                const int tile_x = canvas_x - tile.offset_x;
+                const int tile_y = canvas_y - tile.offset_y;
+                if (tile_x < 0 || tile_y < 0 || tile_x >= tile.frame.width || tile_y >= tile.frame.height) {
                     continue;
                 }
-                if (!best.valid || candidate.score > best.score) {
-                    second_best = best;
-                    best = candidate;
-                } else if (!second_best.valid || candidate.score > second_best.score) {
-                    second_best = candidate;
+
+                const double weight = blend_mode == StitchBlendMode::Linear
+                    ? LinearBlendWeight(tile, tile_x, tile_y)
+                    : 1.0;
+                if (weight <= 0.0) {
+                    continue;
                 }
+                const PixelColor color = CorrectedPixelAt(tile, corrections[tile_index], tile_x, tile_y);
+                blue_sum += static_cast<double>(color.blue) * weight;
+                green_sum += static_cast<double>(color.green) * weight;
+                red_sum += static_cast<double>(color.red) * weight;
+                weight_sum += weight;
             }
 
-            if (!best.valid) {
+            if (weight_sum <= 0.0) {
                 continue;
             }
 
-            PixelColor output_color = best.color;
-            if (ShouldBlendCandidates(best, second_best)) {
-                output_color = BlendCandidates(best, second_best);
-            }
-            dst[x * 3 + 0] = static_cast<unsigned char>(output_color.blue);
-            dst[x * 3 + 1] = static_cast<unsigned char>(output_color.green);
-            dst[x * 3 + 2] = static_cast<unsigned char>(output_color.red);
+            dst[x * 3 + 0] = static_cast<unsigned char>(std::lround(ClampChannel(blue_sum / weight_sum)));
+            dst[x * 3 + 1] = static_cast<unsigned char>(std::lround(ClampChannel(green_sum / weight_sum)));
+            dst[x * 3 + 2] = static_cast<unsigned char>(std::lround(ClampChannel(red_sum / weight_sum)));
         }
         ReportProgress(progress_callback, 5 + ((y + 1) * 95) / output.height);
     }

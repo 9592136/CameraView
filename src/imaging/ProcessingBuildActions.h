@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../domain/ImageFrame.h"
 #include "EdfProcessor.h"
@@ -23,6 +23,8 @@ struct ProcessingBuildActionResult {
     ProcessingJobKind kind = ProcessingJobKind::None;
     std::vector<StitchTile> stitch_tiles;
     int stitch_search_percent = 0;
+    bool stitch_use_orb_registration = true;
+    StitchProcessingOptions stitch_options;
     std::vector<ImageFrame> edf_stack;
     EdfOptions edf_options;
     std::wstring message;
@@ -33,7 +35,13 @@ public:
     static ProcessingBuildActionResult PrepareStitch(
         const std::vector<StitchTile>& tiles,
         bool search_percent_valid,
-        int search_percent);
+        int search_percent,
+        bool use_orb_registration = true);
+
+    static ProcessingBuildActionResult PrepareStitch(
+        const std::vector<StitchTile>& tiles,
+        bool overlap_percent_valid,
+        StitchProcessingOptions options);
 
     static ProcessingBuildActionResult PrepareEdf(
         const std::vector<ImageFrame>& stack,

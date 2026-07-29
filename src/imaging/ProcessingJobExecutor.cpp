@@ -1,4 +1,4 @@
-#include "ProcessingJobExecutor.h"
+﻿#include "ProcessingJobExecutor.h"
 
 #include "ProcessingParameterRules.h"
 #include "ProcessingStatusFormatter.h"
@@ -9,8 +9,8 @@
 #include <utility>
 
 namespace {
-constexpr int kMaxOptimizationPreviewEdge = 256;
-constexpr int kMaxOptimizationPreviewRadius = 64;
+constexpr int kMaxOptimizationPreviewEdge = 512;
+constexpr int kMaxOptimizationPreviewRadius = 128;
 constexpr int kMaxOptimizationIterations = 20;
 
 bool IsCanceled(const std::atomic_bool* cancel_requested)
@@ -93,6 +93,7 @@ std::vector<StitchTile> BuildOptimizationTiles(const std::vector<StitchTile>& ti
             std::lround(static_cast<double>(tile.offset_x) / static_cast<double>(scale)));
         optimization_tile.offset_y = static_cast<int>(
             std::lround(static_cast<double>(tile.offset_y) / static_cast<double>(scale)));
+        optimization_tile.estimated_position = tile.estimated_position;
         optimization_tiles.push_back(std::move(optimization_tile));
     }
     return optimization_tiles;
@@ -133,13 +134,59 @@ std::vector<StitchTile> ApplyOptimizedOffsets(
 }
 }
 
+int StitchStepForDimension(int dimension, int overlap_percent)
+{
+    const int step_percent = ProcessingParameterRules::SearchPercentFromOverlap(overlap_percent);
+    return std::max(1, (std::max(1, dimension) * step_percent + 50) / 100);
+}
+
+std::vector<StitchTile> ApplyStitchInitialLayout(
+    std::vector<StitchTile> tiles,
+    const StitchProcessingOptions& options)
+{
+    if (tiles.empty()) {
+        return tiles;
+    }
+
+    const int overlap_percent = ProcessingParameterRules::ClampStitchOverlapPercent(options.overlap_percent);
+    const int reference_width = std::max(1, tiles.front().frame.width);
+    const int reference_height = std::max(1, tiles.front().frame.height);
+    const int step_x = StitchStepForDimension(reference_width, overlap_percent);
+    const int step_y = StitchStepForDimension(reference_height, overlap_percent);
+
+    if (options.layout_mode == StitchLayoutMode::Grid) {
+        const int cols = std::max(1, options.grid_cols);
+        for (std::size_t index = 0; index < tiles.size(); ++index) {
+            const int row = static_cast<int>(index) / cols;
+            const int col = static_cast<int>(index) % cols;
+            tiles[index].offset_x = col * step_x;
+            tiles[index].offset_y = row * step_y;
+            tiles[index].estimated_position = index > 0;
+        }
+        return tiles;
+    }
+
+    for (std::size_t index = 0; index < tiles.size(); ++index) {
+        tiles[index].offset_x = static_cast<int>(index) * step_x;
+        tiles[index].offset_y = 0;
+        tiles[index].estimated_position = index > 0;
+    }
+    return tiles;
+}
 ProcessingJobResult ProcessingJobExecutor::RunStitch(
     unsigned long long job_id,
     std::vector<StitchTile> tiles,
-    int search_percent,
+    StitchProcessingOptions options,
     const std::atomic_bool* cancel_requested,
     const ProgressCallback& progress_callback)
 {
+    options.overlap_percent = ProcessingParameterRules::ClampStitchOverlapPercent(options.overlap_percent);
+    options.grid_rows = std::clamp(options.grid_rows, 1, 50);
+    options.grid_cols = std::clamp(options.grid_cols, 1, 50);
+    tiles = ApplyStitchInitialLayout(std::move(tiles), options);
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(options.overlap_percent);
+    const bool use_orb_registration = options.registration_method != StitchRegistrationMethod::Phase;
+
     ProcessingJobResult result;
     result.job_id = job_id;
     result.kind = ProcessingJobKind::Stitch;
@@ -147,8 +194,10 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
     const int optimization_scale = OptimizationPreviewScale(tiles);
     const std::vector<StitchTile> optimization_tiles =
         BuildOptimizationTiles(tiles, optimization_scale);
-    const StitchOptimizationOptions optimization_options =
+    StitchOptimizationOptions optimization_options =
         BuildPreviewOptimizationOptions(optimization_tiles, search_percent);
+    optimization_options.use_orb_registration = use_orb_registration;
+    optimization_options.registration_method = options.registration_method;
 
     auto alignment_progress = [&progress_callback](int percent) {
         if (progress_callback) {
@@ -174,6 +223,8 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
         full_refinement_options.search_radius_x = std::clamp(optimization_scale * 4, 6, 24);
         full_refinement_options.search_radius_y = std::clamp(optimization_scale * 4, 6, 24);
         full_refinement_options.iterations = 8;
+        full_refinement_options.use_orb_registration = use_orb_registration;
+        full_refinement_options.registration_method = options.registration_method;
         auto refinement_progress = [&progress_callback](int percent) {
             if (progress_callback) {
                 progress_callback(30 + (percent * 10) / 100);
@@ -201,7 +252,103 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
             progress_callback(stitch_start_percent + (percent * stitch_progress_span) / 100);
         }
     };
-    result.image = ImageStitcher::StitchAverage(output_tiles, cancel_requested, stitching_progress);
+    result.image = ImageStitcher::StitchAverage(
+        output_tiles,
+        options.blend_mode,
+        cancel_requested,
+        stitching_progress);
+
+    const bool canceled = IsCanceled(cancel_requested);
+    result.succeeded = result.image.IsValid() && !canceled;
+    result.status = canceled
+        ? ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch)
+        : result.succeeded
+        ? ProcessingStatusFormatter::FormatReady(ProcessingJobKind::Stitch, result.image, ready_constraint_count)
+        : ProcessingStatusFormatter::FormatFailed(ProcessingJobKind::Stitch);
+    return result;
+}
+ProcessingJobResult ProcessingJobExecutor::RunStitch(
+    unsigned long long job_id,
+    std::vector<StitchTile> tiles,
+    int search_percent,
+    const std::atomic_bool* cancel_requested,
+    const ProgressCallback& progress_callback,
+    bool use_orb_registration)
+{
+    ProcessingJobResult result;
+    result.job_id = job_id;
+    result.kind = ProcessingJobKind::Stitch;
+
+    const int optimization_scale = OptimizationPreviewScale(tiles);
+    const std::vector<StitchTile> optimization_tiles =
+        BuildOptimizationTiles(tiles, optimization_scale);
+    StitchOptimizationOptions optimization_options =
+        BuildPreviewOptimizationOptions(optimization_tiles, search_percent);
+    optimization_options.use_orb_registration = use_orb_registration;
+    optimization_options.registration_method = use_orb_registration ?
+        StitchRegistrationMethod::Micro :
+        StitchRegistrationMethod::Phase;
+
+    auto alignment_progress = [&progress_callback](int percent) {
+        if (progress_callback) {
+            progress_callback((percent * 30) / 100);
+        }
+    };
+    StitchOptimizationResult optimized = ImageStitcher::OptimizeTileOffsets(
+        optimization_tiles,
+        optimization_options,
+        cancel_requested,
+        alignment_progress);
+    if (IsCanceled(cancel_requested)) {
+        result.status = ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch);
+        return result;
+    }
+
+    std::vector<StitchTile> output_tiles =
+        ApplyOptimizedOffsets(std::move(tiles), optimized, optimization_scale);
+    int ready_constraint_count = optimized.constraint_count;
+    const bool needs_full_resolution_refinement = optimization_scale > 1 && output_tiles.size() > 1;
+    if (needs_full_resolution_refinement) {
+        StitchOptimizationOptions full_refinement_options;
+        full_refinement_options.search_radius_x = std::clamp(optimization_scale * 4, 6, 24);
+        full_refinement_options.search_radius_y = std::clamp(optimization_scale * 4, 6, 24);
+        full_refinement_options.iterations = 8;
+        full_refinement_options.use_orb_registration = use_orb_registration;
+        full_refinement_options.registration_method = use_orb_registration ?
+            StitchRegistrationMethod::Micro :
+            StitchRegistrationMethod::Phase;
+        auto refinement_progress = [&progress_callback](int percent) {
+            if (progress_callback) {
+                progress_callback(30 + (percent * 10) / 100);
+            }
+        };
+        StitchOptimizationResult full_refined = ImageStitcher::OptimizeTileOffsets(
+            output_tiles,
+            full_refinement_options,
+            cancel_requested,
+            refinement_progress);
+        if (IsCanceled(cancel_requested)) {
+            result.status = ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch);
+            return result;
+        }
+        if (full_refined.optimized) {
+            ready_constraint_count = std::max(ready_constraint_count, full_refined.constraint_count);
+            output_tiles = std::move(full_refined.tiles);
+        }
+    }
+
+    const int stitch_start_percent = needs_full_resolution_refinement ? 40 : 30;
+    const int stitch_progress_span = 100 - stitch_start_percent;
+    auto stitching_progress = [&progress_callback, stitch_start_percent, stitch_progress_span](int percent) {
+        if (progress_callback) {
+            progress_callback(stitch_start_percent + (percent * stitch_progress_span) / 100);
+        }
+    };
+    result.image = ImageStitcher::StitchAverage(
+        output_tiles,
+        StitchBlendMode::Linear,
+        cancel_requested,
+        stitching_progress);
 
     const bool canceled = IsCanceled(cancel_requested);
     result.succeeded = result.image.IsValid() && !canceled;

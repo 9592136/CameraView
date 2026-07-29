@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "EdfProcessor.h"
 #include "ImageStitcher.h"
@@ -17,6 +17,13 @@ public:
     static int DefaultStitchSearchPercent();
     static bool IsValidStitchSearchPercent(int percent);
     static int ClampStitchSearchPercent(int percent);
+    static int MinStitchOverlapPercent();
+    static int MaxStitchOverlapPercent();
+    static int DefaultStitchOverlapPercent();
+    static bool IsValidStitchOverlapPercent(int percent);
+    static int ClampStitchOverlapPercent(int percent);
+    static int SearchPercentFromOverlap(int overlap_percent);
+    static int OverlapPercentFromSearch(int search_percent);
 
     static int MinEdfFocusRadius();
     static int MaxEdfFocusRadius();

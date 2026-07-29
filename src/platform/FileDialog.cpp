@@ -1,8 +1,10 @@
-#include "FileDialog.h"
+﻿#include "FileDialog.h"
 
 #include <commdlg.h>
+#include <shlobj.h>
 
 #include <algorithm>
+#include <vector>
 
 namespace {
 constexpr wchar_t kCsvFilter[] = L"CSV Files (*.csv)\0*.csv\0All Files (*.*)\0*.*\0";
@@ -79,6 +81,45 @@ bool ShowFileDialog(
 }
 } // namespace
 
+bool ShowMultiOpenFileDialog(
+    HWND owner,
+    const wchar_t* filter,
+    std::vector<std::wstring>& selected_paths)
+{
+    std::vector<wchar_t> buffer(32768, L'\0');
+
+    OPENFILENAMEW dialog = {};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = buffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
+
+    if (!GetOpenFileNameW(&dialog)) {
+        return false;
+    }
+
+    selected_paths.clear();
+    const wchar_t* cursor = buffer.data();
+    std::wstring first(cursor);
+    cursor += first.size() + 1;
+    if (*cursor == L'\0') {
+        selected_paths.push_back(std::move(first));
+        return true;
+    }
+
+    std::wstring directory = std::move(first);
+    if (!directory.empty() && directory.back() != L'\\' && directory.back() != L'/') {
+        directory += L'\\';
+    }
+    while (*cursor != L'\0') {
+        std::wstring file_name(cursor);
+        selected_paths.push_back(directory + file_name);
+        cursor += file_name.size() + 1;
+    }
+    return !selected_paths.empty();
+}
 bool FileDialog::SaveCsv(HWND owner, std::wstring& selected_path)
 {
     return ShowFileDialog(
@@ -127,6 +168,33 @@ bool FileDialog::OpenImage(HWND owner, std::wstring& selected_path)
         selected_path);
 }
 
+bool FileDialog::OpenImages(HWND owner, std::vector<std::wstring>& selected_paths)
+{
+    return ShowMultiOpenFileDialog(owner, kImageOpenFilter, selected_paths);
+}
+
+bool FileDialog::OpenImageDirectory(HWND owner, std::wstring& selected_path)
+{
+    BROWSEINFOW browse = {};
+    browse.hwndOwner = owner;
+    browse.lpszTitle = L"Select image directory";
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&browse);
+    if (!item) {
+        return false;
+    }
+
+    wchar_t path[MAX_PATH] = {};
+    const BOOL ok = SHGetPathFromIDListW(item, path);
+    CoTaskMemFree(item);
+    if (!ok || path[0] == L'\0') {
+        return false;
+    }
+
+    selected_path = path;
+    return true;
+}
 bool FileDialog::SaveReport(HWND owner, std::wstring& selected_path)
 {
     return ShowFileDialog(

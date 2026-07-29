@@ -50,7 +50,8 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     int stitch_search_percent,
     const std::vector<std::wstring>& objective_labels,
     const std::vector<CalibrationProfile>& objective_calibrations,
-    int selected_objective_index)
+    int selected_objective_index,
+    bool stitch_use_orb_registration)
 {
     ProjectDocument document;
     const std::vector<std::wstring> objectives = objective_labels.empty()
@@ -67,6 +68,7 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     document.dye_profiles = dye_profiles;
     document.processing_settings.edf_focus_radius = edf_options.focus_radius;
     document.processing_settings.stitch_search_percent = stitch_search_percent;
+    document.processing_settings.stitch_use_orb_registration = stitch_use_orb_registration;
 
     const bool has_objective_calibrations = !objective_calibrations.empty();
     document.objective_calibrations.reserve(objectives.size());
@@ -152,6 +154,7 @@ ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
         ProcessingParameterRules::ClampEdfFocusRadius(document.processing_settings.edf_focus_radius);
     state.stitch_search_percent =
         ProcessingParameterRules::ClampStitchSearchPercent(document.processing_settings.stitch_search_percent);
+    state.stitch_use_orb_registration = document.processing_settings.stitch_use_orb_registration;
     state.restored_channel_settings = !document.fluorescence_channels.empty();
 
     state.fluorescence_channels.reserve(document.fluorescence_channels.size());

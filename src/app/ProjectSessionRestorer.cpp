@@ -47,6 +47,7 @@ ProjectSessionRestoreResult ProjectSessionRestorer::Restore(ProjectRuntimeState 
     runtime.fluorescence_channels = std::move(state.fluorescence_channels);
     runtime.edf_options = state.edf_options;
     runtime.stitch_search_percent = state.stitch_search_percent;
+    runtime.stitch_use_orb_registration = state.stitch_use_orb_registration;
     runtime.show_fusion_preview = false;
 
     runtime.stitch_tiles.clear();

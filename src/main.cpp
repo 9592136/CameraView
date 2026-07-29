@@ -1,4 +1,4 @@
-#ifndef WIN32_LEAN_AND_MEAN
+﻿#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #ifndef NOMINMAX
@@ -76,6 +76,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -356,6 +357,67 @@ void InvalidateStatus(HWND hwnd)
     InvalidateRect(hwnd, &rect, FALSE);
 }
 
+std::wstring Lowercase(std::wstring value)
+{
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return value;
+}
+
+bool IsSupportedStitchImagePath(const std::filesystem::path& path)
+{
+    const std::wstring extension = Lowercase(path.extension().wstring());
+    return extension == L".bmp" ||
+        extension == L".jpg" ||
+        extension == L".jpeg" ||
+        extension == L".png" ||
+        extension == L".tif" ||
+        extension == L".tiff";
+}
+
+int NaturalCompare(const std::wstring& left, const std::wstring& right)
+{
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < left.size() && j < right.size()) {
+        if (std::iswdigit(left[i]) && std::iswdigit(right[j])) {
+            unsigned long long left_value = 0;
+            unsigned long long right_value = 0;
+            while (i < left.size() && std::iswdigit(left[i])) {
+                left_value = left_value * 10ULL + static_cast<unsigned long long>(left[i] - L'0');
+                ++i;
+            }
+            while (j < right.size() && std::iswdigit(right[j])) {
+                right_value = right_value * 10ULL + static_cast<unsigned long long>(right[j] - L'0');
+                ++j;
+            }
+            if (left_value != right_value) {
+                return left_value < right_value ? -1 : 1;
+            }
+            continue;
+        }
+
+        const wchar_t left_char = static_cast<wchar_t>(std::towlower(left[i]));
+        const wchar_t right_char = static_cast<wchar_t>(std::towlower(right[j]));
+        if (left_char != right_char) {
+            return left_char < right_char ? -1 : 1;
+        }
+        ++i;
+        ++j;
+    }
+    if (left.size() == right.size()) {
+        return 0;
+    }
+    return left.size() < right.size() ? -1 : 1;
+}
+
+bool NaturalPathLess(const std::filesystem::path& left, const std::filesystem::path& right)
+{
+    return NaturalCompare(left.filename().wstring(), right.filename().wstring()) < 0;
+}
 } // namespace
 
 void LayoutControls(HWND hwnd, bool repaint_children = true);
@@ -660,8 +722,15 @@ public:
     void OnHistogramSlider(HWND hwnd, LPARAM lp)
     {
         HWND slider = reinterpret_cast<HWND>(lp);
+        if (!slider) {
+            return;
+        }
         const int pos = static_cast<int>(SendMessageW(slider, TBM_GETPOS, 0, 0));
         const int id = GetDlgCtrlID(slider);
+        if (id == kIdStitchOverlapSlider) {
+            UpdateStitchOverlapFromSlider(slider);
+            return;
+        }
 
         if (id == kIdHistogramBrightnessSlider) {
             image_adjust_.brightness = pos - 100;
@@ -1389,16 +1458,19 @@ public:
         const auto add_tile_start = std::chrono::steady_clock::now();
         ImageFrame frame = frame_buffer_.Snapshot();
         const ProcessingQueueActionResult result =
-            ProcessingQueueActions::AddStitchTile(
+            ProcessingQueueActions::AddStitchTileWithOverlap(
                 stitch_tiles_,
                 processing_frames_,
                 std::move(frame),
                 ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
-                stitch_search_percent_);
+                stitch_overlap_percent_);
         const auto add_tile_elapsed = std::chrono::steady_clock::now() - add_tile_start;
         const long long add_tile_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(add_tile_elapsed).count();
         stitch_search_percent_ = result.stitch_search_percent;
+        stitch_overlap_percent_ = result.stitch_overlap_percent;
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        SyncStitchOverlapControls();
         if (result.preview_changed) {
             InvalidatePreviewFrameCache();
             InvalidatePreview(hwnd_);
@@ -1409,6 +1481,7 @@ public:
             if (stitch_tile_list && result.stitch_tile_count > 0) {
                 SendMessageW(stitch_tile_list, LB_SETCURSEL, result.stitch_tile_count - 1, 0);
             }
+            SetStitchSourceStatus(std::to_wstring(stitch_tiles_.size()) + L" image(s) | camera/current image");
         }
         SetStatus(L"Add Tile " + std::to_wstring(add_tile_ms) + L" ms. " + result.message);
     }
@@ -1431,9 +1504,11 @@ public:
         }
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
+        SetStitchSourceStatus(stitch_tiles_.empty()
+            ? std::wstring(L"(no images selected)")
+            : std::to_wstring(stitch_tiles_.size()) + L" image(s) | managed tiles");
         SetStatus(result.message);
     }
-
     void ClearStitchTiles()
     {
         const StitchTileListActionResult result = StitchTileListActions::Clear(stitch_tiles_);
@@ -1446,23 +1521,403 @@ public:
         RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
+        SetStitchSourceStatus(L"(no images selected)");
         SetStatus(result.message);
+    }
+    bool IsStitchOrbRegistrationEnabled() const
+    {
+        return IsDlgButtonChecked(hwnd_, kIdStitchOrbRegistration) == BST_CHECKED;
+    }
+
+    void SyncStitchRegistrationControl()
+    {
+        if (HWND checkbox = GetDlgItem(hwnd_, kIdStitchOrbRegistration)) {
+            SendMessageW(
+                checkbox,
+                BM_SETCHECK,
+                stitch_use_orb_registration_ ? BST_CHECKED : BST_UNCHECKED,
+                0);
+        }
+    }
+
+    static int ComboSelection(HWND combo, int fallback)
+    {
+        const LRESULT selection = combo ? SendMessageW(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+        return selection == CB_ERR ? fallback : static_cast<int>(selection);
+    }
+
+    void SyncStitchOverlapControls()
+    {
+        stitch_overlap_percent_ = ProcessingParameterRules::ClampStitchOverlapPercent(stitch_overlap_percent_);
+        stitch_search_percent_ = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_percent_);
+        const std::wstring overlap_text = std::to_wstring(stitch_overlap_percent_);
+        if (HWND edit = GetDlgItem(hwnd_, kIdStitchSearchEdit)) {
+            SetWindowTextW(edit, overlap_text.c_str());
+        }
+        if (HWND value = GetDlgItem(hwnd_, kIdStitchOverlapValue)) {
+            const std::wstring label = overlap_text + L"%";
+            SetWindowTextW(value, label.c_str());
+        }
+        if (HWND slider = GetDlgItem(hwnd_, kIdStitchOverlapSlider)) {
+            SendMessageW(slider, TBM_SETPOS, TRUE, stitch_overlap_percent_);
+        }
+    }
+
+    void SyncStitchSourceStatusControl()
+    {
+        if (HWND label = GetDlgItem(hwnd_, kIdStitchSourceStatus)) {
+            SetWindowTextW(label, stitch_source_status_.c_str());
+        }
+    }
+
+    void SetStitchSourceStatus(std::wstring status)
+    {
+        stitch_source_status_ = std::move(status);
+        SyncStitchSourceStatusControl();
+    }
+
+    void SyncStitchSettingsControls()
+    {
+        if (HWND mode = GetDlgItem(hwnd_, kIdStitchModeCombo)) {
+            SendMessageW(mode, CB_SETCURSEL, stitch_options_.layout_mode == StitchLayoutMode::Linear ? 1 : 0, 0);
+        }
+        if (HWND rows = GetDlgItem(hwnd_, kIdStitchRowsEdit)) {
+            SetWindowTextW(rows, std::to_wstring(stitch_options_.grid_rows).c_str());
+        }
+        if (HWND cols = GetDlgItem(hwnd_, kIdStitchColsEdit)) {
+            SetWindowTextW(cols, std::to_wstring(stitch_options_.grid_cols).c_str());
+        }
+        if (HWND method = GetDlgItem(hwnd_, kIdStitchMethodCombo)) {
+            int selection = 4;
+            if (stitch_options_.registration_method == StitchRegistrationMethod::Phase) {
+                selection = 0;
+            } else if (stitch_options_.registration_method == StitchRegistrationMethod::Feature) {
+                selection = 1;
+            } else if (stitch_options_.registration_method == StitchRegistrationMethod::Auto) {
+                selection = 2;
+            }
+            SendMessageW(method, CB_SETCURSEL, selection, 0);
+        }
+        if (HWND transform = GetDlgItem(hwnd_, kIdStitchTransformCombo)) {
+            int selection = 1;
+            if (stitch_options_.transform_model == StitchTransformModel::Translation) {
+                selection = 0;
+            } else if (stitch_options_.transform_model == StitchTransformModel::Homography) {
+                selection = 2;
+            }
+            SendMessageW(transform, CB_SETCURSEL, selection, 0);
+        }
+        if (HWND blend = GetDlgItem(hwnd_, kIdStitchBlendCombo)) {
+            SendMessageW(blend, CB_SETCURSEL, stitch_options_.blend_mode == StitchBlendMode::None ? 1 : 0, 0);
+        }
+        SyncStitchOverlapControls();
+        SyncStitchSourceStatusControl();
+        SyncStitchRegistrationControl();
+    }
+
+    void InitializeStitchControls()
+    {
+        auto fill_combo = [](HWND combo, const std::vector<std::wstring>& values, int selection) {
+            if (!combo) {
+                return;
+            }
+            SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+            for (const std::wstring& value : values) {
+                SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(value.c_str()));
+            }
+            SendMessageW(combo, CB_SETCURSEL, selection, 0);
+        };
+
+        fill_combo(GetDlgItem(hwnd_, kIdStitchModeCombo), {L"grid", L"linear"}, 0);
+        fill_combo(GetDlgItem(hwnd_, kIdStitchMethodCombo), {L"phase", L"feature", L"auto", L"sift", L"micro"}, 4);
+        fill_combo(GetDlgItem(hwnd_, kIdStitchTransformCombo), {L"translation", L"affine", L"homography"}, 1);
+        fill_combo(GetDlgItem(hwnd_, kIdStitchBlendCombo), {L"linear", L"none"}, 0);
+
+        if (HWND slider = GetDlgItem(hwnd_, kIdStitchOverlapSlider)) {
+            SendMessageW(
+                slider,
+                TBM_SETRANGE,
+                TRUE,
+                MAKELONG(
+                    ProcessingParameterRules::MinStitchOverlapPercent(),
+                    ProcessingParameterRules::MaxStitchOverlapPercent()));
+            SendMessageW(slider, TBM_SETTICFREQ, 5, 0);
+        }
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        SyncStitchSettingsControls();
+    }
+
+    bool ReadIntegerRange(HWND edit, int min_value, int max_value, int& value, const std::wstring& message)
+    {
+        if (TextInputParser::TryParseIntegerRange(ReadEditText(edit, 32), min_value, max_value, value)) {
+            return true;
+        }
+        SetStatus(message);
+        return false;
+    }
+
+    std::optional<StitchProcessingOptions> ReadStitchProcessingOptions()
+    {
+        StitchProcessingOptions options = stitch_options_;
+        options.layout_mode = ComboSelection(GetDlgItem(hwnd_, kIdStitchModeCombo), 0) == 1
+            ? StitchLayoutMode::Linear
+            : StitchLayoutMode::Grid;
+
+        if (!ReadIntegerRange(
+                GetDlgItem(hwnd_, kIdStitchRowsEdit),
+                1,
+                50,
+                options.grid_rows,
+                L"Rows must be 1-50.")) {
+            return std::nullopt;
+        }
+        if (!ReadIntegerRange(
+                GetDlgItem(hwnd_, kIdStitchColsEdit),
+                1,
+                50,
+                options.grid_cols,
+                L"Columns must be 1-50.")) {
+            return std::nullopt;
+        }
+        if (!ReadIntegerRange(
+                GetDlgItem(hwnd_, kIdStitchSearchEdit),
+                ProcessingParameterRules::MinStitchOverlapPercent(),
+                ProcessingParameterRules::MaxStitchOverlapPercent(),
+                options.overlap_percent,
+                L"Estimated overlap must be 5-50 percent.")) {
+            return std::nullopt;
+        }
+
+        switch (ComboSelection(GetDlgItem(hwnd_, kIdStitchMethodCombo), 4)) {
+        case 0:
+            options.registration_method = StitchRegistrationMethod::Phase;
+            break;
+        case 1:
+            options.registration_method = StitchRegistrationMethod::Feature;
+            break;
+        case 2:
+            options.registration_method = StitchRegistrationMethod::Auto;
+            break;
+        case 3:
+        case 4:
+        default:
+            options.registration_method = StitchRegistrationMethod::Micro;
+            break;
+        }
+
+        switch (ComboSelection(GetDlgItem(hwnd_, kIdStitchTransformCombo), 1)) {
+        case 0:
+            options.transform_model = StitchTransformModel::Translation;
+            break;
+        case 2:
+            options.transform_model = StitchTransformModel::Homography;
+            break;
+        case 1:
+        default:
+            options.transform_model = StitchTransformModel::Affine;
+            break;
+        }
+        options.blend_mode = ComboSelection(GetDlgItem(hwnd_, kIdStitchBlendCombo), 0) == 1
+            ? StitchBlendMode::None
+            : StitchBlendMode::Linear;
+        return options;
+    }
+
+    void UpdateStitchOverlapFromSlider(HWND slider)
+    {
+        if (!slider) {
+            return;
+        }
+        stitch_overlap_percent_ = static_cast<int>(SendMessageW(slider, TBM_GETPOS, 0, 0));
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        SyncStitchOverlapControls();
+    }
+
+    void UpdateStitchSettingsFromControls()
+    {
+        const std::optional<StitchProcessingOptions> options = ReadStitchProcessingOptions();
+        if (!options) {
+            return;
+        }
+        stitch_options_ = *options;
+        stitch_overlap_percent_ = stitch_options_.overlap_percent;
+        stitch_use_orb_registration_ = stitch_options_.registration_method != StitchRegistrationMethod::Phase;
+        SyncStitchOverlapControls();
+        SyncStitchRegistrationControl();
+        SetStatus(L"Stitch settings updated.");
+    }
+
+    void UpdateStitchRegistrationMode()
+    {
+        UpdateStitchSettingsFromControls();
+    }
+
+    void ImportStitchImageFiles(const std::vector<std::wstring>& file_names, const std::wstring& source_label)
+    {
+        if (file_names.empty()) {
+            SetStatus(L"No image files selected for stitching.");
+            return;
+        }
+
+        std::vector<ImageFrame> frames;
+        frames.reserve(file_names.size());
+        std::size_t failed_count = 0;
+        for (const std::wstring& file_name : file_names) {
+            ImageFrame loaded;
+            std::wstring error;
+            if (ImageExporter::LoadRasterImage(std::filesystem::path(file_name), loaded, error)) {
+                frames.push_back(std::move(loaded));
+            } else {
+                ++failed_count;
+            }
+        }
+        if (frames.empty()) {
+            SetStatus(L"No selected image files could be added to stitch tiles.");
+            return;
+        }
+
+        const ProcessingIntegerInputResult overlap_input =
+            ProcessingBuildInputActions::StitchOverlapForNextTile(
+                !stitch_tiles_.empty() || frames.size() > 1U,
+                ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
+                stitch_overlap_percent_);
+        if (!overlap_input.accepted) {
+            SetStatus(overlap_input.message);
+            return;
+        }
+        stitch_overlap_percent_ = overlap_input.value;
+        stitch_search_percent_ = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_percent_);
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        SyncStitchOverlapControls();
+
+        const StitchTileListActionResult result =
+            StitchTileListActions::AddFrames(stitch_tiles_, std::move(frames), stitch_search_percent_);
+        if (!result.changed) {
+            SetStatus(result.message);
+            return;
+        }
+
+        processing_frames_.Clear();
+        RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
+        if (HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList)) {
+            SendMessageW(stitch_tile_list, LB_SETCURSEL, result.tile_count - 1U, 0);
+        }
+        InvalidatePreviewFrameCache();
+        InvalidatePreview(hwnd_);
+
+        SetStitchSourceStatus(std::to_wstring(stitch_tiles_.size()) + L" image(s) | " + source_label);
+        std::wstring message = result.message;
+        if (failed_count > 0) {
+            message += L" Skipped " + std::to_wstring(failed_count) + L" file(s).";
+        }
+        SetStatus(message);
+    }
+
+    void SelectStitchDirectory()
+    {
+        std::wstring directory;
+        if (!FileDialog::OpenImageDirectory(hwnd_, directory)) {
+            SetStatus(L"Image directory selection canceled.");
+            return;
+        }
+
+        std::vector<std::filesystem::path> paths;
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(directory, error), end; it != end && !error; it.increment(error)) {
+            std::error_code file_error;
+            if (!it->is_regular_file(file_error) || file_error) {
+                continue;
+            }
+            const std::filesystem::path path = it->path();
+            const std::wstring file_name = path.filename().wstring();
+            if (!file_name.empty() && file_name.front() == L'_') {
+                continue;
+            }
+            if (IsSupportedStitchImagePath(path)) {
+                paths.push_back(path);
+            }
+        }
+        if (error) {
+            SetStatus(L"Failed to read selected image directory.");
+            return;
+        }
+        std::sort(paths.begin(), paths.end(), NaturalPathLess);
+
+        std::vector<std::wstring> file_names;
+        file_names.reserve(paths.size());
+        for (const std::filesystem::path& path : paths) {
+            file_names.push_back(path.wstring());
+        }
+        ImportStitchImageFiles(file_names, directory);
+    }
+
+    void SelectStitchFiles()
+    {
+        std::vector<std::wstring> file_names;
+        if (!FileDialog::OpenImages(hwnd_, file_names)) {
+            SetStatus(L"Image file selection canceled.");
+            return;
+        }
+        const std::filesystem::path first_path(file_names.empty() ? std::wstring() : file_names.front());
+        ImportStitchImageFiles(
+            file_names,
+            first_path.empty() ? L"selected files" : first_path.parent_path().wstring());
     }
 
     void BuildStitchPreview()
     {
+        const std::optional<StitchProcessingOptions> options = ReadStitchProcessingOptions();
+        if (!options) {
+            return;
+        }
+        stitch_options_ = *options;
+        stitch_overlap_percent_ = stitch_options_.overlap_percent;
+        stitch_search_percent_ = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_percent_);
+        stitch_use_orb_registration_ = stitch_options_.registration_method != StitchRegistrationMethod::Phase;
+        SyncStitchOverlapControls();
+        SyncStitchRegistrationControl();
+
         ProcessingBuildActionResult result =
             ProcessingBuildInputActions::PrepareStitch(
                 stitch_tiles_,
-                ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32));
+                ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
+                stitch_options_);
         if (!result.can_start) {
             SetStatus(result.message);
             return;
         }
+        stitch_options_ = result.stitch_options;
+        stitch_overlap_percent_ = stitch_options_.overlap_percent;
         stitch_search_percent_ = result.stitch_search_percent;
-        StartStitchProcessing(std::move(result.stitch_tiles), result.stitch_search_percent, true);
+        stitch_use_orb_registration_ = result.stitch_use_orb_registration;
+        StartStitchProcessing(
+            std::move(result.stitch_tiles),
+            result.stitch_options,
+            true);
     }
 
+    void SaveStitchResult()
+    {
+        if (processing_frames_.DisplaySource() != ProcessingResultDisplaySource::Stitch ||
+            !processing_frames_.ProcessingResult().IsValid()) {
+            SetStatus(L"No stitched result to save.");
+            return;
+        }
+
+        std::wstring file_name;
+        if (!FileDialog::SaveImage(hwnd_, file_name)) {
+            SetStatus(L"Stitch result save canceled.");
+            return;
+        }
+
+        const ExportActionResult result = ExportActions::SaveImage(
+            std::filesystem::path(file_name),
+            processing_frames_.ProcessingResult(),
+            MeasurementCollection(),
+            L"Stitch result",
+            &calibration_);
+        SetStatus(result.message + (result.saved ? L" Path: " + file_name : L""));
+    }
     void AddCurrentFrameAsEdfFrame()
     {
         const ProcessingQueueActionResult result =
@@ -1533,9 +1988,14 @@ public:
         }
 
         if (result.kind == ProcessingJobKind::Stitch) {
+            stitch_options_ = result.request.stitch_options;
+            stitch_overlap_percent_ = stitch_options_.overlap_percent;
+            stitch_search_percent_ = result.request.stitch_search_percent;
+            stitch_use_orb_registration_ = result.request.stitch_use_orb_registration;
+            SyncStitchSettingsControls();
             if (StartStitchProcessing(
                     std::move(result.request.stitch_tiles),
-                    result.request.stitch_search_percent,
+                    result.request.stitch_options,
                     false)) {
                 SetStatus(result.message);
             }
@@ -2294,19 +2754,22 @@ public:
             return;
         }
 
-        const ProcessingIntegerInputResult search_input =
-            ProcessingBuildInputActions::StitchSearchForNextTile(
+        const ProcessingIntegerInputResult overlap_input =
+            ProcessingBuildInputActions::StitchOverlapForNextTile(
                 !stitch_tiles_.empty() || frames.size() > 1U,
                 ReadEditText(GetDlgItem(hwnd_, kIdStitchSearchEdit), 32),
-                stitch_search_percent_);
-        if (!search_input.accepted) {
-            SetStatus(search_input.message);
+                stitch_overlap_percent_);
+        if (!overlap_input.accepted) {
+            SetStatus(overlap_input.message);
             return;
         }
-        stitch_search_percent_ = search_input.value;
+        stitch_overlap_percent_ = overlap_input.value;
+        stitch_search_percent_ = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_percent_);
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        SyncStitchOverlapControls();
 
         const StitchTileListActionResult result =
-            StitchTileListActions::AddFrames(stitch_tiles_, std::move(frames), search_input.value);
+            StitchTileListActions::AddFrames(stitch_tiles_, std::move(frames), stitch_search_percent_);
         if (!result.changed) {
             SetStatus(failed_count > 0
                 ? L"No dropped image files could be added to stitch tiles."
@@ -2321,6 +2784,9 @@ public:
         }
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
+        const std::filesystem::path first_path(file_names.front());
+        SetStitchSourceStatus(
+            std::to_wstring(stitch_tiles_.size()) + L" image(s) | " + first_path.parent_path().wstring());
         std::wstring message = result.message;
         if (failed_count > 0) {
             message += L" Skipped " + std::to_wstring(failed_count) + L" file(s).";
@@ -2512,7 +2978,8 @@ public:
             stitch_search_percent_,
             objective_labels_,
             objective_calibrations_,
-            selected_objective_index_);
+            selected_objective_index_,
+            stitch_use_orb_registration_);
         SetStatus(result.message);
     }
 
@@ -2540,6 +3007,7 @@ public:
                 edf_stack_,
                 edf_options_,
                 stitch_search_percent_,
+                stitch_use_orb_registration_,
                 show_fusion_preview_,
                 processing_retry_,
                 processing_frames_,
@@ -2569,10 +3037,12 @@ public:
             const std::wstring radius_text = std::to_wstring(edf_options_.focus_radius);
             SetWindowTextW(edf_radius_edit, radius_text.c_str());
         }
-        if (HWND stitch_search_edit = GetDlgItem(hwnd_, kIdStitchSearchEdit)) {
-            const std::wstring search_text = std::to_wstring(stitch_search_percent_);
-            SetWindowTextW(stitch_search_edit, search_text.c_str());
-        }
+        stitch_overlap_percent_ = ProcessingParameterRules::OverlapPercentFromSearch(stitch_search_percent_);
+        stitch_options_.overlap_percent = stitch_overlap_percent_;
+        stitch_options_.registration_method = stitch_use_orb_registration_
+            ? StitchRegistrationMethod::Micro
+            : StitchRegistrationMethod::Phase;
+        SyncStitchSettingsControls();
         RefreshMeasurementList(GetDlgItem(hwnd_, kIdResultsList));
         RefreshObjectiveCombo(GetDlgItem(hwnd_, kIdObjectiveCombo));
         SyncObjectiveNameEdit(GetDlgItem(hwnd_, kIdObjectiveNameEdit));
@@ -2662,13 +3132,16 @@ private:
         processing_state_.RequestCancel();
     }
 
-    bool StartStitchProcessing(std::vector<StitchTile> tiles, int search_percent, bool remember_snapshot)
+    bool StartStitchProcessing(
+        std::vector<StitchTile> tiles,
+        StitchProcessingOptions options,
+        bool remember_snapshot)
     {
         const ProcessingStartActionResult start = ProcessingStartActions::StartStitch(
             processing_state_,
             processing_retry_,
             tiles,
-            search_percent,
+            options,
             remember_snapshot,
             [this]() { WaitForProcessingWorker(); });
         if (!start.can_start) {
@@ -2679,13 +3152,12 @@ private:
         processing_worker_ = ProcessingWorkerActions::StartStitch(
             start.launch,
             std::move(tiles),
-            search_percent,
+            options,
             [this](const std::wstring& message) { SetStatus(message); },
             [this](ProcessingJobResult result) { PublishProcessingResult(std::move(result)); });
         SetStatus(start.message);
         return true;
     }
-
     bool StartEdfProcessing(std::vector<ImageFrame> stack, EdfOptions options, bool remember_snapshot)
     {
         const ProcessingStartActionResult start = ProcessingStartActions::StartEdf(
@@ -6249,6 +6721,10 @@ private:
     std::vector<FluorescenceChannel> fluorescence_channels_;
     std::vector<StitchTile> stitch_tiles_;
     int stitch_search_percent_ = ProcessingParameterRules::DefaultStitchSearchPercent();
+    int stitch_overlap_percent_ = ProcessingParameterRules::DefaultStitchOverlapPercent();
+    bool stitch_use_orb_registration_ = true;
+    StitchProcessingOptions stitch_options_;
+    std::wstring stitch_source_status_ = L"(no images selected)";
     std::vector<ImageFrame> edf_stack_;
     ProcessingRetryState processing_retry_;
     ProcessingResultFrames processing_frames_;
@@ -6487,6 +6963,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             dye_red_edit,
             dye_green_edit,
             dye_blue_edit);
+        app->InitializeStitchControls();
 
         LayoutControls(hwnd);
         if (app->RefreshCameraList(device_combo)) {
@@ -6576,6 +7053,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 GetDlgItem(hwnd, kIdChannelVisible),
                 GetDlgItem(hwnd, kIdChannelBlackEdit),
                 GetDlgItem(hwnd, kIdChannelWhiteEdit));
+            return 0;
+        }        if ((LOWORD(wparam) == kIdStitchModeCombo ||
+             LOWORD(wparam) == kIdStitchMethodCombo ||
+             LOWORD(wparam) == kIdStitchTransformCombo ||
+             LOWORD(wparam) == kIdStitchBlendCombo) &&
+            HIWORD(wparam) == CBN_SELCHANGE) {
+            app->UpdateStitchSettingsFromControls();
             return 0;
         }
         switch (LOWORD(wparam)) {
@@ -6729,11 +7213,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 GetDlgItem(hwnd, kIdChannelBlackEdit),
                 GetDlgItem(hwnd, kIdChannelWhiteEdit));
             return 0;
+        case kIdSelectStitchDirectory:
+            app->SelectStitchDirectory();
+            return 0;
+        case kIdSelectStitchFiles:
+            app->SelectStitchFiles();
+            return 0;
         case kIdAddStitchTile:
             app->AddCurrentFrameAsStitchTile();
             return 0;
         case kIdBuildStitch:
             app->BuildStitchPreview();
+            return 0;
+        case kIdSaveStitchResult:
+            app->SaveStitchResult();
+            return 0;
+        case kIdStitchOrbRegistration:
+            app->UpdateStitchRegistrationMode();
             return 0;
         case kIdDeleteStitchTile:
             app->DeleteSelectedStitchTile();

@@ -1,4 +1,4 @@
-#include "ProcessingStartActions.h"
+﻿#include "ProcessingStartActions.h"
 
 #include "ProcessingStatusFormatter.h"
 
@@ -7,6 +7,43 @@ ProcessingStartActionResult ProcessingStartActions::StartStitch(
     ProcessingRetryState& retry,
     const std::vector<StitchTile>& tiles,
     int search_percent,
+    bool remember_snapshot,
+    const BeforeBeginCallback& before_begin,
+    bool use_orb_registration)
+{
+    ProcessingStartActionResult result;
+    result.kind = ProcessingJobKind::Stitch;
+    if (tiles.empty()) {
+        result.status = ProcessingStartActionStatus::NoStitchTiles;
+        result.message = L"Add stitch tiles before building a stitched image.";
+        return result;
+    }
+    if (state.IsRunning()) {
+        result.status = ProcessingStartActionStatus::AlreadyRunning;
+        result.message = ProcessingStatusFormatter::FormatAlreadyRunning();
+        return result;
+    }
+
+    if (before_begin) {
+        before_begin();
+    }
+    state.ClearPending();
+    if (remember_snapshot) {
+        retry.RememberStitch(tiles, search_percent, use_orb_registration);
+    }
+
+    result.launch = state.Begin();
+    result.status = ProcessingStartActionStatus::Started;
+    result.can_start = true;
+    result.message = ProcessingStatusFormatter::FormatStarted(result.kind);
+    return result;
+}
+
+ProcessingStartActionResult ProcessingStartActions::StartStitch(
+    ProcessingJobState& state,
+    ProcessingRetryState& retry,
+    const std::vector<StitchTile>& tiles,
+    StitchProcessingOptions options,
     bool remember_snapshot,
     const BeforeBeginCallback& before_begin)
 {
@@ -28,7 +65,7 @@ ProcessingStartActionResult ProcessingStartActions::StartStitch(
     }
     state.ClearPending();
     if (remember_snapshot) {
-        retry.RememberStitch(tiles, search_percent);
+        retry.RememberStitch(tiles, options);
     }
 
     result.launch = state.Begin();
@@ -37,7 +74,6 @@ ProcessingStartActionResult ProcessingStartActions::StartStitch(
     result.message = ProcessingStatusFormatter::FormatStarted(result.kind);
     return result;
 }
-
 ProcessingStartActionResult ProcessingStartActions::StartEdf(
     ProcessingJobState& state,
     ProcessingRetryState& retry,

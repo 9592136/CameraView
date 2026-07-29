@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "EdfProcessor.h"
 #include "ImageStitcher.h"
@@ -33,6 +33,15 @@ public:
         ProcessingRetryState& retry,
         const std::vector<StitchTile>& tiles,
         int search_percent,
+        bool remember_snapshot,
+        const BeforeBeginCallback& before_begin,
+        bool use_orb_registration = true);
+
+    static ProcessingStartActionResult StartStitch(
+        ProcessingJobState& state,
+        ProcessingRetryState& retry,
+        const std::vector<StitchTile>& tiles,
+        StitchProcessingOptions options,
         bool remember_snapshot,
         const BeforeBeginCallback& before_begin);
 

@@ -17,6 +17,7 @@ struct ProjectSessionState {
     std::vector<FluorescenceChannel> fluorescence_channels;
     EdfOptions edf_options;
     int stitch_search_percent = 85;
+    bool stitch_use_orb_registration = true;
     bool restored_channel_settings = false;
 };
 
@@ -31,7 +32,8 @@ public:
         int stitch_search_percent,
         const std::vector<std::wstring>& objective_labels = std::vector<std::wstring>(),
         const std::vector<CalibrationProfile>& objective_calibrations = std::vector<CalibrationProfile>(),
-        int selected_objective_index = 0);
+        int selected_objective_index = 0,
+        bool stitch_use_orb_registration = true);
 
     static ProjectSessionState FromDocument(ProjectDocument document);
 

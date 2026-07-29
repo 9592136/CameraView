@@ -10,6 +10,7 @@
 struct ProjectProcessingSettings {
     int edf_focus_radius = 1;
     int stitch_search_percent = 85;
+    bool stitch_use_orb_registration = true;
 };
 
 struct ObjectiveCalibrationDocument {

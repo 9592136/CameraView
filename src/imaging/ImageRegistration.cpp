@@ -19,7 +19,7 @@ struct OffsetScore {
 
 constexpr int kTargetSamplesPerOffset = 2048;
 constexpr int kMinimumSamplesPerOffset = 8;
-constexpr double kMinimumOverlapAreaFraction = 0.15;
+constexpr double kMinimumOverlapAreaFraction = 0.05;
 constexpr double kMinimumLuminanceEnergyPerSample = 4.0;
 constexpr double kMinimumHighPassEnergyPerSample = 1.0;
 constexpr double kMinimumGradientEnergyPerSample = 4.0;
@@ -455,13 +455,18 @@ void Fft2D(std::vector<Complex>& values, int width, int height, bool inverse)
     }
 }
 
+double PhaseWindowWeight(int x, int y, int width, int height)
+{
+    return std::sqrt(WindowWeight(x, y, width, height));
+}
+
 double FillPhaseInput(const ImageFrame& frame, int transform_width, std::vector<Complex>& signal)
 {
     double sum = 0.0;
     int samples = 0;
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
-            sum += HighPassAt(frame, x, y);
+            sum += LuminanceAt(frame, x, y);
             ++samples;
         }
     }
@@ -474,7 +479,7 @@ double FillPhaseInput(const ImageFrame& frame, int transform_width, std::vector<
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
             const double value =
-                (HighPassAt(frame, x, y) - mean) * WindowWeight(x, y, frame.width, frame.height);
+                (LuminanceAt(frame, x, y) - mean) * PhaseWindowWeight(x, y, frame.width, frame.height);
             signal[static_cast<std::size_t>(y) * static_cast<std::size_t>(transform_width) +
                    static_cast<std::size_t>(x)] = Complex(value, 0.0);
             energy += value * value;

@@ -1,4 +1,4 @@
-#include "ProcessingParameterRules.h"
+﻿#include "ProcessingParameterRules.h"
 
 #include <algorithm>
 
@@ -7,6 +7,9 @@ namespace {
 constexpr int kMinStitchSearchPercent = 5;
 constexpr int kMaxStitchSearchPercent = 100;
 constexpr int kDefaultStitchSearchPercent = 85;
+constexpr int kMinStitchOverlapPercent = 5;
+constexpr int kMaxStitchOverlapPercent = 50;
+constexpr int kDefaultStitchOverlapPercent = 25;
 constexpr int kMinEdfFocusRadius = 1;
 constexpr int kMaxEdfFocusRadius = 16;
 constexpr int kMinRegistrationSearchRadius = 8;
@@ -39,6 +42,41 @@ bool ProcessingParameterRules::IsValidStitchSearchPercent(int percent)
 int ProcessingParameterRules::ClampStitchSearchPercent(int percent)
 {
     return std::clamp(percent, kMinStitchSearchPercent, kMaxStitchSearchPercent);
+}
+
+int ProcessingParameterRules::MinStitchOverlapPercent()
+{
+    return kMinStitchOverlapPercent;
+}
+
+int ProcessingParameterRules::MaxStitchOverlapPercent()
+{
+    return kMaxStitchOverlapPercent;
+}
+
+int ProcessingParameterRules::DefaultStitchOverlapPercent()
+{
+    return kDefaultStitchOverlapPercent;
+}
+
+bool ProcessingParameterRules::IsValidStitchOverlapPercent(int percent)
+{
+    return percent >= kMinStitchOverlapPercent && percent <= kMaxStitchOverlapPercent;
+}
+
+int ProcessingParameterRules::ClampStitchOverlapPercent(int percent)
+{
+    return std::clamp(percent, kMinStitchOverlapPercent, kMaxStitchOverlapPercent);
+}
+
+int ProcessingParameterRules::SearchPercentFromOverlap(int overlap_percent)
+{
+    return ClampStitchSearchPercent(100 - ClampStitchOverlapPercent(overlap_percent));
+}
+
+int ProcessingParameterRules::OverlapPercentFromSearch(int search_percent)
+{
+    return ClampStitchOverlapPercent(100 - ClampStitchSearchPercent(search_percent));
 }
 
 int ProcessingParameterRules::MinEdfFocusRadius()

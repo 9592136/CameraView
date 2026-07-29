@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../domain/ImageFrame.h"
 #include "../imaging/ImageStitcher.h"
@@ -21,6 +21,7 @@ struct ProcessingQueueActionResult {
     bool changed = false;
     bool preview_changed = false;
     int stitch_search_percent = 0;
+    int stitch_overlap_percent = 0;
     std::size_t stitch_tile_count = 0;
     std::size_t edf_frame_count = 0;
     std::wstring message;
@@ -34,6 +35,13 @@ public:
         ImageFrame frame,
         const std::wstring& search_percent_text,
         int current_search_percent);
+
+    static ProcessingQueueActionResult AddStitchTileWithOverlap(
+        std::vector<StitchTile>& tiles,
+        ProcessingResultFrames& frames,
+        ImageFrame frame,
+        const std::wstring& overlap_percent_text,
+        int current_overlap_percent);
 
     static ProcessingQueueActionResult AddEdfFrame(
         std::vector<ImageFrame>& stack,

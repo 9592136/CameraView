@@ -1,4 +1,4 @@
-#include "../src/app/DiagnosticReportActions.h"
+﻿#include "../src/app/DiagnosticReportActions.h"
 #include "../src/app/ExportActions.h"
 #include "../src/app/ProjectActions.h"
 #include "../src/app/ProjectSessionRestorer.h"
@@ -503,6 +503,14 @@ int main()
         FindPlacement(measurement_control_layout, kIdResultsList);
     const std::vector<WindowControlPlacement> processing_control_layout =
         WindowControlLayout::Compute(wide_client, 3);
+    const WindowControlPlacement* processing_stitch_mode_combo =
+        FindPlacement(processing_control_layout, kIdStitchModeCombo);
+    const WindowControlPlacement* processing_stitch_method_combo =
+        FindPlacement(processing_control_layout, kIdStitchMethodCombo);
+    const WindowControlPlacement* processing_stitch_overlap_slider =
+        FindPlacement(processing_control_layout, kIdStitchOverlapSlider);
+    const WindowControlPlacement* processing_select_stitch_directory =
+        FindPlacement(processing_control_layout, kIdSelectStitchDirectory);
     const WindowControlPlacement* processing_stitch_tile_label =
         FindPlacement(processing_control_layout, kIdStitchTileLabel);
     const WindowControlPlacement* processing_stitch_tile_list =
@@ -597,7 +605,11 @@ int main()
         measurement_results_list->bounds.bottom < measurement_results_list->bounds.top) {
         return Fail("WindowControlLayout did not compute the expected measurement category placement.");
     }
-    if (!processing_stitch_tile_label ||
+    if (!processing_stitch_mode_combo ||
+        !processing_stitch_mode_combo->visible ||
+        !processing_select_stitch_directory ||
+        !processing_select_stitch_directory->visible ||
+        !processing_stitch_tile_label ||
         !processing_stitch_tile_label->visible ||
         !processing_stitch_tile_list ||
         !processing_stitch_tile_list->visible ||
@@ -605,8 +617,10 @@ int main()
         !processing_delete_stitch_tile->visible ||
         !processing_clear_stitch_tiles ||
         !processing_clear_stitch_tiles->visible ||
+        !processing_stitch_method_combo ||
+        !processing_stitch_overlap_slider ||
         processing_stitch_tile_list->bounds.bottom <= processing_stitch_tile_list->bounds.top) {
-        return Fail("WindowControlLayout did not expose the stitch tile gallery controls.");
+        return Fail("WindowControlLayout did not expose the Python-style stitch controls and tile gallery.");
     }
     if (!project_design_template ||
         !project_design_template->visible ||
@@ -625,19 +639,19 @@ int main()
         WindowControlLayout::Compute(compact_client, 3);
     const std::vector<WindowControlPlacement> scrolled_compact_processing_layout =
         WindowControlLayout::Compute(compact_client, 3, std::min(54, compact_processing_scroll));
-    const WindowControlPlacement* compact_stitch_search =
-        FindPlacement(compact_processing_layout, kIdStitchSearchLabel);
-    const WindowControlPlacement* scrolled_compact_stitch_search =
-        FindPlacement(scrolled_compact_processing_layout, kIdStitchSearchLabel);
+    const WindowControlPlacement* compact_stitch_mode =
+        FindPlacement(compact_processing_layout, kIdStitchModeCombo);
+    const WindowControlPlacement* scrolled_compact_stitch_mode =
+        FindPlacement(scrolled_compact_processing_layout, kIdStitchModeCombo);
     const WindowControlPlacement* compact_panel_scroll_bar =
         FindPlacement(compact_processing_layout, kIdPanelScrollBar);
     const RECT compact_panel = WindowLayout::SidePanelRect(compact_client);
     if (compact_processing_scroll <= 0 ||
-        !compact_stitch_search ||
-        !compact_stitch_search->visible ||
-        !scrolled_compact_stitch_search ||
-        !scrolled_compact_stitch_search->visible ||
-        scrolled_compact_stitch_search->bounds.top >= compact_stitch_search->bounds.top) {
+        !compact_stitch_mode ||
+        !compact_stitch_mode->visible ||
+        !scrolled_compact_stitch_mode ||
+        !scrolled_compact_stitch_mode->visible ||
+        scrolled_compact_stitch_mode->bounds.top >= compact_stitch_mode->bounds.top) {
         return Fail("WindowControlLayout did not scroll compact side-panel content.");
     }
     if (!compact_panel_scroll_bar ||
@@ -1933,12 +1947,13 @@ int main()
         return Fail("ProcessingBuildActions did not reject an invalid stitch search.");
     }
     const ProcessingBuildActionResult ready_stitch_build =
-        ProcessingBuildActions::PrepareStitch(build_tiles, true, 45);
+        ProcessingBuildActions::PrepareStitch(build_tiles, true, 45, false);
     if (!ready_stitch_build.can_start ||
         ready_stitch_build.kind != ProcessingJobKind::Stitch ||
         ready_stitch_build.status != ProcessingBuildActionStatus::StitchReady ||
         ready_stitch_build.stitch_tiles.size() != 1 ||
-        ready_stitch_build.stitch_search_percent != 45) {
+        ready_stitch_build.stitch_search_percent != 45 ||
+        ready_stitch_build.stitch_use_orb_registration) {
         return Fail("ProcessingBuildActions did not prepare a stitch build request.");
     }
     const ProcessingIntegerInputResult skipped_stitch_search_input =
@@ -1948,7 +1963,7 @@ int main()
     const ProcessingIntegerInputResult valid_stitch_search_input =
         ProcessingBuildInputActions::StitchSearchForNextTile(true, L"45%", 33);
     const ProcessingBuildActionResult text_stitch_build =
-        ProcessingBuildInputActions::PrepareStitch(build_tiles, L"44");
+        ProcessingBuildInputActions::PrepareStitch(build_tiles, L"44", false);
     const ProcessingBuildActionResult text_invalid_stitch_build =
         ProcessingBuildInputActions::PrepareStitch(build_tiles, L"bad");
     if (!skipped_stitch_search_input.accepted ||
@@ -1959,6 +1974,7 @@ int main()
         valid_stitch_search_input.value != 45 ||
         !text_stitch_build.can_start ||
         text_stitch_build.stitch_search_percent != 44 ||
+        text_stitch_build.stitch_use_orb_registration ||
         text_invalid_stitch_build.can_start ||
         text_invalid_stitch_build.status != ProcessingBuildActionStatus::InvalidStitchSearch) {
         return Fail("ProcessingBuildInputActions did not prepare stitch inputs from text.");
@@ -2159,7 +2175,8 @@ int main()
         build_tiles,
         45,
         true,
-        [&stitch_join_count]() { ++stitch_join_count; });
+        [&stitch_join_count]() { ++stitch_join_count; },
+        false);
     const ProcessingRetryRequest stitch_start_request = stitch_start_retry.Request();
     if (!stitch_start.can_start ||
         stitch_start.status != ProcessingStartActionStatus::Started ||
@@ -2171,7 +2188,8 @@ int main()
         stitch_join_count != 1 ||
         stitch_start_request.kind != ProcessingJobKind::Stitch ||
         stitch_start_request.stitch_tiles.size() != 1 ||
-        stitch_start_request.stitch_search_percent != 45) {
+        stitch_start_request.stitch_search_percent != 45 ||
+        stitch_start_request.stitch_use_orb_registration) {
         return Fail("ProcessingStartActions did not start a stitch job and remember its snapshot.");
     }
     stitch_start_state.MarkIdle();
@@ -2324,17 +2342,19 @@ int main()
     if (retry_request.kind != ProcessingJobKind::None ||
         retry_request.CanRetry() ||
         retry_request.stitch_search_percent != ProcessingParameterRules::DefaultStitchSearchPercent() ||
+        !retry_request.stitch_use_orb_registration ||
         retry_request.edf_options.focus_radius != ProcessingParameterRules::DefaultEdfOptions().focus_radius) {
         return Fail("ProcessingRetryState did not expose default retry state.");
     }
     std::vector<StitchTile> retry_tiles(1);
     retry_tiles[0].frame = MakeSolidImage(2, 2, 1, 2, 3);
-    retry_state.RememberStitch(retry_tiles, 35);
+    retry_state.RememberStitch(retry_tiles, 35, false);
     retry_request = retry_state.Request();
     if (retry_request.kind != ProcessingJobKind::Stitch ||
         !retry_request.CanRetry() ||
         retry_request.stitch_tiles.size() != 1 ||
         retry_request.stitch_search_percent != 35 ||
+        retry_request.stitch_use_orb_registration ||
         !retry_request.edf_stack.empty()) {
         return Fail("ProcessingRetryState did not remember stitch retry input.");
     }
@@ -2379,7 +2399,7 @@ int main()
         empty_stitch_retry_action.message != ProcessingStatusFormatter::FormatNoRetry(ProcessingJobKind::Stitch)) {
         return Fail("ProcessingRetryActions did not reject an empty stitch retry.");
     }
-    retry_state.RememberStitch(retry_tiles, 35);
+    retry_state.RememberStitch(retry_tiles, 35, false);
     const ProcessingRetryActionResult stitch_retry_action =
         ProcessingRetryActions::Prepare(retry_state);
     if (!stitch_retry_action.can_start ||
@@ -2387,6 +2407,7 @@ int main()
         stitch_retry_action.kind != ProcessingJobKind::Stitch ||
         stitch_retry_action.request.stitch_tiles.size() != 1 ||
         stitch_retry_action.request.stitch_search_percent != 35 ||
+        stitch_retry_action.request.stitch_use_orb_registration ||
         stitch_retry_action.message != ProcessingStatusFormatter::FormatRetryStarted(ProcessingJobKind::Stitch)) {
         return Fail("ProcessingRetryActions did not prepare a stitch retry.");
     }
@@ -3053,6 +3074,7 @@ int main()
     document.dye_profiles.push_back(DyeProfile{L"Custom Green", 488.0, 520.0, RgbColor{20, 240, 90}});
     document.processing_settings.edf_focus_radius = 4;
     document.processing_settings.stitch_search_percent = 35;
+    document.processing_settings.stitch_use_orb_registration = false;
     FluorescenceChannelRecipe channel_recipe;
     channel_recipe.name = L"FITC 1";
     channel_recipe.color = RgbColor{80, 255, 80};
@@ -3101,6 +3123,7 @@ int main()
         loaded_document.dye_profiles[0].color.b != 90 ||
         loaded_document.processing_settings.edf_focus_radius != 4 ||
         loaded_document.processing_settings.stitch_search_percent != 35 ||
+        loaded_document.processing_settings.stitch_use_orb_registration ||
         loaded_document.fluorescence_channels[0].name != L"FITC 1" ||
         loaded_document.fluorescence_channels[0].visible ||
         loaded_document.fluorescence_channels[0].black_level != 12 ||
@@ -3138,7 +3161,8 @@ int main()
         44,
         mapped_objective_labels,
         mapped_objective_calibrations,
-        2);
+        2,
+        false);
     if (mapped_document.measurements.size() != 1 ||
         mapped_document.angle_measurements.size() != 1 ||
         mapped_document.selected_objective != L"63x Oil" ||
@@ -3150,7 +3174,8 @@ int main()
         mapped_document.fluorescence_channels[0].visible ||
         mapped_document.fluorescence_channels[0].black_level != 11 ||
         mapped_document.processing_settings.edf_focus_radius != 5 ||
-        mapped_document.processing_settings.stitch_search_percent != 44) {
+        mapped_document.processing_settings.stitch_search_percent != 44 ||
+        mapped_document.processing_settings.stitch_use_orb_registration) {
         return Fail("ProjectSessionMapper did not build a document from session state.");
     }
 
@@ -3166,7 +3191,8 @@ int main()
         44,
         mapped_objective_labels,
         mapped_objective_calibrations,
-        2);
+        2,
+        false);
     if (!project_save.succeeded ||
         project_save.status != ProjectActionStatus::Saved ||
         project_save.message != L"Project saved." ||
@@ -3190,6 +3216,7 @@ int main()
         project_load.session_state.fluorescence_channels[0].visible ||
         project_load.session_state.edf_options.focus_radius != 5 ||
         project_load.session_state.stitch_search_percent != 44 ||
+        project_load.session_state.stitch_use_orb_registration ||
         !project_load.session_state.restored_channel_settings) {
         return Fail("ProjectActions did not load a project into session state.");
     }
@@ -3200,6 +3227,7 @@ int main()
     sparse_document.measurements.emplace_back(L"Open Length", ImagePoint{0.0, 0.0}, ImagePoint{5.0, 0.0});
     sparse_document.processing_settings.edf_focus_radius = 99;
     sparse_document.processing_settings.stitch_search_percent = 1;
+    sparse_document.processing_settings.stitch_use_orb_registration = false;
     sparse_document.fluorescence_channels.push_back(channel_recipe);
     ProjectSessionState mapped_state = ProjectSessionMapper::FromDocument(std::move(sparse_document));
     if (mapped_state.measurements.LengthCount() != 1 ||
@@ -3209,6 +3237,7 @@ int main()
         mapped_state.dye_profiles.empty() ||
         mapped_state.edf_options.focus_radius != 16 ||
         mapped_state.stitch_search_percent != 5 ||
+        mapped_state.stitch_use_orb_registration ||
         !mapped_state.restored_channel_settings ||
         mapped_state.fluorescence_channels.size() != 1 ||
         mapped_state.fluorescence_channels[0].frame.IsValid() ||
@@ -3230,6 +3259,7 @@ int main()
     EdfOptions runtime_edf_options;
     runtime_edf_options.focus_radius = 2;
     int runtime_stitch_search_percent = 77;
+    bool runtime_stitch_use_orb_registration = true;
     bool runtime_show_fusion_preview = true;
     std::vector<std::wstring> runtime_objective_labels;
     std::vector<CalibrationProfile> runtime_objective_calibrations;
@@ -3254,6 +3284,7 @@ int main()
             runtime_edf_stack,
             runtime_edf_options,
             runtime_stitch_search_percent,
+            runtime_stitch_use_orb_registration,
             runtime_show_fusion_preview,
             runtime_retry,
             runtime_processing_frames,
@@ -3274,6 +3305,7 @@ int main()
         runtime_channels.size() != 1 ||
         runtime_edf_options.focus_radius != 16 ||
         runtime_stitch_search_percent != 5 ||
+        runtime_stitch_use_orb_registration ||
         runtime_show_fusion_preview ||
         !runtime_stitch_tiles.empty() ||
         !runtime_edf_stack.empty() ||
@@ -4094,17 +4126,18 @@ int main()
     std::vector<int> stitch_progress;
     const ImageFrame stitched_image = ImageStitcher::StitchAverage(
         {left_tile, right_tile},
+        StitchBlendMode::Linear,
         nullptr,
         [&](int percent) { stitch_progress.push_back(percent); });
     if (!stitched_image.IsValid() || stitched_image.width != 3 || stitched_image.height != 1) {
         return Fail("Image stitching did not produce the expected canvas size.");
     }
     if (stitched_image.bgr[0] != 10 ||
-        stitched_image.bgr[3] != 10 ||
-        stitched_image.bgr[4] != 20 ||
-        stitched_image.bgr[5] != 30 ||
+        stitched_image.bgr[3] != 30 ||
+        stitched_image.bgr[4] != 45 ||
+        stitched_image.bgr[5] != 60 ||
         stitched_image.bgr[6] != 50) {
-        return Fail("Image stitching did not preserve sharp source pixels in the overlap.");
+        return Fail("Image stitching did not linearly blend overlap pixels.");
     }
     if (!NonDecreasingProgress(stitch_progress)) {
         return Fail("Image stitching did not report monotonic progress from 0 to 100.");
@@ -4177,8 +4210,89 @@ int main()
             std::to_string(optimized_stitch.tiles[3].offset_y) + ".");
     }
 
+    const ImageFrame manual_overlap_pattern = MakeFeaturePatternImage(360, 180);
+    StitchTile manual_reference_tile;
+    manual_reference_tile.frame = CropImage(manual_overlap_pattern, 0, 20, 200, 120);
+    manual_reference_tile.offset_x = 0;
+    manual_reference_tile.offset_y = 0;
+    StitchTile manual_moving_tile;
+    manual_moving_tile.frame = CropImage(manual_overlap_pattern, 72, 27, 200, 120);
+    manual_moving_tile.offset_x = 170;
+    manual_moving_tile.offset_y = 0;
+    manual_moving_tile.estimated_position = true;
+    StitchOptimizationOptions manual_overlap_options;
+    manual_overlap_options.search_radius_x = 24;
+    manual_overlap_options.search_radius_y = 24;
+    manual_overlap_options.iterations = 25;
+    manual_overlap_options.use_orb_registration = false;
+    const StitchOptimizationResult manual_overlap_stitch = ImageStitcher::OptimizeTileOffsets(
+        {manual_reference_tile, manual_moving_tile},
+        manual_overlap_options);
+    if (!manual_overlap_stitch.optimized ||
+        manual_overlap_stitch.constraint_count < 1 ||
+        manual_overlap_stitch.tiles[1].offset_x != 72 ||
+        manual_overlap_stitch.tiles[1].offset_y != 7) {
+        return Fail(
+            "Global stitch optimization did not recover uncertain manual-stage overlap; got " +
+            std::to_string(manual_overlap_stitch.tiles[1].offset_x) + "," +
+            std::to_string(manual_overlap_stitch.tiles[1].offset_y) + ".");
+    }
+    StitchTile reverse_reference_tile;
+    reverse_reference_tile.frame = CropImage(manual_overlap_pattern, 180, 20, 200, 120);
+    reverse_reference_tile.offset_x = 0;
+    reverse_reference_tile.offset_y = 0;
+    StitchTile reverse_moving_tile;
+    reverse_moving_tile.frame = CropImage(manual_overlap_pattern, 40, 28, 200, 120);
+    reverse_moving_tile.offset_x = -170;
+    reverse_moving_tile.offset_y = 0;
+    reverse_moving_tile.estimated_position = true;
+    StitchOptimizationOptions reverse_overlap_options;
+    reverse_overlap_options.search_radius_x = 24;
+    reverse_overlap_options.search_radius_y = 24;
+    reverse_overlap_options.iterations = 25;
+    const StitchOptimizationResult reverse_overlap_stitch = ImageStitcher::OptimizeTileOffsets(
+        {reverse_reference_tile, reverse_moving_tile},
+        reverse_overlap_options);
+    if (!reverse_overlap_stitch.optimized ||
+        reverse_overlap_stitch.constraint_count < 1 ||
+        reverse_overlap_stitch.tiles[1].offset_x != -140 ||
+        reverse_overlap_stitch.tiles[1].offset_y != 8) {
+        return Fail(
+            "Micro/auto stitch registration did not recover a reverse manual-stage pair; got " +
+            std::to_string(reverse_overlap_stitch.tiles[1].offset_x) + "," +
+            std::to_string(reverse_overlap_stitch.tiles[1].offset_y) + ".");
+    }
+
+    const ImageFrame photometric_pattern = MakeFeaturePatternImage(440, 220);
+    StitchTile photometric_reference_tile;
+    photometric_reference_tile.frame = CropImage(photometric_pattern, 0, 40, 220, 140);
+    photometric_reference_tile.offset_x = 0;
+    photometric_reference_tile.offset_y = 0;
+    StitchTile photometric_moving_tile;
+    photometric_moving_tile.frame = AdjustBrightness(CropImage(photometric_pattern, 95, 51, 220, 140), -35);
+    photometric_moving_tile.offset_x = 185;
+    photometric_moving_tile.offset_y = 0;
+    photometric_moving_tile.estimated_position = true;
+    StitchOptimizationOptions photometric_options;
+    photometric_options.search_radius_x = 24;
+    photometric_options.search_radius_y = 24;
+    photometric_options.iterations = 25;
+    photometric_options.registration_method = StitchRegistrationMethod::Micro;
+    const StitchOptimizationResult photometric_stitch = ImageStitcher::OptimizeTileOffsets(
+        {photometric_reference_tile, photometric_moving_tile},
+        photometric_options);
+    if (!photometric_stitch.optimized ||
+        photometric_stitch.constraint_count < 1 ||
+        std::abs(photometric_stitch.tiles[1].offset_x - 95) > 2 ||
+        std::abs(photometric_stitch.tiles[1].offset_y - 11) > 2) {
+        return Fail(
+            "Micro stitch registration did not handle photometric variation; got " +
+            std::to_string(photometric_stitch.tiles[1].offset_x) + "," +
+            std::to_string(photometric_stitch.tiles[1].offset_y) + ".");
+    }
+
     std::atomic_bool cancel_stitch = true;
-    if (ImageStitcher::StitchAverage({left_tile, right_tile}, &cancel_stitch).IsValid()) {
+    if (ImageStitcher::StitchAverage({left_tile, right_tile}, StitchBlendMode::Linear, &cancel_stitch).IsValid()) {
         return Fail("Image stitching did not honor cancellation.");
     }
 
@@ -4188,7 +4302,8 @@ int main()
         {left_tile, right_tile},
         50,
         nullptr,
-        [&](int percent) { stitch_job_progress.push_back(percent); });
+        [&](int percent) { stitch_job_progress.push_back(percent); },
+        false);
     if (stitch_job_result.job_id != 42 ||
         stitch_job_result.kind != ProcessingJobKind::Stitch ||
         !stitch_job_result.succeeded ||
@@ -4247,7 +4362,8 @@ int main()
         [&](ProcessingJobResult result) {
             stitch_worker_result = std::move(result);
             ++stitch_worker_publish_count;
-        });
+        },
+        false);
     if (!stitch_worker.joinable()) {
         return Fail("ProcessingWorkerActions did not create a stitch worker thread.");
     }

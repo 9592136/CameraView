@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 inline constexpr int kIdOpen = 1001;
 inline constexpr int kIdStop = 1002;
@@ -128,3 +128,23 @@ inline constexpr int kIdHistogramWindowLevelValue = 1123;
 inline constexpr int kIdHistogramWindowWidthLabel = 1124;
 inline constexpr int kIdHistogramWindowWidthSlider = 1125;
 inline constexpr int kIdHistogramWindowWidthValue = 1126;
+inline constexpr int kIdStitchOrbRegistration = 1127;
+inline constexpr int kIdStitchModeLabel = 1128;
+inline constexpr int kIdStitchModeCombo = 1129;
+inline constexpr int kIdStitchSourceLabel = 1130;
+inline constexpr int kIdSelectStitchDirectory = 1131;
+inline constexpr int kIdSelectStitchFiles = 1132;
+inline constexpr int kIdStitchSourceStatus = 1133;
+inline constexpr int kIdStitchRowsLabel = 1134;
+inline constexpr int kIdStitchRowsEdit = 1135;
+inline constexpr int kIdStitchColsLabel = 1136;
+inline constexpr int kIdStitchColsEdit = 1137;
+inline constexpr int kIdStitchMethodLabel = 1138;
+inline constexpr int kIdStitchMethodCombo = 1139;
+inline constexpr int kIdStitchTransformLabel = 1140;
+inline constexpr int kIdStitchTransformCombo = 1141;
+inline constexpr int kIdStitchBlendLabel = 1142;
+inline constexpr int kIdStitchBlendCombo = 1143;
+inline constexpr int kIdStitchOverlapSlider = 1144;
+inline constexpr int kIdStitchOverlapValue = 1145;
+inline constexpr int kIdSaveStitchResult = 1146;

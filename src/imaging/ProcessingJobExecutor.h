@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "EdfProcessor.h"
 #include "ImageStitcher.h"
@@ -16,6 +16,14 @@ public:
         unsigned long long job_id,
         std::vector<StitchTile> tiles,
         int search_percent,
+        const std::atomic_bool* cancel_requested = nullptr,
+        const ProgressCallback& progress_callback = {},
+        bool use_orb_registration = true);
+
+    static ProcessingJobResult RunStitch(
+        unsigned long long job_id,
+        std::vector<StitchTile> tiles,
+        StitchProcessingOptions options,
         const std::atomic_bool* cancel_requested = nullptr,
         const ProgressCallback& progress_callback = {});
 

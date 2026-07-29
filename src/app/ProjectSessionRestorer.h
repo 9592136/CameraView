@@ -20,6 +20,7 @@ struct ProjectRuntimeState {
     std::vector<ImageFrame>& edf_stack;
     EdfOptions& edf_options;
     int& stitch_search_percent;
+    bool& stitch_use_orb_registration;
     bool& show_fusion_preview;
     ProcessingRetryState& processing_retry;
     ProcessingResultFrames& processing_frames;

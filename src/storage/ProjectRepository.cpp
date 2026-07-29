@@ -321,7 +321,9 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
     output << "  ],\n";
     output << "  \"processing_settings\": {\n";
     output << "    \"edf_focus_radius\": " << document.processing_settings.edf_focus_radius << ",\n";
-    output << "    \"stitch_search_percent\": " << document.processing_settings.stitch_search_percent << "\n";
+    output << "    \"stitch_search_percent\": " << document.processing_settings.stitch_search_percent << ",\n";
+    output << "    \"stitch_use_orb_registration\": "
+           << (document.processing_settings.stitch_use_orb_registration ? "true" : "false") << "\n";
     output << "  }\n";
     output << "}\n";
 
@@ -595,6 +597,12 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
             return false;
         }
         loaded.processing_settings.stitch_search_percent = search_percent;
+    }
+
+    const std::regex stitch_orb_pattern(R"("stitch_use_orb_registration"\s*:\s*(true|false))");
+    std::smatch stitch_orb_match;
+    if (std::regex_search(text, stitch_orb_match, stitch_orb_pattern)) {
+        loaded.processing_settings.stitch_use_orb_registration = stitch_orb_match[1].str() == "true";
     }
 
     document = std::move(loaded);
