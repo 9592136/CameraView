@@ -193,6 +193,7 @@ add_executable(CameraView WIN32
     src/ui/HistogramRenderer.h
 )
 
+target_include_directories(CameraView PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_compile_features(CameraView PRIVATE cxx_std_17)
 target_compile_definitions(CameraView PRIVATE
     UNICODE
@@ -418,6 +419,7 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/ui/WindowLayout.cpp
         src/ui/WindowLayout.h
     )
+    target_include_directories(CameraViewDomainTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewDomainTests PRIVATE cxx_std_17)
     target_compile_definitions(CameraViewDomainTests PRIVATE
         UNICODE

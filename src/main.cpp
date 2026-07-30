@@ -71,6 +71,7 @@
 #include "imaging/HistogramCalculator.h"
 #include "ui/HistogramRenderer.h"
 #include "imaging/ImageAdjuster.h"
+#include "i18n/Localization.h"
 
 #include <algorithm>
 #include <atomic>
@@ -278,7 +279,25 @@ void RemoveFunctionPanelWidthProperty(HWND hwnd)
     RemovePropW(hwnd, kFunctionPanelWidthProperty);
 }
 
-HMENU CreateMainMenu()
+// ---- Language property ---------------------------------------------------
+
+constexpr const wchar_t* kLanguageProperty = L"CameraViewLanguage";
+constexpr UINT_PTR kLanguageEnglishValue = 0;
+constexpr UINT_PTR kLanguageChineseValue = 1;
+
+void SetLanguageProperty(HWND hwnd, UILanguage lang)
+{
+    SetPropW(hwnd, kLanguageProperty,
+             reinterpret_cast<HANDLE>(lang == UILanguage::Chinese ? kLanguageChineseValue : kLanguageEnglishValue));
+}
+
+UILanguage GetLanguageProperty(HWND hwnd)
+{
+    HANDLE value = GetPropW(hwnd, kLanguageProperty);
+    return (value == reinterpret_cast<HANDLE>(kLanguageChineseValue)) ? UILanguage::Chinese : UILanguage::English;
+}
+
+HMENU CreateMainMenu(UILanguage lang)
 {
     HMENU menu = CreateMenu();
     HMENU file_menu = CreatePopupMenu();
@@ -286,54 +305,67 @@ HMENU CreateMainMenu()
     HMENU camera_menu = CreatePopupMenu();
     HMENU processing_menu = CreatePopupMenu();
     HMENU measurement_menu = CreatePopupMenu();
+    HMENU language_menu = CreatePopupMenu();
 
-    AppendMenuW(file_menu, MF_STRING, kIdOpenImage, L"Open Image...");
-    AppendMenuW(file_menu, MF_STRING, kIdExportImage, L"Export Image...");
+    AppendMenuW(file_menu, MF_STRING, kIdOpenImage, GetLocStr(LocId::MF_OPEN_IMAGE, lang));
+    AppendMenuW(file_menu, MF_STRING, kIdExportImage, GetLocStr(LocId::MF_EXPORT_IMAGE, lang));
     AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(file_menu, MF_STRING, kIdOpenProject, L"Open Project...");
-    AppendMenuW(file_menu, MF_STRING, kIdSaveProject, L"Save Project...");
-    AppendMenuW(file_menu, MF_STRING, kIdDesignReportTemplate, L"Design Report Template...");
-    AppendMenuW(file_menu, MF_STRING, kIdSaveDiagnostics, L"Save Report...");
+    AppendMenuW(file_menu, MF_STRING, kIdOpenProject, GetLocStr(LocId::MF_OPEN_PROJECT, lang));
+    AppendMenuW(file_menu, MF_STRING, kIdSaveProject, GetLocStr(LocId::MF_SAVE_PROJECT, lang));
+    AppendMenuW(file_menu, MF_STRING, kIdDesignReportTemplate, GetLocStr(LocId::MF_DESIGN_REPORT_TEMPLATE, lang));
+    AppendMenuW(file_menu, MF_STRING, kIdSaveDiagnostics, GetLocStr(LocId::MF_SAVE_REPORT, lang));
     AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(file_menu, MF_STRING, kIdExit, L"Exit");
+    AppendMenuW(file_menu, MF_STRING, kIdExit, GetLocStr(LocId::MF_EXIT, lang));
 
-    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdToggleFunctionPanel, L"Function Panel");
+    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdToggleFunctionPanel, GetLocStr(LocId::MV_FUNCTION_PANEL, lang));
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdDockFunctionPanelLeft, L"Dock Left");
-    AppendMenuW(view_menu, MF_STRING, kIdDockFunctionPanelRight, L"Dock Right");
+    AppendMenuW(view_menu, MF_STRING | MF_CHECKED, kIdDockFunctionPanelLeft, GetLocStr(LocId::MV_DOCK_LEFT, lang));
+    AppendMenuW(view_menu, MF_STRING, kIdDockFunctionPanelRight, GetLocStr(LocId::MV_DOCK_RIGHT, lang));
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view_menu, MF_STRING, kIdFitView, L"Fit Image");
+    AppendMenuW(view_menu, MF_STRING, kIdFitView, GetLocStr(LocId::MV_FIT_IMAGE, lang));
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(camera_menu, MF_STRING, kIdRefreshDevices, L"Refresh Devices");
-    AppendMenuW(camera_menu, MF_STRING, kIdOpen, L"Open Camera");
-    AppendMenuW(camera_menu, MF_STRING, kIdStop, L"Stop Camera");
+    AppendMenuW(language_menu, MF_STRING | (lang == UILanguage::English ? MF_CHECKED : 0),
+                kIdLanguageEnglish, GetLocStr(LocId::ML_ENGLISH, lang));
+    AppendMenuW(language_menu, MF_STRING | (lang == UILanguage::Chinese ? MF_CHECKED : 0),
+                kIdLanguageChinese, GetLocStr(LocId::ML_CHINESE, lang));
+    AppendMenuW(view_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(language_menu), GetLocStr(LocId::MENU_LANGUAGE, lang));
+
+    AppendMenuW(camera_menu, MF_STRING, kIdRefreshDevices, GetLocStr(LocId::MC_REFRESH_DEVICES, lang));
+    AppendMenuW(camera_menu, MF_STRING, kIdOpen, GetLocStr(LocId::MC_OPEN_CAMERA, lang));
+    AppendMenuW(camera_menu, MF_STRING, kIdStop, GetLocStr(LocId::MC_STOP_CAMERA, lang));
     AppendMenuW(camera_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(camera_menu, MF_STRING, kIdAutoExposure, L"Auto Exposure");
-    AppendMenuW(camera_menu, MF_STRING, kIdWhiteBalance, L"White Balance");
+    AppendMenuW(camera_menu, MF_STRING, kIdAutoExposure, GetLocStr(LocId::MC_AUTO_EXPOSURE, lang));
+    AppendMenuW(camera_menu, MF_STRING, kIdWhiteBalance, GetLocStr(LocId::MC_WHITE_BALANCE, lang));
 
-    AppendMenuW(processing_menu, MF_STRING, kIdAddStitchTile, L"Add Tile");
-    AppendMenuW(processing_menu, MF_STRING, kIdStartLiveStitch, L"Start Live Stitch");
-    AppendMenuW(processing_menu, MF_STRING, kIdStopLiveStitch, L"Stop Live Stitch");
-    AppendMenuW(processing_menu, MF_STRING, kIdBuildStitch, L"Stitch");
+    AppendMenuW(processing_menu, MF_STRING, kIdAddStitchTile, GetLocStr(LocId::MP_ADD_TILE, lang));
+    AppendMenuW(processing_menu, MF_STRING, kIdStartLiveStitch, GetLocStr(LocId::MP_START_LIVE_STITCH, lang));
+    AppendMenuW(processing_menu, MF_STRING, kIdStopLiveStitch, GetLocStr(LocId::MP_STOP_LIVE_STITCH, lang));
+    AppendMenuW(processing_menu, MF_STRING, kIdBuildStitch, GetLocStr(LocId::MP_STITCH, lang));
     AppendMenuW(processing_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(processing_menu, MF_STRING, kIdAddEdfFrame, L"Add EDF Frame");
-    AppendMenuW(processing_menu, MF_STRING, kIdBuildEdf, L"Build EDF");
-    AppendMenuW(processing_menu, MF_STRING, kIdClearProcessing, L"Clear Processing");
+    AppendMenuW(processing_menu, MF_STRING, kIdAddEdfFrame, GetLocStr(LocId::MP_ADD_EDF_FRAME, lang));
+    AppendMenuW(processing_menu, MF_STRING, kIdBuildEdf, GetLocStr(LocId::MP_BUILD_EDF, lang));
+    AppendMenuW(processing_menu, MF_STRING, kIdClearProcessing, GetLocStr(LocId::MP_CLEAR_PROCESSING, lang));
 
-    AppendMenuW(measurement_menu, MF_STRING, kIdCalibrate, L"Calibrate");
-    AppendMenuW(measurement_menu, MF_STRING, kIdClearCalibration, L"Clear Calibration");
-    AppendMenuW(measurement_menu, MF_STRING, kIdLengthTool, L"Length");
-    AppendMenuW(measurement_menu, MF_STRING, kIdAngleTool, L"Angle");
-    AppendMenuW(measurement_menu, MF_STRING, kIdRectangleAreaTool, L"Rectangle Area");
-    AppendMenuW(measurement_menu, MF_STRING, kIdPolygonAreaTool, L"Polygon Area");
+    AppendMenuW(measurement_menu, MF_STRING, kIdCalibrate, GetLocStr(LocId::MM_CALIBRATE, lang));
+    AppendMenuW(measurement_menu, MF_STRING, kIdClearCalibration, GetLocStr(LocId::MM_CLEAR_CALIBRATION, lang));
+    AppendMenuW(measurement_menu, MF_STRING, kIdLengthTool, GetLocStr(LocId::MM_LENGTH, lang));
+    AppendMenuW(measurement_menu, MF_STRING, kIdAngleTool, GetLocStr(LocId::MM_ANGLE, lang));
+    AppendMenuW(measurement_menu, MF_STRING, kIdRectangleAreaTool, GetLocStr(LocId::MM_RECTANGLE_AREA, lang));
+    AppendMenuW(measurement_menu, MF_STRING, kIdPolygonAreaTool, GetLocStr(LocId::MM_POLYGON_AREA, lang));
     AppendMenuW(measurement_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(measurement_menu, MF_STRING, kIdExportCsv, L"Export CSV...");
+    AppendMenuW(measurement_menu, MF_STRING, kIdExportCsv, GetLocStr(LocId::MM_EXPORT_CSV, lang));
 
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"File");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"View");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(camera_menu), L"Camera");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(processing_menu), L"Processing");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(measurement_menu), L"Measurement");
+    // Help menu
+    HMENU help_menu = CreatePopupMenu();
+    AppendMenuW(help_menu, MF_STRING, kIdAbout, GetLocStr(LocId::MH_ABOUT, lang));
+
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), GetLocStr(LocId::MENU_FILE, lang));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), GetLocStr(LocId::MENU_VIEW, lang));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(camera_menu), GetLocStr(LocId::MENU_CAMERA, lang));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(processing_menu), GetLocStr(LocId::MENU_PROCESSING, lang));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(measurement_menu), GetLocStr(LocId::MENU_MEASUREMENT, lang));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help_menu), GetLocStr(LocId::MENU_HELP, lang));
     return menu;
 }
 
@@ -355,6 +387,13 @@ void SyncMainMenu(HWND hwnd)
         menu,
         kIdDockFunctionPanelRight,
         MF_BYCOMMAND | (IsFunctionPanelDockedLeft(hwnd) ? MF_UNCHECKED : MF_CHECKED));
+
+    const UILanguage lang = GetLanguageProperty(hwnd);
+    CheckMenuItem(menu, kIdLanguageEnglish,
+        MF_BYCOMMAND | (lang == UILanguage::English ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(menu, kIdLanguageChinese,
+        MF_BYCOMMAND | (lang == UILanguage::Chinese ? MF_CHECKED : MF_UNCHECKED));
+
     DrawMenuBar(hwnd);
 }
 
@@ -566,10 +605,10 @@ public:
         Stop();
         ClearLatestFrame();
         if (selected_camera_index_ < 0) {
-            SetStatus(CameraControlStatusFormatter::FormatNoCameraSelectedForStart());
+            SetStatus(GetLocStr(LocId::STATUS_NO_CAMERA_SELECTED_SHORT, current_language_));
             return;
         }
-        SetStatus(CameraControlStatusFormatter::FormatOpeningCamera());
+        SetStatus(CameraControlStatusFormatter::FormatOpeningCamera(current_language_));
         running_ = true;
         worker_ = std::thread(&CameraPreviewApp::CaptureThread, this);
     }
@@ -669,45 +708,45 @@ public:
     void ApplyAutoExposure()
     {
         if (!camera_driver_.IsOpen()) {
-            SetStatus(L"Open camera before auto exposure.");
+            SetStatus(GetLocStr(LocId::STATUS_AEX_NEED_OPEN_CAMERA, current_language_));
             return;
         }
         if (!camera_driver_.HasAutoExposureControl() || !camera_driver_.ApplyAutoExposure()) {
-            SetStatus(L"Auto exposure is not available for this camera.");
+            SetStatus(GetLocStr(LocId::STATUS_AEX_NOT_AVAILABLE, current_language_));
             return;
         }
-        SetStatus(L"Auto exposure applied.");
+        SetStatus(GetLocStr(LocId::STATUS_AEX_APPLIED, current_language_));
     }
 
     void ApplyGain(HWND edit)
     {
         double gain = 0.0;
         if (!ReadPositiveNumber(edit, gain)) {
-            SetStatus(L"Gain must be a positive number.");
+            SetStatus(GetLocStr(LocId::STATUS_GAIN_NEED_POSITIVE, current_language_));
             return;
         }
         if (!camera_driver_.IsOpen()) {
-            SetStatus(L"Open camera before setting gain.");
+            SetStatus(GetLocStr(LocId::STATUS_GAIN_NEED_OPEN_CAMERA, current_language_));
             return;
         }
         if (!camera_driver_.HasGainControl() || !camera_driver_.SetGain(static_cast<float>(gain))) {
-            SetStatus(L"Gain control is not available for this camera.");
+            SetStatus(GetLocStr(LocId::STATUS_GAIN_NOT_AVAILABLE, current_language_));
             return;
         }
-        SetStatus(L"Gain set.");
+        SetStatus(GetLocStr(LocId::STATUS_GAIN_SET, current_language_));
     }
 
     void ApplyWhiteBalance()
     {
         if (!camera_driver_.IsOpen()) {
-            SetStatus(L"Open camera before white balance.");
+            SetStatus(GetLocStr(LocId::STATUS_WB_NEED_OPEN_CAMERA, current_language_));
             return;
         }
         if (!camera_driver_.HasWhiteBalanceControl() || !camera_driver_.ApplyWhiteBalance()) {
-            SetStatus(L"White balance is not available for this camera.");
+            SetStatus(GetLocStr(LocId::STATUS_WB_NOT_AVAILABLE, current_language_));
             return;
         }
-        SetStatus(L"White balance applied.");
+        SetStatus(GetLocStr(LocId::STATUS_WB_APPLIED, current_language_));
     }
 
     void UpdatePseudoColor(HWND combo)
@@ -817,13 +856,17 @@ public:
             kIdProjectPanelCard,
             kIdHistogramPanelCard
         };
-        const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
-        for (std::size_t i = 0; i < labels.size(); ++i) {
+        static const LocId card_loc_ids[] = {
+            LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
+            LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
+            LocId::PANEL_HISTOGRAM
+        };
+        for (std::size_t i = 0; i < 7; ++i) {
             HWND button = GetDlgItem(hwnd_, card_ids[i]);
             if (!button) {
                 continue;
             }
-            SetWindowTextW(button, labels[i].c_str());
+            SetWindowTextW(button, GetLocStr(card_loc_ids[i], current_language_));
             InvalidateRect(button, nullptr, TRUE);
         }
     }
@@ -833,7 +876,13 @@ public:
         panel_category_ = WindowControlLayout::NormalizePanelCategory(panel_category);
         panel_scroll_offset_ = 0;
         SyncPanelCardButtons();
-        SetStatus(L"Function card: " + WindowControlLayout::PanelCategoryLabels()[static_cast<std::size_t>(panel_category_)] + L".");
+        static const LocId card_loc_ids[] = {
+            LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
+            LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
+            LocId::PANEL_HISTOGRAM
+        };
+        SetStatus(std::wstring(GetLocStr(LocId::STATUS_FUNCTION_CARD, current_language_)) +
+                  GetLocStr(card_loc_ids[panel_category_], current_language_) + L".");
     }
 
     int PanelCategory() const
@@ -856,15 +905,17 @@ public:
         return function_panel_width_;
     }
 
+    UILanguage CurrentLanguage() const { return current_language_; }
+
     void SyncFunctionPanelChrome() const
     {
         HWND toggle_button = GetDlgItem(hwnd_, kIdToggleFunctionPanel);
         if (toggle_button) {
-            SetWindowTextW(toggle_button, function_panel_visible_ ? L"Hide Panel" : L"Show Panel");
+            InvalidateRect(toggle_button, nullptr, FALSE);
         }
         HWND dock_button = GetDlgItem(hwnd_, kIdTogglePanelDock);
         if (dock_button) {
-            SetWindowTextW(dock_button, function_panel_docked_left_ ? L"Dock Right" : L"Dock Left");
+            InvalidateRect(dock_button, nullptr, FALSE);
         }
         SyncMainMenu(hwnd_);
     }
@@ -884,12 +935,242 @@ public:
         SyncFunctionPanelChrome();
         LayoutControls(hwnd_);
         InvalidateRect(hwnd_, nullptr, FALSE);
-        SetStatus(function_panel_visible_ ? L"Function panel shown." : L"Function panel hidden.");
+        SetStatus(GetLocStr(function_panel_visible_ ? LocId::STATUS_PANEL_SHOWN : LocId::STATUS_PANEL_HIDDEN, current_language_));
     }
 
     void ToggleFunctionPanel()
     {
         SetFunctionPanelVisible(!function_panel_visible_);
+    }
+
+    void ReloadUILanguage(UILanguage new_lang)
+    {
+        if (current_language_ == new_lang) return;
+        current_language_ = new_lang;
+        SetLanguageProperty(hwnd_, current_language_);
+
+        // Rebuild menu bar with new language
+        {
+            HMENU old_menu = GetMenu(hwnd_);
+            HMENU new_menu = CreateMainMenu(current_language_);
+            SetMenu(hwnd_, new_menu);
+            if (old_menu) DestroyMenu(old_menu);
+        }
+
+        // Update panel card headers (owner-draw buttons)
+        SyncPanelCardButtons();
+
+        // Update all side-panel control labels
+        UpdatePanelControlTexts();
+
+        // Sync chrome buttons and menu check marks
+        SyncFunctionPanelChrome();
+        LayoutControls(hwnd_);
+
+        // Update histogram chart area labels
+        UpdateAdjustValueLabels(hwnd_);
+
+        InvalidateRect(hwnd_, nullptr, TRUE);
+        SetStatus(GetLocStr(LocId::UI_READY, current_language_));
+    }
+
+    // ── About Dialog ──────────────────────────────────────────────────────
+
+    struct AboutDialogData {
+        const wchar_t* title;
+        const wchar_t* desc;
+        const wchar_t* version;
+        const wchar_t* author;
+        const wchar_t* ok_text;
+    };
+
+    static INT_PTR CALLBACK AboutDialogProc(HWND dlg, UINT msg, WPARAM wp, LPARAM)
+    {
+        if (msg == WM_INITDIALOG) {
+            auto* data = reinterpret_cast<AboutDialogData*>(GetWindowLongPtrW(dlg, GWLP_USERDATA));
+            if (!data) return TRUE;
+
+            SetWindowTextW(dlg, data->title);
+
+            // Set child control texts
+            SetDlgItemTextW(dlg, 101, data->desc);
+            SetDlgItemTextW(dlg, 102, data->version);
+            SetDlgItemTextW(dlg, 103, data->author);
+            SetDlgItemTextW(dlg, IDOK, data->ok_text);
+
+            // Center the dialog over its parent
+            HWND parent = GetParent(dlg);
+            if (parent) {
+                RECT pr, dr;
+                GetWindowRect(parent, &pr);
+                GetWindowRect(dlg, &dr);
+                int dw = dr.right - dr.left;
+                int dh = dr.bottom - dr.top;
+                int px = pr.left + ((pr.right - pr.left) - dw) / 2;
+                int py = pr.top + ((pr.bottom - pr.top) - dh) / 2;
+                SetWindowPos(dlg, nullptr, px, py, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            }
+            return TRUE;
+        }
+        if (msg == WM_COMMAND) {
+            if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+                EndDialog(dlg, LOWORD(wp));
+                return TRUE;
+            }
+        }
+        return FALSE;
+    }
+
+    // Build a dialog template in dynamically allocated memory
+    static std::vector<unsigned char> BuildAboutDialogTemplate()
+    {
+        // DLGTEMPLATE + menu/class (2 WORDs) + title array
+        // + 3 static controls + 1 button = 4 DLGITEMTEMPLATEs
+        constexpr int kItemCount = 4;
+        constexpr int kDlgBaseUnitX = 4;
+        constexpr int kDlgBaseUnitY = 8;
+
+        // Dialog: 280 x 170 dlg units
+        constexpr WORD dlgW = 280;
+        constexpr WORD dlgH = 170;
+
+        // Estimate total size
+        size_t total = sizeof(DLGTEMPLATE) + sizeof(WORD) * 3; // menu, class, title
+        total += kItemCount * (sizeof(DLGITEMTEMPLATE) + sizeof(WORD) * 3); // class, title, creation data
+        total += 256; // generous padding for variable-length strings
+
+        std::vector<unsigned char> buf(total, 0);
+        unsigned char* p = buf.data();
+
+        // DLGTEMPLATE header
+        auto* dlg_tpl = reinterpret_cast<DLGTEMPLATE*>(p);
+        dlg_tpl->style = WS_POPUP | WS_BORDER | WS_SYSMENU | WS_CAPTION | DS_SETFONT | DS_MODALFRAME;
+        dlg_tpl->dwExtendedStyle = 0;
+        dlg_tpl->cdit = kItemCount;
+        dlg_tpl->x = 0;
+        dlg_tpl->y = 0;
+        dlg_tpl->cx = dlgW;
+        dlg_tpl->cy = dlgH;
+        p += sizeof(DLGTEMPLATE);
+
+        // menu resource (0)
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD);
+        // class (0 = standard dialog)
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD);
+        // title (will be set at runtime via SetWindowText)
+        *reinterpret_cast<WCHAR*>(p) = L'\0'; p += sizeof(WCHAR);
+        // font size (8 pt)
+        *reinterpret_cast<WORD*>(p) = 8; p += sizeof(WORD);
+
+        // Helper lambda to align to DWORD
+        auto align_dword = [](unsigned char*& ptr) {
+            ptr = reinterpret_cast<unsigned char*>((reinterpret_cast<DWORD_PTR>(ptr) + 3) & ~3);
+        };
+
+        // ---- Item 1: Description static text (101) ----
+        align_dword(p);
+        auto* item1 = reinterpret_cast<DLGITEMTEMPLATE*>(p);
+        item1->style = WS_CHILD | WS_VISIBLE | SS_LEFT;
+        item1->dwExtendedStyle = 0;
+        item1->x = 12;
+        item1->y = 10;
+        item1->cx = dlgW - 24;
+        item1->cy = 56;
+        item1->id = 101;
+        p += sizeof(DLGITEMTEMPLATE);
+        *reinterpret_cast<WORD*>(p) = 0xFFFF; p += sizeof(WORD); // class: static
+        *reinterpret_cast<WORD*>(p) = 0x0082; p += sizeof(WORD); // STATIC
+        *reinterpret_cast<WCHAR*>(p) = L'\0'; p += sizeof(WCHAR); // text (set at runtime)
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD); // no creation data
+
+        // ---- Item 2: Version static text (102) ----
+        align_dword(p);
+        auto* item2 = reinterpret_cast<DLGITEMTEMPLATE*>(p);
+        item2->style = WS_CHILD | WS_VISIBLE | SS_LEFT;
+        item2->dwExtendedStyle = 0;
+        item2->x = 12;
+        item2->y = 72;
+        item2->cx = dlgW - 24;
+        item2->cy = 14;
+        item2->id = 102;
+        p += sizeof(DLGITEMTEMPLATE);
+        *reinterpret_cast<WORD*>(p) = 0xFFFF; p += sizeof(WORD);
+        *reinterpret_cast<WORD*>(p) = 0x0082; p += sizeof(WORD);
+        *reinterpret_cast<WCHAR*>(p) = L'\0'; p += sizeof(WCHAR);
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD);
+
+        // ---- Item 3: Author static text (103) ----
+        align_dword(p);
+        auto* item3 = reinterpret_cast<DLGITEMTEMPLATE*>(p);
+        item3->style = WS_CHILD | WS_VISIBLE | SS_LEFT;
+        item3->dwExtendedStyle = 0;
+        item3->x = 12;
+        item3->y = 90;
+        item3->cx = dlgW - 24;
+        item3->cy = 14;
+        item3->id = 103;
+        p += sizeof(DLGITEMTEMPLATE);
+        *reinterpret_cast<WORD*>(p) = 0xFFFF; p += sizeof(WORD);
+        *reinterpret_cast<WORD*>(p) = 0x0082; p += sizeof(WORD);
+        *reinterpret_cast<WCHAR*>(p) = L'\0'; p += sizeof(WCHAR);
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD);
+
+        // ---- Item 4: OK button (IDOK) ----
+        align_dword(p);
+        auto* item4 = reinterpret_cast<DLGITEMTEMPLATE*>(p);
+        item4->style = WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP;
+        item4->dwExtendedStyle = 0;
+        item4->x = (dlgW - 70) / 2;
+        item4->y = dlgH - 36;
+        item4->cx = 70;
+        item4->cy = 24;
+        item4->id = IDOK;
+        p += sizeof(DLGITEMTEMPLATE);
+        *reinterpret_cast<WORD*>(p) = 0xFFFF; p += sizeof(WORD);
+        *reinterpret_cast<WORD*>(p) = 0x0080; p += sizeof(WORD); // BUTTON
+        *reinterpret_cast<WCHAR*>(p) = L'\0'; p += sizeof(WCHAR);
+        *reinterpret_cast<WORD*>(p) = 0; p += sizeof(WORD);
+
+        buf.resize(p - buf.data());
+        return buf;
+    }
+
+    void ShowAboutDialog()
+    {
+        static std::vector<unsigned char> template_buf = BuildAboutDialogTemplate();
+
+        AboutDialogData data;
+        data.title   = GetLocStr(LocId::ABOUT_TITLE, current_language_);
+        data.desc    = GetLocStr(LocId::ABOUT_DESCRIPTION, current_language_);
+        data.version = GetLocStr(LocId::ABOUT_VERSION, current_language_);
+        data.author  = GetLocStr(LocId::ABOUT_AUTHOR, current_language_);
+        data.ok_text = GetLocStr(LocId::ABOUT_OK, current_language_);
+
+        DialogBoxIndirectParamW(GetModuleHandle(nullptr),
+            reinterpret_cast<const DLGTEMPLATE*>(template_buf.data()),
+            hwnd_, AboutDialogProc, reinterpret_cast<LPARAM>(&data));
+    }
+
+    void UpdatePanelControlTexts()
+    {
+        // Update histogram-specific labels
+        struct {
+            int ctrl_id;
+            LocId loc_id;
+        } extra_ctrls[] = {
+            { kIdHistogramBrightnessLabel,  LocId::HIST_BRIGHTNESS },
+            { kIdHistogramContrastLabel,    LocId::HIST_CONTRAST },
+            { kIdHistogramGammaLabel,       LocId::HIST_GAMMA },
+            { kIdHistogramWindowLevelLabel, LocId::HIST_WINDOW_LEVEL },
+            { kIdHistogramWindowWidthLabel, LocId::HIST_WINDOW_WIDTH },
+            { kIdHistogramResetAdjust,      LocId::HIST_RESET },
+            { kIdHistogramChannelLabel,     LocId::HIST_CHANNEL },
+        };
+        for (const auto& c : extra_ctrls) {
+            HWND ctrl = GetDlgItem(hwnd_, c.ctrl_id);
+            if (ctrl) SetWindowTextW(ctrl, GetLocStr(c.loc_id, current_language_));
+        }
+
     }
 
     void ApplyFunctionPanelDockedLeft(bool dock_left, bool announce)
@@ -973,7 +1254,7 @@ public:
 
         function_panel_resize_active_ = true;
         SetCapture(hwnd_);
-        SetStatus(L"Resizing function panel.");
+        SetStatus(GetLocStr(LocId::STATUS_PANEL_RESIZING, current_language_));
         return true;
     }
 
@@ -1012,7 +1293,7 @@ public:
         if (GetCapture() == hwnd_) {
             ReleaseCapture();
         }
-        SetStatus(L"Function panel width adjusted.");
+        SetStatus(GetLocStr(LocId::STATUS_PANEL_WIDTH_ADJUSTED, current_language_));
         return true;
     }
 
@@ -1024,7 +1305,7 @@ public:
 
         function_panel_drag_active_ = true;
         SetCapture(hwnd_);
-        SetStatus(L"Dragging function panel.");
+        SetStatus(GetLocStr(LocId::STATUS_PANEL_DRAGGING, current_language_));
         return true;
     }
 
@@ -1200,6 +1481,130 @@ public:
         return true;
     }
 
+    // ── Toolbar icon button drawing ───────────────────────────────────────
+
+    static bool IsToolbarButton(int control_id)
+    {
+        return control_id == kIdFitView ||
+               control_id == kIdToggleFunctionPanel ||
+               control_id == kIdTogglePanelDock;
+    }
+
+    // Draw a toolbar icon button with hover/active states and a colored icon
+    bool DrawToolbarButton(const DRAWITEMSTRUCT& item)
+    {
+        if (!IsToolbarButton(static_cast<int>(item.CtlID))) {
+            return false;
+        }
+
+        RECT rect = item.rcItem;
+        const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+        const bool hover = (item.itemState & ODS_HOTLIGHT) != 0;
+        const bool focused = (item.itemState & ODS_FOCUS) != 0;
+
+        // Background
+        COLORREF bg = RGB(40, 44, 52); // dark toolbar background
+        if (pressed) {
+            bg = RGB(24, 27, 32);
+        } else if (hover) {
+            bg = RGB(56, 60, 68);
+        }
+        FillSolidRect(item.hDC, rect, bg);
+
+        // Accent color for icons
+        constexpr COLORREF kAccent = RGB(97, 175, 239); // soft blue
+        constexpr COLORREF kAccentDim = RGB(120, 120, 130);
+
+        int cx = rect.left + (rect.right - rect.left) / 2;
+        int cy = rect.top + (rect.bottom - rect.top) / 2;
+
+        // Choose icon based on control ID
+        HPEN pen = CreatePen(PS_SOLID, 2, pressed ? RGB(70, 140, 200) : (hover ? kAccent : kAccentDim));
+        HGDIOBJ old_pen = SelectObject(item.hDC, pen);
+
+        switch (item.CtlID) {
+        case kIdFitView: {
+            // Fit-to-view icon: rectangle with 4 corner arrows pointing inward
+            const int s = 5; // half-size
+            const int r = 9; // frame half-size
+            // Outer frame
+            Rectangle(item.hDC, cx - r, cy - r, cx + r + 1, cy + r + 1);
+            // Four corner triangles (arrows pointing in)
+            // Top-left
+            MoveToEx(item.hDC, cx - r + 1, cy - r + 3, nullptr);
+            LineTo(item.hDC, cx - r + 3, cy - r + 3);
+            LineTo(item.hDC, cx - r + 3, cy - r + 1);
+            MoveToEx(item.hDC, cx - r + 1, cy - r + 1, nullptr);
+            LineTo(item.hDC, cx - r + s, cy - r + s);
+            // Top-right
+            MoveToEx(item.hDC, cx + r - 1, cy - r + 3, nullptr);
+            LineTo(item.hDC, cx + r - 3, cy - r + 3);
+            LineTo(item.hDC, cx + r - 3, cy - r + 1);
+            MoveToEx(item.hDC, cx + r - 1, cy - r + 1, nullptr);
+            LineTo(item.hDC, cx + r - s, cy - r + s);
+            // Bottom-left
+            MoveToEx(item.hDC, cx - r + 1, cy + r - 3, nullptr);
+            LineTo(item.hDC, cx - r + 3, cy + r - 3);
+            LineTo(item.hDC, cx - r + 3, cy + r - 1);
+            MoveToEx(item.hDC, cx - r + 1, cy + r - 1, nullptr);
+            LineTo(item.hDC, cx - r + s, cy + r - s);
+            // Bottom-right
+            MoveToEx(item.hDC, cx + r - 1, cy + r - 3, nullptr);
+            LineTo(item.hDC, cx + r - 3, cy + r - 3);
+            LineTo(item.hDC, cx + r - 3, cy + r - 1);
+            MoveToEx(item.hDC, cx + r - 1, cy + r - 1, nullptr);
+            LineTo(item.hDC, cx + r - s, cy + r - s);
+            break;
+        }
+        case kIdToggleFunctionPanel: {
+            // Side panel toggle icon: window with left panel
+            const int r = 9;
+            Rectangle(item.hDC, cx - r, cy - r, cx + r + 1, cy + r + 1);
+            // Left panel
+            RECT left_panel = {cx - r + 2, cy - r + 2, cx - 1, cy + r - 1};
+            HBRUSH fill = CreateSolidBrush(pressed ? RGB(70, 140, 200) : (hover ? kAccent : kAccentDim));
+            FillRect(item.hDC, &left_panel, fill);
+            DeleteObject(fill);
+            break;
+        }
+        case kIdTogglePanelDock: {
+            // Dock toggle icon: arrow left/right in a frame
+            const int r = 10;
+            const int s = 5;
+            // Frame
+            Rectangle(item.hDC, cx - r, cy - r, cx + r + 1, cy + r + 1);
+            if (function_panel_docked_left_) {
+                // Arrow pointing right (dock right)
+                MoveToEx(item.hDC, cx + 2, cy - s, nullptr);
+                LineTo(item.hDC, cx + s + 1, cy);
+                LineTo(item.hDC, cx + 2, cy + s);
+            } else {
+                // Arrow pointing left (dock left)
+                MoveToEx(item.hDC, cx + 2, cy - s, nullptr);
+                LineTo(item.hDC, cx - s + 1, cy);
+                LineTo(item.hDC, cx + 2, cy + s);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        SelectObject(item.hDC, old_pen);
+        DeleteObject(pen);
+
+        // Focus rect
+        if (focused) {
+            RECT focus_rect = rect;
+            InflateRect(&focus_rect, -3, -3);
+            SetTextColor(item.hDC, RGB(255, 255, 255));
+            SetBkColor(item.hDC, RGB(40, 44, 52));
+            DrawFocusRect(item.hDC, &focus_rect);
+        }
+
+        return true;
+    }
+
     void InitializeObjectiveControls(HWND combo, HWND name_edit)
     {
         EnsureObjectiveCalibrationCount();
@@ -1232,11 +1637,11 @@ public:
     {
         const std::wstring objective = TextInputParser::Trim(ReadEditText(name_edit, 128));
         if (objective.empty()) {
-            SetStatus(L"Enter an objective magnification name.");
+            SetStatus(GetLocStr(LocId::OBJECTIVE_ENTER_NAME, current_language_));
             return;
         }
         if (ObjectiveLabelExists(objective)) {
-            SetStatus(L"Objective already exists.");
+            SetStatus(GetLocStr(LocId::OBJECTIVE_EXISTS, current_language_));
             return;
         }
 
@@ -1252,7 +1657,7 @@ public:
         SyncCalibrationStatus();
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
-        SetStatus(L"Objective added: " + objective + L".");
+        SetStatus(FormatLocStr(LocId::OBJECTIVE_ADDED, current_language_, {{L"{name}", objective}}));
     }
 
     void RenameSelectedObjective(HWND combo, HWND name_edit)
@@ -1260,11 +1665,11 @@ public:
         EnsureObjectiveCalibrationCount();
         const std::wstring objective = TextInputParser::Trim(ReadEditText(name_edit, 128));
         if (objective.empty()) {
-            SetStatus(L"Enter an objective magnification name.");
+            SetStatus(GetLocStr(LocId::OBJECTIVE_ENTER_NAME, current_language_));
             return;
         }
         if (ObjectiveLabelExists(objective, selected_objective_index_)) {
-            SetStatus(L"Objective already exists.");
+            SetStatus(GetLocStr(LocId::OBJECTIVE_EXISTS, current_language_));
             return;
         }
 
@@ -1272,7 +1677,7 @@ public:
         RefreshObjectiveCombo(combo);
         SyncObjectiveNameEdit(name_edit);
         SyncCalibrationStatus();
-        SetStatus(L"Objective renamed: " + objective + L".");
+        SetStatus(FormatLocStr(LocId::OBJECTIVE_RENAMED, current_language_, {{L"{name}", objective}}));
     }
 
     void DeleteSelectedObjective(HWND combo, HWND name_edit)
@@ -1297,7 +1702,7 @@ public:
         SyncCalibrationStatus();
         InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
-        SetStatus(L"Objective deleted: " + removed + L".");
+        SetStatus(FormatLocStr(LocId::OBJECTIVE_DELETED, current_language_, {{L"{name}", removed}}));
     }
 
     void InitializeDyeCombo(HWND combo)
@@ -1473,7 +1878,7 @@ public:
         int black_level = 0;
         int white_level = 255;
         if (!ReadByteValue(black_edit, black_level) || !ReadByteValue(white_edit, white_level)) {
-            SetStatus(L"Channel range must be 0-255.");
+            SetStatus(GetLocStr(LocId::STATUS_CHANNEL_RANGE, current_language_));
             return;
         }
         const bool visible = visible_checkbox && SendMessageW(visible_checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -1531,7 +1936,7 @@ public:
             }
             SetStitchSourceStatus(std::to_wstring(stitch_tiles_.size()) + L" image(s) | camera/current image");
         }
-        SetStatus(L"Add Tile " + std::to_wstring(add_tile_ms) + L" ms. " + result.message);
+        SetStatus(FormatLocStr(LocId::TILE_ADDED, current_language_, {{L"{idx}", std::to_wstring(add_tile_ms)}}) + L" ms. " + result.message);
     }
 
     LiveStitchPreviewOptions CurrentLiveStitchPreviewOptions() const
@@ -2129,15 +2534,15 @@ public:
     void StartLiveStitchCapture()
     {
         if (live_stitch_active_) {
-            SetStatus(L"Live stitch is already running.");
+            SetStatus(GetLocStr(LocId::STATUS_LS_ALREADY_RUNNING, current_language_));
             return;
         }
         if (!running_.load()) {
-            SetStatus(L"Open camera before live stitch capture.");
+            SetStatus(GetLocStr(LocId::STATUS_LS_NEED_OPEN_CAMERA, current_language_));
             return;
         }
         if (!frame_buffer_.HasFrame()) {
-            SetStatus(L"Live stitch waiting for the first camera frame.");
+            SetStatus(GetLocStr(LocId::STATUS_LS_WAITING_FRAME, current_language_));
             return;
         }
 
@@ -2170,7 +2575,7 @@ public:
         live_stitch_preview_status_tick_ = 0;
         live_stitch_last_status_message_.clear();
         SyncLiveStitchControls();
-        SetStatus(L"Live stitch started. Move the stage; frames will be captured automatically.");
+        SetStatus(GetLocStr(LocId::STATUS_LS_STARTED, current_language_));
         SetTimer(hwnd_, kLiveStitchTimerId, static_cast<UINT>(live_stitch_interval_ms_), nullptr);
         CaptureLiveStitchTick();
     }
@@ -2188,7 +2593,7 @@ public:
         InvalidateLiveStitchCaptureState();
         SyncLiveStitchControls();
         if (update_status) {
-            SetStatus(L"Live stitch stopped. Tiles: " + std::to_wstring(stitch_tiles_.size()) + L".");
+            SetStatus(FormatLocStr(LocId::STATUS_LS_STOPPED, current_language_, {{L"{count}", std::to_wstring(stitch_tiles_.size())}}));
         }
     }
 
@@ -2532,7 +2937,7 @@ public:
         stitch_use_orb_registration_ = stitch_options_.registration_method != StitchRegistrationMethod::Phase;
         SyncStitchOverlapControls();
         SyncStitchRegistrationControl();
-        SetStatus(L"Stitch settings updated.");
+        SetStatus(GetLocStr(LocId::STATUS_STITCH_SETTINGS_UPDATED, current_language_));
     }
 
     void UpdateStitchRegistrationMode()
@@ -2543,7 +2948,7 @@ public:
     void ImportStitchImageFiles(const std::vector<std::wstring>& file_names, const std::wstring& source_label)
     {
         if (file_names.empty()) {
-            SetStatus(L"No image files selected for stitching.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_FILES_STITCH, current_language_));
             return;
         }
 
@@ -2560,7 +2965,7 @@ public:
             }
         }
         if (frames.empty()) {
-            SetStatus(L"No selected image files could be added to stitch tiles.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_FILES_STITCH_TILES, current_language_));
             return;
         }
 
@@ -2609,7 +3014,7 @@ public:
     {
         std::wstring directory;
         if (!FileDialog::OpenImageDirectory(hwnd_, directory)) {
-            SetStatus(L"Image directory selection canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_IMG_DIR_CANCELED, current_language_));
             return;
         }
 
@@ -2630,7 +3035,7 @@ public:
             }
         }
         if (error) {
-            SetStatus(L"Failed to read selected image directory.");
+            SetStatus(GetLocStr(LocId::STATUS_IMG_DIR_READ_FAILED, current_language_));
             return;
         }
         std::sort(paths.begin(), paths.end(), NaturalPathLess);
@@ -2647,7 +3052,7 @@ public:
     {
         std::vector<std::wstring> file_names;
         if (!FileDialog::OpenImages(hwnd_, file_names)) {
-            SetStatus(L"Image file selection canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_IMG_FILE_SEL_CANCELED, current_language_));
             return;
         }
         const std::filesystem::path first_path(file_names.empty() ? std::wstring() : file_names.front());
@@ -2703,7 +3108,7 @@ public:
 
         std::wstring file_name;
         if (!FileDialog::SaveImage(hwnd_, file_name)) {
-            SetStatus(L"Stitch result save canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_STITCH_SAVE_CANCELED, current_language_));
             return;
         }
 
@@ -3016,7 +3421,7 @@ public:
 
         RECT toolbar = client;
         toolbar.bottom = std::min(toolbar.bottom, static_cast<LONG>(WindowLayout::ToolbarHeight()));
-        FillSolidRect(hdc, toolbar, RGB(245, 247, 250));
+        FillSolidRect(hdc, toolbar, RGB(40, 44, 52));
 
         RECT status = GetStatusRect(hwnd_);
         FillSolidRect(hdc, status, RGB(238, 241, 245));
@@ -3039,9 +3444,15 @@ public:
             title_text.right -= 8;
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(22, 48, 72));
-            const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
+            static const LocId cat_loc_ids[] = {
+                LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
+                LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
+                LocId::PANEL_HISTOGRAM
+            };
             const std::wstring panel_label =
-                L"Functions - " + labels[static_cast<std::size_t>(WindowControlLayout::NormalizePanelCategory(panel_category_))];
+                std::wstring(GetLocStr(LocId::UI_FUNCTIONS, current_language_)) + L" - " +
+                GetLocStr(cat_loc_ids[static_cast<std::size_t>(WindowControlLayout::NormalizePanelCategory(panel_category_))],
+                          current_language_);
             DrawTextW(
                 hdc,
                 panel_label.c_str(),
@@ -3384,7 +3795,7 @@ public:
     {
         const ImageFrame& frame = CurrentPreviewFrame();
         if (!frame.IsValid()) {
-            SetStatus(L"No image frame to fit.");
+            SetStatus(GetLocStr(LocId::STATUS_IMAGE_NO_FRAME_FIT, current_language_));
             return;
         }
 
@@ -3530,7 +3941,7 @@ public:
         RefreshMeasurementList(list);
         InvalidatePreview(hwnd_);
         SetWindowTextW(GetDlgItem(hwnd_, kIdMeasurementNameEdit), L"");
-        SetStatus(L"Measurements cleared.");
+        SetStatus(GetLocStr(LocId::STATUS_MEASUREMENTS_CLEARED, current_language_));
     }
 
     void DeleteSelectedMeasurement(HWND list)
@@ -3623,7 +4034,7 @@ public:
             SyncSelectedMeasurementName(list, GetDlgItem(hwnd_, kIdMeasurementNameEdit));
         }
         SetCapture(hwnd_);
-        SetStatus(L"Drag to edit measurement point.");
+        SetStatus(GetLocStr(LocId::STATUS_MEASUREMENT_DRAG_EDIT, current_language_));
         return true;
     }
 
@@ -3664,19 +4075,19 @@ public:
         if (GetCapture() == hwnd_) {
             ReleaseCapture();
         }
-        SetStatus(L"Measurement point updated.");
+        SetStatus(GetLocStr(LocId::STATUS_MEASUREMENT_POINT_UPDATED, current_language_));
     }
 
     void ExportMeasurementsCsv()
     {
         if (measurements_.Empty()) {
-            SetStatus(L"No measurements to export.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_MEASUREMENTS_EXPORT, current_language_));
             return;
         }
 
         std::wstring file_name;
         if (!FileDialog::SaveCsv(hwnd_, file_name)) {
-            SetStatus(L"CSV export canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_CSV_EXPORT_CANCELED, current_language_));
             return;
         }
 
@@ -3699,7 +4110,7 @@ public:
             pseudo_color_palette_);
         const ImageFrame export_frame = CurrentPreviewFrame();
         if (!export_frame.IsValid()) {
-            SetStatus(L"No image frame to export.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_IMAGE_EXPORT, current_language_));
             return;
         }
 
@@ -3722,7 +4133,7 @@ public:
     {
         std::wstring file_name;
         if (!FileDialog::OpenImage(hwnd_, file_name)) {
-            SetStatus(L"Image open canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_IMAGE_OPEN_CANCELED, current_language_));
             return;
         }
 
@@ -3841,7 +4252,7 @@ public:
 
         std::wstring file_name;
         if (!FileDialog::SaveReport(hwnd_, file_name)) {
-            SetStatus(L"Report save canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_SAVE_CANCELED, current_language_));
             return;
         }
 
@@ -3925,7 +4336,7 @@ public:
         report_template_path_.clear();
         visual_report_template_options_ = ImageReportTemplateOptions{};
         SyncReportTemplateStatus();
-        SetStatus(L"Report template cleared.");
+        SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_CLEARED, current_language_));
     }
 
     void ShowReportTemplateDesigner()
@@ -4024,7 +4435,7 @@ public:
     {
         std::wstring file_name;
         if (!FileDialog::OpenProject(hwnd_, file_name)) {
-            SetStatus(L"Project open canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_PROJECT_OPEN_CANCELED, current_language_));
             return;
         }
 
@@ -5408,7 +5819,7 @@ private:
         visual_report_template_options_ = options;
         SyncReportTemplateStatus();
         SetDesignerStatus(state->status, L"Visual template applied.");
-        SetStatus(L"Visual report template applied.");
+        SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_APPLIED, current_language_));
     }
 
     void SaveDesignedReportTemplate(HWND owner, ReportTemplateDesignerState* state)
@@ -7500,7 +7911,7 @@ private:
     {
         const int requested_camera_index = selected_camera_index_;
         if (requested_camera_index < 0) {
-            SetStatus(CameraControlStatusFormatter::FormatNoCameraSelected());
+            SetStatus(CameraControlStatusFormatter::FormatNoCameraSelected(current_language_));
             running_ = false;
             return;
         }
@@ -7515,13 +7926,13 @@ private:
 
         const std::vector<CameraDevice> devices = camera_driver_.EnumerateDevices();
         if (devices.empty()) {
-            SetStatus(CameraControlStatusFormatter::FormatNoCameraFound());
+            SetStatus(GetLocStr(LocId::STATUS_NO_CAMERA_FOUND, current_language_));
             running_ = false;
             return;
         }
 
         if (requested_camera_index >= static_cast<int>(devices.size())) {
-            SetStatus(CameraControlStatusFormatter::FormatSelectedCameraUnavailable());
+            SetStatus(GetLocStr(LocId::STATUS_DEVICE_NOT_AVAILABLE, current_language_));
             running_ = false;
             return;
         }
@@ -7532,7 +7943,7 @@ private:
             requested_exposure = requested_exposure_ms_;
         }
         if (!camera_driver_.Open(requested_camera_index, requested_exposure)) {
-            SetStatus(CameraControlStatusFormatter::FormatFailedToOpenCamera());
+            SetStatus(GetLocStr(LocId::STATUS_FAILED_TO_OPEN_CAMERA, current_language_));
             running_ = false;
             return;
         }
@@ -7550,7 +7961,7 @@ private:
         DWORD last_fps_tick = GetTickCount();
         DWORD last_overlay_preview_tick = 0;
         unsigned long long last_fps_sequence = 0;
-        std::wstring final_status = CameraControlStatusFormatter::FormatPreviewStopped();
+        std::wstring final_status = CameraControlStatusFormatter::FormatPreviewStopped(current_language_);
 
         while (running_) {
             ImageFrame frame;
@@ -7584,7 +7995,7 @@ private:
                 ++fail_count;
                 if (fail_count > 5) {
                     if (!camera_driver_.IsConnected()) {
-                        final_status = CameraControlStatusFormatter::FormatCameraDisconnected();
+                        final_status = CameraControlStatusFormatter::FormatDisconnected(current_language_);
                         break;
                     }
                     fail_count = 0;
@@ -7855,6 +8266,7 @@ private:
     HistogramData histogram_data_;
     HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
     HistogramRenderer histo_renderer_;
+    UILanguage current_language_ = UILanguage::English;
     ImageAdjustParams image_adjust_;
     mutable ImageFrame adjusted_preview_;
     mutable unsigned long long histogram_cache_seq_ = 0;
@@ -8069,6 +8481,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             }
         }
 
+        // Create tooltip for toolbar icon buttons
+        HWND tooltip = CreateWindowExW(
+            WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+            hwnd, nullptr, nullptr, nullptr);
+        if (tooltip) {
+            SetWindowPos(tooltip, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+            auto add_tool = [&](int id, const wchar_t* tip) {
+                HWND btn = GetDlgItem(hwnd, id);
+                if (!btn) return;
+                TOOLINFOW ti = {};
+                ti.cbSize = sizeof(ti);
+                ti.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+                ti.hwnd = hwnd;
+                ti.uId = reinterpret_cast<UINT_PTR>(btn);
+                ti.lpszText = const_cast<wchar_t*>(tip);
+                SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+                SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, 0, 300);
+            };
+
+            add_tool(kIdFitView, L"Fit to View");
+            add_tool(kIdToggleFunctionPanel, L"Show/Hide Panel");
+            add_tool(kIdTogglePanelDock, L"Dock Left/Right");
+        }
+
         HWND device_combo = GetDlgItem(hwnd, kIdDeviceCombo);
         HWND objective_combo = GetDlgItem(hwnd, kIdObjectiveCombo);
         HWND objective_name_edit = GetDlgItem(hwnd, kIdObjectiveNameEdit);
@@ -8157,6 +8597,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         CameraPreviewApp* app = GetApp(hwnd);
         const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
         if (app && item && app->DrawPanelCategoryButton(*item)) {
+            return TRUE;
+        }
+        if (app && item && app->DrawToolbarButton(*item)) {
             return TRUE;
         }
         break;
@@ -8252,6 +8695,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdDockFunctionPanelRight:
             app->SetFunctionPanelDockedLeft(false);
+            return 0;
+        case kIdLanguageEnglish:
+            app->ReloadUILanguage(UILanguage::English);
+            return 0;
+        case kIdLanguageChinese:
+            app->ReloadUILanguage(UILanguage::Chinese);
+            return 0;
+        case kIdAbout:
+            app->ShowAboutDialog();
             return 0;
         case kIdExit:
             DestroyWindow(hwnd);
@@ -8675,7 +9127,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command)
         return 1;
     }
 
-    HMENU main_menu = CreateMainMenu();
+    HMENU main_menu = CreateMainMenu(UILanguage::English);
     HWND hwnd = CreateWindowExW(
         0,
         class_name,
@@ -8696,6 +9148,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command)
         return 1;
     }
 
+    SetLanguageProperty(hwnd, UILanguage::English);
     ShowWindow(hwnd, show_command);
     UpdateWindow(hwnd);
 

@@ -1,4 +1,5 @@
 #include "CameraDeviceListFormatter.h"
+#include "i18n/Localization.h"
 
 namespace {
 
@@ -12,20 +13,20 @@ CameraDeviceListPresentation SingleDisabledItem(const std::wstring& text)
 
 } // namespace
 
-CameraDeviceListPresentation CameraDeviceListFormatter::SdkUnavailable()
+CameraDeviceListPresentation CameraDeviceListFormatter::SdkUnavailable(UILanguage lang)
 {
-    return SingleDisabledItem(L"SDK DLL not loaded");
+    return SingleDisabledItem(GetLocStr(LocId::STATUS_SDK_DLL_NOT_LOADED, lang));
 }
 
-CameraDeviceListPresentation CameraDeviceListFormatter::NoCameraFound()
+CameraDeviceListPresentation CameraDeviceListFormatter::NoCameraFound(UILanguage lang)
 {
-    return SingleDisabledItem(L"No camera found");
+    return SingleDisabledItem(GetLocStr(LocId::STATUS_NO_CAMERA_FOUND, lang));
 }
 
-CameraDeviceListPresentation CameraDeviceListFormatter::Devices(const std::vector<CameraDevice>& devices)
+CameraDeviceListPresentation CameraDeviceListFormatter::Devices(const std::vector<CameraDevice>& devices, UILanguage lang)
 {
     if (devices.empty()) {
-        return NoCameraFound();
+        return NoCameraFound(lang);
     }
 
     CameraDeviceListPresentation presentation;
@@ -33,9 +34,10 @@ CameraDeviceListPresentation CameraDeviceListFormatter::Devices(const std::vecto
     presentation.selected_item = 0;
     presentation.default_device_index = 0;
     presentation.items.reserve(devices.size());
+    const wchar_t* device_prefix = GetLocStr(LocId::STATUS_DEVICE_PREFIX, lang);
     for (const CameraDevice& device : devices) {
         presentation.items.push_back(device.display_name.empty()
-            ? L"Device " + std::to_wstring(device.index + 1)
+            ? std::wstring(device_prefix) + L" " + std::to_wstring(device.index + 1)
             : device.display_name);
     }
     return presentation;

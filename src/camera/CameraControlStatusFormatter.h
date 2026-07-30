@@ -1,25 +1,24 @@
 #pragma once
 
-#include <cstddef>
+#include "i18n/Localization.h"
+
 #include <string>
 
 class CameraControlStatusFormatter {
 public:
-    static std::wstring FormatOpeningCamera();
-    static std::wstring FormatNoCameraSelectedForStart();
-    static std::wstring FormatNoCameraSelected();
-    static std::wstring FormatNoCameraFound();
-    static std::wstring FormatCamerasFound(std::size_t camera_count);
-    static std::wstring FormatSelectedDevice(int device_index);
-    static std::wstring FormatSelectedCameraUnavailable();
-    static std::wstring FormatFailedToOpenCamera();
-    static std::wstring FormatCameraDisconnected();
-    static std::wstring FormatPreviewStopped();
-    static std::wstring FormatExposureInvalid();
-    static std::wstring FormatExposureSet(float exposure_ms);
-    static std::wstring FormatExposureFailed();
-    static std::wstring FormatExposurePending();
-
-private:
-    static std::wstring FormatFloat(float value);
+    static std::wstring FormatNoCamera();
+    static std::wstring FormatNoCameraSelected(UILanguage lang = UILanguage::English);
+    static std::wstring FormatNoCameraSelectedShort(UILanguage lang = UILanguage::English);
+    static std::wstring FormatNoMucam();
+    static std::wstring FormatMultipleDevicesFound(int count);
+    static std::wstring FormatDeviceSelected(int device_index);
+    static std::wstring FormatDeviceNoLongerAvailable();
+    static std::wstring FormatOpeningCamera(UILanguage lang = UILanguage::English);
+    static std::wstring FormatOpenError(UILanguage lang = UILanguage::English);
+    static std::wstring FormatDisconnected(UILanguage lang = UILanguage::English);
+    static std::wstring FormatPreviewStopped(UILanguage lang = UILanguage::English);
+    static std::wstring FormatExposureNeedsPositive(UILanguage lang = UILanguage::English);
+    static std::wstring FormatExposureSet(double ms, UILanguage lang = UILanguage::English);
+    static std::wstring FormatExposureFailed(UILanguage lang = UILanguage::English);
+    static std::wstring FormatExposurePending(UILanguage lang = UILanguage::English);
 };

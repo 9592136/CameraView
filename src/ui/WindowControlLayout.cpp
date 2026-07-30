@@ -36,12 +36,13 @@ void Add(
 void AddToolbar(std::vector<WindowControlPlacement>& placements)
 {
     int left = 10;
+    constexpr int kIconButtonSize = 36;
 
-    Add(placements, kIdFitView, left, kToolbarTop, 56, kControlHeight);
-    left += 56 + kControlGap;
-    Add(placements, kIdToggleFunctionPanel, left, kToolbarTop, 96, kControlHeight);
-    left += 96 + kControlGap;
-    Add(placements, kIdTogglePanelDock, left, kToolbarTop, 88, kControlHeight);
+    Add(placements, kIdFitView, left, 6, kIconButtonSize, kIconButtonSize);
+    left += kIconButtonSize + kControlGap;
+    Add(placements, kIdToggleFunctionPanel, left, 6, kIconButtonSize, kIconButtonSize);
+    left += kIconButtonSize + kControlGap;
+    Add(placements, kIdTogglePanelDock, left, 6, kIconButtonSize, kIconButtonSize);
 }
 
 void AddHiddenSideControls(std::vector<WindowControlPlacement>& placements)

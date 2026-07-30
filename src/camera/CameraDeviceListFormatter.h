@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CameraDevice.h"
+#include "i18n/Localization.h"
 
 #include <cstddef>
 #include <optional>
@@ -16,8 +17,9 @@ struct CameraDeviceListPresentation {
 
 class CameraDeviceListFormatter {
 public:
-    static CameraDeviceListPresentation SdkUnavailable();
-    static CameraDeviceListPresentation NoCameraFound();
-    static CameraDeviceListPresentation Devices(const std::vector<CameraDevice>& devices);
+    static CameraDeviceListPresentation SdkUnavailable(UILanguage lang = UILanguage::English);
+    static CameraDeviceListPresentation NoCameraFound(UILanguage lang = UILanguage::English);
+    static CameraDeviceListPresentation Devices(const std::vector<CameraDevice>& devices,
+                                                 UILanguage lang = UILanguage::English);
     static std::optional<int> SelectionToDeviceIndex(int selection, std::size_t device_count);
 };

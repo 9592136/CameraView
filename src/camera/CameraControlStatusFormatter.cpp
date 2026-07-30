@@ -1,81 +1,87 @@
 #include "CameraControlStatusFormatter.h"
+#include "i18n/Localization.h"
 
-#include <iomanip>
-#include <sstream>
+#include <string>
 
-std::wstring CameraControlStatusFormatter::FormatOpeningCamera()
+std::wstring CameraControlStatusFormatter::FormatNoCamera()
 {
-    return L"Opening camera...";
+    return L"No camera stream active.";
 }
 
-std::wstring CameraControlStatusFormatter::FormatNoCameraSelectedForStart()
+std::wstring CameraControlStatusFormatter::FormatNoCameraSelected(UILanguage lang)
 {
-    return L"No camera selected. Click Refresh and choose a device.";
+    return GetLocStr(LocId::STATUS_NO_CAMERA_SELECTED, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatNoCameraSelected()
+std::wstring CameraControlStatusFormatter::FormatNoCameraSelectedShort(UILanguage lang)
 {
-    return L"No camera selected.";
+    return GetLocStr(LocId::STATUS_NO_CAMERA_SELECTED_SHORT, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatNoCameraFound()
+std::wstring CameraControlStatusFormatter::FormatNoMucam()
 {
     return L"No MUCam camera found.";
 }
 
-std::wstring CameraControlStatusFormatter::FormatCamerasFound(std::size_t camera_count)
+std::wstring CameraControlStatusFormatter::FormatMultipleDevicesFound(int count)
 {
-    return L"Found " + std::to_wstring(camera_count) + L" camera(s). Select a device and click Open.";
+    return L"Found " + std::to_wstring(count) + L" camera(s). Select a device and click Open.";
 }
 
-std::wstring CameraControlStatusFormatter::FormatSelectedDevice(int device_index)
+std::wstring CameraControlStatusFormatter::FormatDeviceSelected(int device_index)
 {
     return L"Selected device " + std::to_wstring(device_index + 1) + L". Click Open to preview.";
 }
 
-std::wstring CameraControlStatusFormatter::FormatSelectedCameraUnavailable()
+std::wstring CameraControlStatusFormatter::FormatDeviceNoLongerAvailable()
 {
     return L"Selected camera is no longer available. Refresh the device list.";
 }
 
-std::wstring CameraControlStatusFormatter::FormatFailedToOpenCamera()
+std::wstring CameraControlStatusFormatter::FormatOpeningCamera(UILanguage lang)
 {
-    return L"Failed to open camera.";
+    return GetLocStr(LocId::STATUS_OPENING_CAMERA, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatCameraDisconnected()
+std::wstring CameraControlStatusFormatter::FormatOpenError(UILanguage lang)
 {
-    return L"Camera disconnected.";
+    return GetLocStr(LocId::STATUS_FAILED_TO_OPEN_CAMERA, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatPreviewStopped()
+std::wstring CameraControlStatusFormatter::FormatDisconnected(UILanguage lang)
 {
-    return L"Preview stopped.";
+    return GetLocStr(LocId::STATUS_CAMERA_DISCONNECTED, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatExposureInvalid()
+std::wstring CameraControlStatusFormatter::FormatPreviewStopped(UILanguage lang)
 {
-    return L"Exposure must be a positive number.";
+    return GetLocStr(LocId::STATUS_PREVIEW_STOPPED, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatExposureSet(float exposure_ms)
+std::wstring CameraControlStatusFormatter::FormatExposureNeedsPositive(UILanguage lang)
 {
-    return L"Exposure set to " + FormatFloat(exposure_ms) + L" ms.";
+    return GetLocStr(LocId::STATUS_EXPOSURE_NEED_POSITIVE, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatExposureFailed()
+std::wstring CameraControlStatusFormatter::FormatExposureSet(double ms, UILanguage lang)
 {
-    return L"Failed to set exposure.";
+    std::wstring value_str = std::to_wstring(static_cast<long long>(ms));
+    if (ms != static_cast<double>(static_cast<long long>(ms))) {
+        wchar_t buf[32];
+        swprintf(buf, 32, L"%.2f", ms);
+        value_str = buf;
+    }
+    return FormatLocStr(LocId::STATUS_EXPOSURE_SET, lang, {
+        {L"{value}", value_str}
+    });
 }
 
-std::wstring CameraControlStatusFormatter::FormatExposurePending()
+std::wstring CameraControlStatusFormatter::FormatExposureFailed(UILanguage lang)
 {
-    return L"Exposure will be applied when the camera opens.";
+    return GetLocStr(LocId::STATUS_EXPOSURE_FAILED, lang);
 }
 
-std::wstring CameraControlStatusFormatter::FormatFloat(float value)
+std::wstring CameraControlStatusFormatter::FormatExposurePending(UILanguage lang)
 {
-    std::wostringstream stream;
-    stream << std::fixed << std::setprecision(2) << value;
-    return stream.str();
+    return GetLocStr(LocId::STATUS_EXPOSURE_PENDING, lang);
 }

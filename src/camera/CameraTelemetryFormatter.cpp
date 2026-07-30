@@ -1,39 +1,53 @@
 #include "CameraTelemetryFormatter.h"
+#include "i18n/Localization.h"
 
 #include <iomanip>
 #include <sstream>
 
-std::wstring CameraTelemetryFormatter::FormatPreviewStarted(int device_index, const CameraOpenInfo& open_info)
+std::wstring CameraTelemetryFormatter::FormatPreviewStarted(int device_index, const CameraOpenInfo& open_info, UILanguage lang)
 {
-    return L"Previewing device " + std::to_wstring(device_index + 1) +
-           L", camera type " + std::to_wstring(open_info.type) +
-           L", " + FormatResolution(open_info) + L".";
+    return FormatLocStr(LocId::STATUS_PREVIEWING_DEVICE, lang, {
+        {L"{idx}", std::to_wstring(device_index + 1)},
+        {L"{type}", std::to_wstring(open_info.type)},
+        {L"{res}", FormatResolution(open_info)}
+    });
 }
 
-std::wstring CameraTelemetryFormatter::FormatPendingTelemetry(int device_index, const CameraOpenInfo& open_info)
+std::wstring CameraTelemetryFormatter::FormatPendingTelemetry(int device_index, const CameraOpenInfo& open_info, UILanguage lang)
 {
-    return FormatDevicePrefix(device_index, open_info) + L" | -- fps";
+    return FormatLocStr(LocId::STATUS_PENDING_TELEMETRY, lang, {
+        {L"{idx}", std::to_wstring(device_index + 1)},
+        {L"{type}", std::to_wstring(open_info.type)},
+        {L"{res}", FormatResolution(open_info)}
+    });
 }
 
 std::wstring CameraTelemetryFormatter::FormatFrameTelemetry(
     int device_index,
     const CameraOpenInfo& open_info,
     double fps,
-    unsigned long timestamp)
+    unsigned long timestamp,
+    UILanguage lang)
 {
-    std::wostringstream status;
-    status << FormatDevicePrefix(device_index, open_info)
-           << L" | "
-           << std::fixed << std::setprecision(1) << fps << L" fps"
-           << L" | ts " << timestamp;
-    return status.str();
+    std::wostringstream fps_str;
+    fps_str << std::fixed << std::setprecision(1) << fps;
+    return FormatLocStr(LocId::STATUS_TELEMETRY_FRAME, lang, {
+        {L"{idx}", std::to_wstring(device_index + 1)},
+        {L"{type}", std::to_wstring(open_info.type)},
+        {L"{res}", FormatResolution(open_info)},
+        {L"{fps}", fps_str.str()},
+        {L"{ts}", std::to_wstring(timestamp)}
+    });
 }
 
-std::wstring CameraTelemetryFormatter::FormatDevicePrefix(int device_index, const CameraOpenInfo& open_info)
+std::wstring CameraTelemetryFormatter::FormatDevicePrefix(int device_index, const CameraOpenInfo& open_info, UILanguage lang)
 {
-    return L"Device " + std::to_wstring(device_index + 1) +
-           L" | type " + std::to_wstring(open_info.type) +
-           L" | " + FormatResolution(open_info);
+    return FormatLocStr(LocId::STATUS_DEVICE_INFO, lang, {
+        {L"{idx}", std::to_wstring(device_index + 1)},
+        {L"{type}", std::to_wstring(open_info.type)},
+        {L"{w}", std::to_wstring(open_info.width)},
+        {L"{h}", std::to_wstring(open_info.height)}
+    });
 }
 
 std::wstring CameraTelemetryFormatter::FormatResolution(const CameraOpenInfo& open_info)

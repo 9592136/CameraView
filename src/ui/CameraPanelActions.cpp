@@ -24,7 +24,7 @@ CameraListRefreshActionResult CameraPanelActions::DevicesEnumerated(
     result.preview_telemetry = sdk_telemetry;
     if (devices.empty()) {
         result.presentation = CameraDeviceListFormatter::NoCameraFound();
-        result.status = CameraControlStatusFormatter::FormatNoCameraFound();
+        result.status = CameraControlStatusFormatter::FormatNoMucam();
         return result;
     }
 
@@ -34,7 +34,7 @@ CameraListRefreshActionResult CameraPanelActions::DevicesEnumerated(
     result.open_enabled = true;
     result.combo_enabled = true;
     result.succeeded = true;
-    result.status = CameraControlStatusFormatter::FormatCamerasFound(devices.size());
+    result.status = CameraControlStatusFormatter::FormatMultipleDevicesFound(static_cast<int>(devices.size()));
     return result;
 }
 
@@ -51,12 +51,12 @@ CameraSelectionActionResult CameraPanelActions::SelectDevice(int camera_count, i
             static_cast<std::size_t>(camera_count));
     result.has_status = true;
     if (!selected_device_index) {
-        result.status = CameraControlStatusFormatter::FormatNoCameraSelected();
+        result.status = CameraControlStatusFormatter::FormatNoCameraSelectedShort();
         return result;
     }
 
     result.selected_camera_index = *selected_device_index;
-    result.status = CameraControlStatusFormatter::FormatSelectedDevice(result.selected_camera_index);
+    result.status = CameraControlStatusFormatter::FormatDeviceSelected(result.selected_camera_index);
     return result;
 }
 
@@ -64,7 +64,7 @@ CameraExposureParseResult CameraPanelActions::ParseExposureText(const std::wstri
 {
     CameraExposureParseResult result;
     if (!TextInputParser::TryParsePositiveFloat(text, result.requested_exposure_ms)) {
-        result.status = CameraControlStatusFormatter::FormatExposureInvalid();
+        result.status = CameraControlStatusFormatter::FormatExposureNeedsPositive();
         return result;
     }
 

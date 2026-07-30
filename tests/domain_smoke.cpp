@@ -562,17 +562,17 @@ int main()
     if (!device_combo || !device_combo->visible || !RectEquals(device_combo->bounds, 12, 149, 388, 289)) {
         return Fail("WindowControlLayout did not compute the expected camera-panel combo placement.");
     }
-    if (!fit_view_button || !fit_view_button->visible || !RectEquals(fit_view_button->bounds, 10, 10, 66, 38)) {
+    if (!fit_view_button || !fit_view_button->visible || !RectEquals(fit_view_button->bounds, 10, 6, 46, 42)) {
         return Fail("WindowControlLayout did not compute the expected fit-view button placement.");
     }
     if (!toggle_panel_button ||
         !toggle_panel_button->visible ||
-        !RectEquals(toggle_panel_button->bounds, 74, 10, 170, 38)) {
+        !RectEquals(toggle_panel_button->bounds, 54, 6, 90, 42)) {
         return Fail("WindowControlLayout did not compute the expected function-panel toolbar button placement.");
     }
     if (!toggle_panel_dock_button ||
         !toggle_panel_dock_button->visible ||
-        !RectEquals(toggle_panel_dock_button->bounds, 178, 10, 266, 38)) {
+        !RectEquals(toggle_panel_dock_button->bounds, 98, 6, 134, 42)) {
         return Fail("WindowControlLayout did not compute the expected panel-dock toolbar button placement.");
     }
     if (!camera_card || !camera_card->visible || !RectEquals(camera_card->bounds, 4, 87, 396, 117) ||
@@ -782,11 +782,14 @@ int main()
         std::wstring(open_button_definition->class_name) != L"BUTTON" ||
         std::wstring(open_button_definition->text) != L"Open" ||
         !fit_button_definition ||
-        std::wstring(fit_button_definition->text) != L"Fit" ||
+        std::wstring(fit_button_definition->text) != L"" ||
+        (fit_button_definition->style & BS_OWNERDRAW) == 0 ||
         !toggle_panel_definition ||
-        std::wstring(toggle_panel_definition->text) != L"Hide Panel" ||
+        std::wstring(toggle_panel_definition->text) != L"" ||
+        (toggle_panel_definition->style & BS_OWNERDRAW) == 0 ||
         !toggle_panel_dock_definition ||
-        std::wstring(toggle_panel_dock_definition->text) != L"Dock Right" ||
+        std::wstring(toggle_panel_dock_definition->text) != L"" ||
+        (toggle_panel_dock_definition->style & BS_OWNERDRAW) == 0 ||
         !auto_exposure_definition ||
         std::wstring(auto_exposure_definition->text) != L"Auto Exposure" ||
         !clear_calibration_definition ||
@@ -1558,17 +1561,17 @@ int main()
         return Fail("CameraTelemetryFormatter did not format preview telemetry.");
     }
 
-    if (CameraControlStatusFormatter::FormatNoCameraSelectedForStart() !=
+    if (CameraControlStatusFormatter::FormatNoCameraSelected() !=
             L"No camera selected. Click Refresh and choose a device." ||
-        CameraControlStatusFormatter::FormatCamerasFound(2) !=
+        CameraControlStatusFormatter::FormatMultipleDevicesFound(2) !=
             L"Found 2 camera(s). Select a device and click Open." ||
-        CameraControlStatusFormatter::FormatSelectedDevice(1) !=
+        CameraControlStatusFormatter::FormatDeviceSelected(1) !=
             L"Selected device 2. Click Open to preview." ||
-        CameraControlStatusFormatter::FormatCameraDisconnected() !=
+        CameraControlStatusFormatter::FormatDisconnected() !=
             L"Camera disconnected." ||
         CameraControlStatusFormatter::FormatPreviewStopped() !=
             L"Preview stopped." ||
-        CameraControlStatusFormatter::FormatExposureSet(12.5f) !=
+        CameraControlStatusFormatter::FormatExposureSet(12.5) !=
             L"Exposure set to 12.50 ms." ||
         CameraControlStatusFormatter::FormatExposurePending() !=
             L"Exposure will be applied when the camera opens.") {

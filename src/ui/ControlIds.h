@@ -158,3 +158,6 @@ inline constexpr int kIdStitchGallerySectionLabel = 1153;
 inline constexpr int kIdStitchSettingsSectionLabel = 1154;
 inline constexpr int kIdStitchOutputSectionLabel = 1155;
 inline constexpr int kIdEdfSectionLabel = 1156;
+inline constexpr int kIdLanguageEnglish = 1200;
+inline constexpr int kIdLanguageChinese = 1201;
+inline constexpr int kIdAbout = 1202;

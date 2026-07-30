@@ -1,105 +1,109 @@
 #include "ProcessingStatusFormatter.h"
+#include "i18n/Localization.h"
 
-std::wstring ProcessingStatusFormatter::FormatCleared(bool job_running)
+std::wstring ProcessingStatusFormatter::FormatCleared(bool job_running, UILanguage lang)
 {
-    return job_running
-        ? L"Processing stacks cleared. Running job result will be ignored."
-        : L"Processing stacks cleared.";
+    return GetLocStr(job_running ? LocId::PROC_CLEARED_RUNNING : LocId::PROC_CLEARED, lang);
 }
 
-std::wstring ProcessingStatusFormatter::FormatAlreadyRunning()
+std::wstring ProcessingStatusFormatter::FormatAlreadyRunning(UILanguage lang)
 {
-    return L"Processing job is already running.";
+    return GetLocStr(LocId::PROC_ALREADY_RUNNING, lang);
 }
 
-std::wstring ProcessingStatusFormatter::FormatNoRetry(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::FormatNoRetry(ProcessingJobKind kind, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"No stitch processing job to retry.";
+        return GetLocStr(LocId::PROC_NO_RETRY_STITCH, lang);
     case ProcessingJobKind::Edf:
-        return L"No EDF processing job to retry.";
-    case ProcessingJobKind::None:
+        return GetLocStr(LocId::PROC_NO_RETRY_EDF, lang);
     default:
-        return L"No processing job to retry.";
+        return GetLocStr(LocId::PROC_NO_RETRY, lang);
     }
 }
 
-std::wstring ProcessingStatusFormatter::FormatRetryStarted(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::FormatRetryStarted(ProcessingJobKind kind, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"Retrying stitch processing in background.";
+        return GetLocStr(LocId::PROC_RETRY_STARTED_STITCH, lang);
     case ProcessingJobKind::Edf:
-        return L"Retrying EDF processing in background.";
-    case ProcessingJobKind::None:
+        return GetLocStr(LocId::PROC_RETRY_STARTED_EDF, lang);
     default:
-        return L"No processing job to retry.";
+        return GetLocStr(LocId::PROC_RETRY_STARTED, lang);
     }
 }
 
-std::wstring ProcessingStatusFormatter::FormatStarted(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::FormatStarted(ProcessingJobKind kind, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"Stitch processing started in background.";
+        return GetLocStr(LocId::PROC_STARTED_STITCH, lang);
     case ProcessingJobKind::Edf:
-        return L"EDF processing started in background.";
-    case ProcessingJobKind::None:
+        return GetLocStr(LocId::PROC_STARTED_EDF, lang);
     default:
-        return L"Processing started in background.";
+        return GetLocStr(LocId::PROC_STARTED, lang);
     }
 }
 
-std::wstring ProcessingStatusFormatter::FormatProgress(ProcessingJobKind kind, int percent)
+std::wstring ProcessingStatusFormatter::FormatProgress(ProcessingJobKind kind, int percent, UILanguage lang)
 {
-    return KindLabel(kind) + L" processing " + std::to_wstring(percent) + L"%.";
+    return FormatLocStr(LocId::PROC_PROGRESS, lang, {
+        {L"{kind}", KindLabel(kind, lang)},
+        {L"{percent}", std::to_wstring(percent)}
+    });
 }
 
-std::wstring ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind kind, UILanguage lang)
 {
-    return KindLabel(kind) + L" processing canceled.";
+    return FormatLocStr(LocId::PROC_CANCELED, lang, {
+        {L"{kind}", KindLabel(kind, lang)}
+    });
 }
 
-std::wstring ProcessingStatusFormatter::FormatFailed(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::FormatFailed(ProcessingJobKind kind, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"Failed to build stitched image.";
+        return GetLocStr(LocId::PROC_FAILED_STITCH, lang);
     case ProcessingJobKind::Edf:
-        return L"Failed to build EDF image.";
-    case ProcessingJobKind::None:
+        return GetLocStr(LocId::PROC_FAILED_EDF, lang);
     default:
-        return L"Failed to build processed image.";
+        return GetLocStr(LocId::PROC_FAILED_GENERIC, lang);
     }
 }
 
-std::wstring ProcessingStatusFormatter::FormatReady(ProcessingJobKind kind, const ImageFrame& image, int relation_count)
+std::wstring ProcessingStatusFormatter::FormatReady(ProcessingJobKind kind, const ImageFrame& image, int relation_count, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"Stitched image ready: " + std::to_wstring(image.width) +
-               L"x" + std::to_wstring(image.height) +
-               L". Optimized " + std::to_wstring(relation_count) + L" relation(s).";
+        return FormatLocStr(LocId::PROC_READY_STITCH, lang, {
+            {L"{w}", std::to_wstring(image.width)},
+            {L"{h}", std::to_wstring(image.height)},
+            {L"{n}", std::to_wstring(relation_count)}
+        });
     case ProcessingJobKind::Edf:
-        return L"EDF image ready: " + std::to_wstring(image.width) +
-               L"x" + std::to_wstring(image.height) + L".";
-    case ProcessingJobKind::None:
+        return FormatLocStr(LocId::PROC_READY_EDF, lang, {
+            {L"{w}", std::to_wstring(image.width)},
+            {L"{h}", std::to_wstring(image.height)}
+        });
     default:
-        return L"Processed image ready: " + std::to_wstring(image.width) +
-               L"x" + std::to_wstring(image.height) + L".";
+        return FormatLocStr(LocId::PROC_READY_GENERIC, lang, {
+            {L"{w}", std::to_wstring(image.width)},
+            {L"{h}", std::to_wstring(image.height)}
+        });
     }
 }
 
-std::wstring ProcessingStatusFormatter::KindLabel(ProcessingJobKind kind)
+std::wstring ProcessingStatusFormatter::KindLabel(ProcessingJobKind kind, UILanguage lang)
 {
     switch (kind) {
     case ProcessingJobKind::Stitch:
-        return L"Stitch";
+        return GetLocStr(LocId::PROC_KIND_STITCH, lang);
     case ProcessingJobKind::Edf:
-        return L"EDF";
-    case ProcessingJobKind::None:
+        return GetLocStr(LocId::PROC_KIND_EDF, lang);
     default:
-        return L"Processing";
+        return GetLocStr(LocId::PROC_KIND_GENERIC, lang);
     }
 }
