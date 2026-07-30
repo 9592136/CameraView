@@ -6,6 +6,8 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <objbase.h>
 #include <commctrl.h>
 
 #include "app/DiagnosticReportActions.h"
@@ -71,12 +73,17 @@
 #include "imaging/HistogramCalculator.h"
 #include "ui/HistogramRenderer.h"
 #include "imaging/ImageAdjuster.h"
+#include "ai/AiPanelActions.h"
+#include "ai/InferenceEngine.h"
+#include "ai/ModelTrainer.h"
+#include "ai/YoloEngine.h"
 #include "i18n/Localization.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <random>
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
@@ -854,14 +861,15 @@ public:
             kIdProcessingPanelCard,
             kIdMeasurementPanelCard,
             kIdProjectPanelCard,
-            kIdHistogramPanelCard
+            kIdHistogramPanelCard,
+            kIdAiPanelCard
         };
         static const LocId card_loc_ids[] = {
             LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
             LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
-            LocId::PANEL_HISTOGRAM
+            LocId::PANEL_HISTOGRAM, LocId::PANEL_AI
         };
-        for (std::size_t i = 0; i < 7; ++i) {
+        for (std::size_t i = 0; i < 8; ++i) {
             HWND button = GetDlgItem(hwnd_, card_ids[i]);
             if (!button) {
                 continue;
@@ -876,10 +884,11 @@ public:
         panel_category_ = WindowControlLayout::NormalizePanelCategory(panel_category);
         panel_scroll_offset_ = 0;
         SyncPanelCardButtons();
+        InitializeAiPanelControls();
         static const LocId card_loc_ids[] = {
             LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
             LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
-            LocId::PANEL_HISTOGRAM
+            LocId::PANEL_HISTOGRAM, LocId::PANEL_AI
         };
         SetStatus(std::wstring(GetLocStr(LocId::STATUS_FUNCTION_CARD, current_language_)) +
                   GetLocStr(card_loc_ids[panel_category_], current_language_) + L".");
@@ -984,11 +993,12 @@ public:
         const wchar_t* ok_text;
     };
 
-    static INT_PTR CALLBACK AboutDialogProc(HWND dlg, UINT msg, WPARAM wp, LPARAM)
+    static INT_PTR CALLBACK AboutDialogProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     {
         if (msg == WM_INITDIALOG) {
-            auto* data = reinterpret_cast<AboutDialogData*>(GetWindowLongPtrW(dlg, GWLP_USERDATA));
+            auto* data = reinterpret_cast<AboutDialogData*>(lp);
             if (!data) return TRUE;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(data));
 
             SetWindowTextW(dlg, data->title);
 
@@ -1173,6 +1183,918 @@ public:
 
     }
 
+    // ── AI Panel ─────────────────────────────────────────────────────────
+
+    void InitializeAiPanelControls() {
+        // Task type combo (YOLO architecture selector)
+        HWND task_combo = GetDlgItem(hwnd_, kIdAiTaskTypeCombo);
+        if (task_combo) {
+            if (SendMessageW(task_combo, CB_GETCOUNT, 0, 0) == 0) {
+                SendMessageW(task_combo, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_ARCH_TINY_YOLO, current_language_)));
+                SendMessageW(task_combo, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_ARCH_CLASS_CNN, current_language_)));
+                SendMessageW(task_combo, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_ARCH_SEG_NET, current_language_)));
+                SendMessageW(task_combo, CB_SETCURSEL, 0, 0);
+            }
+        }
+
+        // YOLO Input size combo
+        HWND yolo_size = GetDlgItem(hwnd_, kIdAiYoloInputSizeCombo);
+        if (yolo_size) {
+            if (SendMessageW(yolo_size, CB_GETCOUNT, 0, 0) == 0) {
+                SendMessageW(yolo_size, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_YOLO_INPUT_SIZE_320, current_language_)));
+                SendMessageW(yolo_size, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_YOLO_INPUT_SIZE_416, current_language_)));
+                SendMessageW(yolo_size, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_YOLO_INPUT_SIZE_512, current_language_)));
+                SendMessageW(yolo_size, CB_ADDSTRING, 0,
+                    reinterpret_cast<LPARAM>(GetLocStr(LocId::AI_YOLO_INPUT_SIZE_608, current_language_)));
+                SendMessageW(yolo_size, CB_SETCURSEL, 1, 0);
+            }
+        }
+
+        // Training epochs edit
+        HWND epochs = GetDlgItem(hwnd_, kIdAiTrainingEpochsEdit);
+        if (epochs) {
+            wchar_t buf[16];
+            GetWindowTextW(epochs, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(epochs, L"30");
+        }
+
+        // Learning rate edit
+        HWND lr = GetDlgItem(hwnd_, kIdAiYoloLearningRateEdit);
+        if (lr) {
+            wchar_t buf[16];
+            GetWindowTextW(lr, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(lr, L"0.001");
+        }
+
+        // Batch size edit
+        HWND bs = GetDlgItem(hwnd_, kIdAiYoloBatchSizeEdit);
+        if (bs) {
+            wchar_t buf[16];
+            GetWindowTextW(bs, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(bs, L"8");
+        }
+
+        // Validation split edit
+        HWND val_split = GetDlgItem(hwnd_, kIdAiValidationSplitEdit);
+        if (val_split) {
+            wchar_t buf[16];
+            GetWindowTextW(val_split, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(val_split, L"0.2");
+        }
+
+        // Confidence threshold edit
+        HWND conf = GetDlgItem(hwnd_, kIdAiConfThresholdEdit);
+        if (conf) {
+            wchar_t buf[16];
+            GetWindowTextW(conf, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(conf, L"0.5");
+        }
+
+        // YOLO advanced: num anchors
+        HWND na = GetDlgItem(hwnd_, kIdAiYoloNumAnchorsEdit);
+        if (na) {
+            wchar_t buf[16];
+            GetWindowTextW(na, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(na, L"3");
+        }
+
+        // YOLO objectness threshold
+        HWND ot = GetDlgItem(hwnd_, kIdAiYoloObjThresholdEdit);
+        if (ot) {
+            wchar_t buf[16];
+            GetWindowTextW(ot, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(ot, L"0.5");
+        }
+
+        // YOLO NMS threshold
+        HWND nt = GetDlgItem(hwnd_, kIdAiYoloNmsThresholdEdit);
+        if (nt) {
+            wchar_t buf[16];
+            GetWindowTextW(nt, buf, 16);
+            if (wcslen(buf) == 0) SetWindowTextW(nt, L"0.45");
+        }
+
+        // Show boxes / seg overlay toggle state
+        HWND show_boxes = GetDlgItem(hwnd_, kIdAiShowBoxes);
+        if (show_boxes) {
+            SendMessageW(show_boxes, BM_SETCHECK,
+                ai_state_.show_detection_boxes ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+        HWND show_seg = GetDlgItem(hwnd_, kIdAiShowSegOverlay);
+        if (show_seg) {
+            SendMessageW(show_seg, BM_SETCHECK,
+                ai_state_.show_segmentation_overlay ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+
+        // Section labels
+        SetDlgItemTextW(hwnd_, kIdAiTrainConfigSectionLabel, GetLocStr(LocId::AI_SECTION_MODEL_CONFIG, current_language_));
+        SetDlgItemTextW(hwnd_, kIdAiYoloAdvancedSectionLabel, GetLocStr(LocId::AI_SECTION_YOLO_ADVANCED, current_language_));
+        SetDlgItemTextW(hwnd_, kIdAiDatasetSectionLabel, GetLocStr(LocId::AI_SECTION_DATASET, current_language_));
+        SetDlgItemTextW(hwnd_, kIdAiTrainingSectionLabel, GetLocStr(LocId::AI_SECTION_TRAINING, current_language_));
+        SetDlgItemTextW(hwnd_, kIdAiModelCenterSectionLabel, GetLocStr(LocId::AI_SECTION_MODEL_CENTER, current_language_));
+        SetDlgItemTextW(hwnd_, kIdAiInferenceSectionLabel, GetLocStr(LocId::AI_SECTION_INFERENCE, current_language_));
+
+        // Load model version history
+        if (!ai_state_.model_manager_loaded) {
+            ai_state_.model_manager.LoadVersionHistory();
+            ai_state_.model_manager_loaded = true;
+        }
+
+        UpdateAiLabelList();
+        UpdateAiModelList();
+        UpdateAiVersionList();
+        UpdateAiSampleCount();
+        UpdateAiDeployStatus();
+    }
+
+    void UpdateAiLabelList() {
+        HWND list = GetDlgItem(hwnd_, kIdAiLabelList);
+        if (!list) return;
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        for (const auto& label : ai_state_.labels) {
+            std::wstring entry = std::to_wstring(label.id) + L": " + label.name;
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry.c_str()));
+        }
+    }
+
+    void UpdateAiModelList() {
+        HWND list = GetDlgItem(hwnd_, kIdAiModelList);
+        if (!list) return;
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        for (const auto& model : ai_state_.saved_models) {
+            std::wstring entry = model.name + L" [" + TaskTypeToString(model.task_type, current_language_) +
+                L"|" + BackendToString(model.backend, current_language_) + L"]";
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry.c_str()));
+        }
+    }
+
+    void UpdateAiSampleCount() {
+        HWND label = GetDlgItem(hwnd_, kIdAiSampleCountLabel);
+        if (!label) return;
+        std::wstring text = L"Samples: " + std::to_wstring(ai_state_.training_samples.size());
+        SetWindowTextW(label, text.c_str());
+    }
+
+    void UpdateAiResultList() {
+        HWND list = GetDlgItem(hwnd_, kIdAiResultList);
+        if (!list) return;
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+
+        // Classification result
+        if (ai_state_.last_classification.label_id >= 0) {
+            wchar_t buf[256];
+            swprintf(buf, 256, L"Class: %s (%.1f%%)",
+                ai_state_.last_classification.label_name.c_str(),
+                ai_state_.last_classification.confidence * 100.0f);
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(buf));
+        }
+
+        // Detection results
+        if (!ai_state_.last_detections.empty()) {
+            wchar_t header[64];
+            swprintf(header, 64, L"--- Detections: %zu boxes ---", ai_state_.last_detections.size());
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(header));
+
+            for (size_t i = 0; i < ai_state_.last_detections.size(); ++i) {
+                const auto& det = ai_state_.last_detections[i];
+                wchar_t buf[256];
+                swprintf(buf, 256, L"  #%zu: %s (%.0f%%) @ [%d,%d %dx%d]",
+                    i + 1, det.label_name.c_str(), det.confidence * 100.0f,
+                    det.x, det.y, det.width, det.height);
+                SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(buf));
+            }
+        }
+
+        // Segmentation result
+        if (ai_state_.last_segmentation.width > 0 && ai_state_.last_segmentation.height > 0) {
+            wchar_t buf[128];
+            swprintf(buf, 128, L"Segmentation: %dx%d mask",
+                ai_state_.last_segmentation.width, ai_state_.last_segmentation.height);
+            SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(buf));
+        }
+
+        // No results
+        if (ai_state_.last_classification.label_id < 0 &&
+            ai_state_.last_detections.empty() &&
+            ai_state_.last_segmentation.width == 0) {
+            SendMessageW(list, LB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(L"No inference results yet."));
+        }
+    }
+
+    void AiAddLabel() {
+        HWND name_edit = GetDlgItem(hwnd_, kIdAiLabelNameEdit);
+        if (!name_edit) return;
+
+        wchar_t buf[128] = {};
+        GetWindowTextW(name_edit, buf, 128);
+        if (wcslen(buf) == 0) return;
+
+        AiLabel label;
+        label.id = static_cast<int>(ai_state_.labels.size());
+        label.name = buf;
+        label.color = GetLabelColor(label.id);
+        ai_state_.labels.push_back(label);
+
+        SetWindowTextW(name_edit, L"");
+        UpdateAiLabelList();
+    }
+
+    void AiDeleteLabel() {
+        HWND list = GetDlgItem(hwnd_, kIdAiLabelList);
+        if (!list) return;
+
+        int sel = static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+        if (sel < 0 || sel >= static_cast<int>(ai_state_.labels.size())) return;
+
+        ai_state_.labels.erase(ai_state_.labels.begin() + sel);
+        // Re-number remaining labels
+        for (size_t i = 0; i < ai_state_.labels.size(); ++i) {
+            ai_state_.labels[i].id = static_cast<int>(i);
+        }
+        // Remove training samples with deleted label
+        ai_state_.training_samples.erase(
+            std::remove_if(ai_state_.training_samples.begin(),
+                ai_state_.training_samples.end(),
+                [sel](const TrainingSample& s) { return s.label_id == sel; }),
+            ai_state_.training_samples.end());
+
+        UpdateAiLabelList();
+        UpdateAiSampleCount();
+    }
+
+    void AiCaptureSample() {
+        HWND label_list = GetDlgItem(hwnd_, kIdAiLabelList);
+        if (!label_list) return;
+        int sel = static_cast<int>(SendMessageW(label_list, LB_GETCURSEL, 0, 0));
+        if (sel < 0 || sel >= static_cast<int>(ai_state_.labels.size())) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_NEED_LABELS_AND_SAMPLES, current_language_));
+            return;
+        }
+
+        ImageFrame current = frame_buffer_.Snapshot();
+        if (!current.IsValid()) {
+            SetStatus(GetLocStr(LocId::STATUS_NO_FRAME, current_language_));
+            return;
+        }
+
+        HWND size_edit = GetDlgItem(hwnd_, kIdAiInputSizeEdit);
+        int input_size = 64;
+        if (size_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(size_edit, buf, 16);
+            input_size = _wtoi(buf);
+            if (input_size < 8) input_size = 8;
+            if (input_size > 256) input_size = 256;
+        }
+
+        int w = current.width;
+        int h = current.height;
+        int stride = current.stride;
+
+        TrainingSample sample;
+        sample.label_id = ai_state_.labels[sel].id;
+        sample.features.values = ExtractRGBFeatures(
+            current.bgr.data(), w, h, stride, input_size, input_size);
+
+        ai_state_.training_samples.push_back(sample);
+        UpdateAiSampleCount();
+
+        wchar_t buf[128];
+        swprintf(buf, 128, L"Sample %zu captured for label '%s'.",
+            ai_state_.training_samples.size(), ai_state_.labels[sel].name.c_str());
+        SetStatus(buf);
+    }
+
+    void AiTrainModel() {
+        if (ai_state_.training_samples.empty()) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_NO_SAMPLES_FOR_TRAINING, current_language_));
+            return;
+        }
+        if (ai_state_.labels.empty()) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_NEED_LABELS_AND_SAMPLES, current_language_));
+            return;
+        }
+
+        ai_state_.is_training = true;
+        ai_state_.train_progress_detail.phase = TrainPhase::Preparing;
+        ai_state_.train_progress_detail.status_message = L"Building YOLO model...";
+        UpdateTrainingStatus();
+
+        // ── Get YOLO config from UI ──
+        HWND task_combo = GetDlgItem(hwnd_, kIdAiTaskTypeCombo);
+        AiTaskType task_type = AiTaskType::Detection;
+        if (task_combo) {
+            int sel = static_cast<int>(SendMessageW(task_combo, CB_GETCURSEL, 0, 0));
+            switch (sel) {
+            case 0: task_type = AiTaskType::Detection; break;
+            case 1: task_type = AiTaskType::Classification; break;
+            case 2: task_type = AiTaskType::Segmentation; break;
+            }
+        }
+
+        // YOLO input size
+        int yolo_input = 416;
+        HWND size_combo = GetDlgItem(hwnd_, kIdAiYoloInputSizeCombo);
+        if (size_combo) {
+            int sel = static_cast<int>(SendMessageW(size_combo, CB_GETCURSEL, 0, 0));
+            switch (sel) { case 0: yolo_input=320; break; case 2: yolo_input=512; break; case 3: yolo_input=608; break; }
+        }
+
+        HWND epochs_edit = GetDlgItem(hwnd_, kIdAiTrainingEpochsEdit);
+        int epochs = 30;
+        if (epochs_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(epochs_edit, buf, 16);
+            epochs = _wtoi(buf);
+            if (epochs < 1) epochs = 1;
+            if (epochs > 200) epochs = 200;
+        }
+
+        float lr = 0.001f;
+        HWND lr_edit = GetDlgItem(hwnd_, kIdAiYoloLearningRateEdit);
+        if (lr_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(lr_edit, buf, 16);
+            lr = static_cast<float>(_wtof(buf));
+            if (lr <= 0.0f) lr = 0.001f;
+        }
+
+        int batch_size = 8;
+        HWND bs_edit = GetDlgItem(hwnd_, kIdAiYoloBatchSizeEdit);
+        if (bs_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(bs_edit, buf, 16);
+            batch_size = _wtoi(buf);
+            if (batch_size < 1) batch_size = 1;
+        }
+
+        HWND val_split_edit = GetDlgItem(hwnd_, kIdAiValidationSplitEdit);
+        float val_split = 0.2f;
+        if (val_split_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(val_split_edit, buf, 16);
+            val_split = static_cast<float>(_wtof(buf));
+            if (val_split < 0.0f) val_split = 0.0f;
+            if (val_split > 0.5f) val_split = 0.5f;
+        }
+
+        float conf_thresh = 0.5f;
+        HWND ct = GetDlgItem(hwnd_, kIdAiConfThresholdEdit);
+        if (ct) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(ct, buf, 16);
+            conf_thresh = static_cast<float>(_wtof(buf));
+            if (conf_thresh <= 0.0f) conf_thresh = 0.5f;
+        }
+
+        // ── Build YOLO model ──
+        int num_classes = static_cast<int>(ai_state_.labels.size());
+        YoloModel model;
+        switch (task_type) {
+        case AiTaskType::Detection:
+            model = YoloTrainer::CreateTinyYolo(num_classes, yolo_input);
+            break;
+        case AiTaskType::Classification:
+            model = YoloTrainer::CreateClassificationCNN(num_classes, yolo_input);
+            break;
+        case AiTaskType::Segmentation:
+            model = YoloTrainer::CreateSegmentationModel(num_classes, yolo_input);
+            break;
+        }
+        model.labels = ai_state_.labels;
+
+        // ── Configure training ──
+        YoloTrainingConfig config;
+        config.epochs = epochs;
+        config.batch_size = batch_size;
+        config.learning_rate = lr;
+        config.validation_split = val_split;
+        config.conf_threshold = conf_thresh;
+        config.input_width = yolo_input;
+        config.input_height = yolo_input;
+
+        // ── Train with YOLO neural network ──
+        ai_state_.train_progress_detail.phase = TrainPhase::Training;
+        ai_state_.train_progress_detail.epoch_total = epochs;
+
+        YoloTrainer trainer;
+        YoloModel trained = trainer.Train(model, ai_state_.training_samples, config,
+            [this](const YoloTrainingProgress& prog) {
+                ai_state_.train_progress_detail.epoch_current = prog.current_epoch;
+                ai_state_.train_progress_detail.accuracy = prog.val_accuracy;
+                ai_state_.train_progress_detail.status_message = prog.status;
+                UpdateTrainingStatus();
+
+                // Show loss
+                HWND loss_label = GetDlgItem(hwnd_, kIdAiTrainingLossLabel);
+                if (loss_label) {
+                    wchar_t loss_buf[64];
+                    swprintf(loss_buf, 64, GetLocStr(LocId::AI_TRAINING_LOSS, current_language_), prog.train_loss);
+                    SetWindowTextW(loss_label, loss_buf);
+                }
+
+                // Pump messages for responsive UI
+                MSG msg;
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            });
+
+        // ── Save model ──
+        ai_state_.yolo_model = trained;
+        ai_state_.yolo_detector.LoadModel(trained);
+        ai_state_.yolo_model_loaded = true;
+
+        // Build ModelInfo for legacy compat
+        ModelInfo info;
+        info.task_type = task_type;
+        info.backend = AiBackend::SimpleKNN;
+        info.input_width = yolo_input;
+        info.input_height = yolo_input;
+        info.feature_dim = yolo_input * yolo_input * 3;
+        info.labels = ai_state_.labels;
+        info.training_samples = static_cast<int>(ai_state_.training_samples.size());
+        info.accuracy = trained.training_accuracy;
+        info.name = L"YOLO_v" + std::to_wstring(ai_state_.saved_models.size() + 1);
+        ai_state_.saved_models.push_back(info);
+        ai_state_.selected_model_index = static_cast<int>(ai_state_.saved_models.size()) - 1;
+
+        // Save YOLO binary model
+        std::wstring wpath = info.name + L".yolo";
+        std::string spath(wpath.begin(), wpath.end());
+        YoloTrainer::SaveModel(trained, spath);
+
+        // Record in model manager
+        ai_state_.model_manager.CreateVersion(wpath,
+            static_cast<int>(ai_state_.training_samples.size()),
+            trained.training_accuracy, trained.training_accuracy,
+            L"YOLO model trained");
+        ai_state_.model_manager.SaveVersionHistory();
+
+        ai_state_.is_training = false;
+        ai_state_.train_progress_detail.phase = TrainPhase::Done;
+        ai_state_.train_progress_detail.status_message = GetLocStr(LocId::AI_STATUS_TRAINING_COMPLETE, current_language_);
+
+        UpdateAiModelList();
+        UpdateAiVersionList();
+        UpdateAiLabelList();
+        UpdateTrainingStatus();
+        UpdateAiDeployStatus();
+
+        wchar_t buf[256];
+        swprintf(buf, 256, L"YOLO model trained! Accuracy: %.1f%% (%d epochs)",
+            trained.training_accuracy * 100.0f, epochs);
+        SetStatus(buf);
+
+        HWND progress = GetDlgItem(hwnd_, kIdAiTrainingProgress);
+        if (progress) SetWindowTextW(progress, buf);
+    }
+
+    void UpdateTrainingStatus() {
+        HWND status = GetDlgItem(hwnd_, kIdAiTrainingStatusLabel);
+        if (!status) return;
+
+        switch (ai_state_.train_progress_detail.phase) {
+        case TrainPhase::Idle:
+            SetWindowTextW(status, GetLocStr(LocId::STATUS_IDLE, current_language_));
+            break;
+        case TrainPhase::Preparing:
+            SetWindowTextW(status, GetLocStr(LocId::STATUS_PREPARING, current_language_));
+            break;
+        case TrainPhase::Training: {
+            wchar_t buf[256];
+            swprintf(buf, 256, L"Training: epoch %d/%d",
+                ai_state_.train_progress_detail.epoch_current,
+                ai_state_.train_progress_detail.epoch_total);
+            SetWindowTextW(status, buf);
+            break;
+        }
+        case TrainPhase::Done:
+            SetWindowTextW(status, GetLocStr(LocId::STATUS_DONE, current_language_));
+            break;
+        case TrainPhase::Failed:
+            SetWindowTextW(status, GetLocStr(LocId::STATUS_FAILED, current_language_));
+            break;
+        default:
+            SetWindowTextW(status, L"");
+            break;
+        }
+    }
+
+    void AiLoadSelectedModel() {
+        HWND model_list = GetDlgItem(hwnd_, kIdAiModelList);
+        if (!model_list) return;
+
+        int sel = static_cast<int>(SendMessageW(model_list, LB_GETCURSEL, 0, 0));
+        if (sel < 0 || sel >= static_cast<int>(ai_state_.saved_models.size())) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_SELECT_MODEL_LOAD, current_language_));
+            return;
+        }
+
+        ai_state_.selected_model_index = sel;
+
+        wchar_t buf[128];
+        swprintf(buf, 128, GetLocStr(LocId::AI_STATUS_MODEL_SELECTED, current_language_),
+            ai_state_.saved_models[sel].name.c_str());
+        SetStatus(buf);
+    }
+
+    void AiSaveModelToFile() {
+        if (ai_state_.saved_models.empty()) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_NO_MODEL_TO_SAVE, current_language_));
+            return;
+        }
+        if (ai_state_.selected_model_index < 0) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_SELECT_MODEL, current_language_));
+            return;
+        }
+
+        HWND name_edit = GetDlgItem(hwnd_, kIdAiModelNameEdit);
+        if (name_edit) {
+            wchar_t buf[128] = {};
+            GetWindowTextW(name_edit, buf, 128);
+            if (wcslen(buf) > 0) {
+                ai_state_.saved_models[ai_state_.selected_model_index].name = buf;
+            }
+        }
+
+        auto& info = ai_state_.saved_models[ai_state_.selected_model_index];
+        if (info.name.empty()) {
+            info.name = L"model_" + std::to_wstring(ai_state_.selected_model_index);
+        }
+
+        std::wstring path = info.name + L".cvai";
+        if (SaveModel(path, info, ai_state_.training_samples)) {
+            info.file_path = path;
+            wchar_t buf[256];
+            swprintf(buf, 256, GetLocStr(LocId::AI_STATUS_MODEL_SAVED, current_language_), path.c_str());
+            SetStatus(buf);
+        } else {
+            SetStatus(GetLocStr(LocId::AI_STATUS_MODEL_SAVE_FAILED, current_language_));
+        }
+    }
+
+    void AiDeleteModel() {
+        HWND model_list = GetDlgItem(hwnd_, kIdAiModelList);
+        if (!model_list) return;
+
+        int sel = static_cast<int>(SendMessageW(model_list, LB_GETCURSEL, 0, 0));
+        if (sel < 0 || sel >= static_cast<int>(ai_state_.saved_models.size())) return;
+
+        ai_state_.saved_models.erase(ai_state_.saved_models.begin() + sel);
+        if (ai_state_.selected_model_index == sel) {
+            ai_state_.selected_model_index = -1;
+        }
+        UpdateAiModelList();
+    }
+
+    void AiRunInference() {
+        ImageFrame current = frame_buffer_.Snapshot();
+        if (!current.IsValid()) {
+            SetStatus(GetLocStr(LocId::STATUS_NO_FRAME, current_language_));
+            return;
+        }
+
+        if (!ai_state_.engine.IsLoaded()) {
+            // Try loading from saved models
+            if (!ai_state_.saved_models.empty() && ai_state_.selected_model_index >= 0) {
+                auto& info = ai_state_.saved_models[ai_state_.selected_model_index];
+                if (!info.file_path.empty()) {
+                    ai_state_.engine.LoadModel(info.file_path);
+                }
+            }
+            if (!ai_state_.engine.IsLoaded()) {
+                SetStatus(GetLocStr(LocId::AI_STATUS_NO_YOLO_MODEL, current_language_));
+                return;
+            }
+        }
+
+        // Read confidence threshold
+        HWND conf_edit = GetDlgItem(hwnd_, kIdAiConfThresholdEdit);
+        float conf_threshold = 0.5f;
+        if (conf_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(conf_edit, buf, 16);
+            conf_threshold = static_cast<float>(_wtof(buf));
+            if (conf_threshold < 0.1f) conf_threshold = 0.1f;
+            if (conf_threshold > 1.0f) conf_threshold = 1.0f;
+        }
+
+        // ── Run YOLO neural network inference ──
+        if (ai_state_.yolo_model_loaded && ai_state_.yolo_detector.IsLoaded()) {
+            auto t0 = std::chrono::steady_clock::now();
+
+            switch (ai_state_.yolo_model.task_type) {
+            case AiTaskType::Detection: {
+                auto dets = ai_state_.yolo_detector.Detect(current.bgr.data(), current.width, current.height, current.stride);
+                ai_state_.last_yolo_detections = dets;
+
+                // Convert to legacy DetectionBox format
+                ai_state_.last_detections.clear();
+                for (const auto& d : dets) {
+                    DetectionBox box;
+                    box.label_id = d.class_id;
+                    box.confidence = d.confidence;
+                    box.x = static_cast<int>(d.x * current.width);
+                    box.y = static_cast<int>(d.y * current.height);
+                    box.width = static_cast<int>(d.w * current.width);
+                    box.height = static_cast<int>(d.h * current.height);
+                    box.label_name = d.class_name;
+                    ai_state_.last_detections.push_back(box);
+                }
+                break;
+            }
+            case AiTaskType::Classification: {
+                auto cls = ai_state_.yolo_detector.Classify(current.bgr.data(), current.width, current.height, current.stride);
+                ai_state_.last_classification = cls;
+                break;
+            }
+            case AiTaskType::Segmentation: {
+                auto seg = ai_state_.yolo_detector.Segment(current.bgr.data(), current.width, current.height, current.stride);
+                ai_state_.last_segmentation = seg;
+                break;
+            }
+            }
+
+            auto t1 = std::chrono::steady_clock::now();
+            ai_state_.last_result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+            ai_state_.last_result.success = true;
+        } else {
+            // Fallback to legacy engine
+            auto result = ai_state_.engine.RunInference(current, conf_threshold, 4);
+            ai_state_.last_result = result;
+            ai_state_.last_classification = result.classification;
+            ai_state_.last_detections = result.detections;
+            ai_state_.last_segmentation = result.segmentation;
+        }
+
+        UpdateAiResultList();
+
+        // Show inference time
+        HWND time_label = GetDlgItem(hwnd_, kIdAiInferenceTimeLabel);
+        if (time_label) {
+            wchar_t tbuf[64];
+            swprintf(tbuf, 64, GetLocStr(LocId::AI_STATUS_YOLO_INFERENCE_TIME, current_language_),
+                static_cast<float>(ai_state_.last_result.elapsed_ms));
+            SetWindowTextW(time_label, tbuf);
+        }
+
+        InvalidateRect(hwnd_, nullptr, FALSE);
+
+        wchar_t buf[128];
+        swprintf(buf, 128, GetLocStr(LocId::AI_STATUS_YOLO_INFERENCE_TIME, current_language_),
+            static_cast<float>(ai_state_.last_result.elapsed_ms));
+        SetStatus(buf);
+    }
+
+    void AiClearResults() {
+        ai_state_.last_classification = {};
+        ai_state_.last_detections.clear();
+        ai_state_.last_segmentation = {};
+        ai_state_.last_result = {};
+        ai_state_.last_yolo_detections.clear();
+        UpdateAiResultList();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        SetStatus(GetLocStr(LocId::AI_STATUS_SAMPLES_CLEARED, current_language_));
+    }
+
+    void AiClearSamples() {
+        ai_state_.training_samples.clear();
+        ai_state_.label_sample_counts.clear();
+        UpdateAiSampleCount();
+        SetStatus(GetLocStr(LocId::AI_STATUS_SAMPLES_CLEARED, current_language_));
+    }
+
+    void AiSetShowDetectionBoxes(bool show) { ai_state_.show_detection_boxes = show; }
+    void AiSetShowSegmentationOverlay(bool show) { ai_state_.show_segmentation_overlay = show; }
+
+    // ── Dataset import ──────────────────────────────────────────────────
+
+    void AiImportDataset() {
+        HWND path_edit = GetDlgItem(hwnd_, kIdAiDatasetPathEdit);
+        if (!path_edit) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_DATASET_PATH_CTRL, current_language_));
+            return;
+        }
+        wchar_t path_buf[MAX_PATH] = {};
+        GetWindowTextW(path_edit, path_buf, MAX_PATH);
+        if (wcslen(path_buf) == 0) {
+            // Open file dialog to select directory
+            BROWSEINFOW bi = {};
+            bi.hwndOwner = hwnd_;
+            bi.lpszTitle = L"Select dataset folder";
+            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+            LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+            if (!pidl) return;
+            SHGetPathFromIDListW(pidl, path_buf);
+            CoTaskMemFree(pidl);
+            SetWindowTextW(path_edit, path_buf);
+        }
+
+        // Import images from folder: each subfolder = label
+        std::wstring root(path_buf);
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW((root + L"\\*").c_str(), &fd);
+        if (hFind == INVALID_HANDLE_VALUE) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_DATASET_IMPORT_FAILED, current_language_));
+            return;
+        }
+
+        int imported = 0;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+
+            // Create label
+            std::wstring label_name = fd.cFileName;
+            int label_id = static_cast<int>(ai_state_.labels.size());
+            bool label_exists = false;
+            for (const auto& l : ai_state_.labels) {
+                if (l.name == label_name) { label_id = l.id; label_exists = true; break; }
+            }
+            if (!label_exists) {
+                AiLabel lbl;
+                lbl.id = label_id;
+                lbl.name = label_name;
+                lbl.color = GetLabelColor(label_id);
+                ai_state_.labels.push_back(lbl);
+            }
+
+            // Import images in this folder
+            std::wstring label_dir = root + L"\\" + fd.cFileName;
+            WIN32_FIND_DATAW img_fd;
+            HANDLE hImg = FindFirstFileW((label_dir + L"\\*.jpg").c_str(), &img_fd);
+            if (hImg != INVALID_HANDLE_VALUE) {
+                do {
+                    std::wstring img_path = label_dir + L"\\" + img_fd.cFileName;
+                    TrainingSample sample = ImportImageAsSample(img_path, label_id);
+                    if (sample.features.values.empty()) continue;
+                    ai_state_.training_samples.push_back(sample);
+                    ++imported;
+                } while (FindNextFileW(hImg, &img_fd));
+                FindClose(hImg);
+            }
+
+            // Also try .png
+            hImg = FindFirstFileW((label_dir + L"\\*.png").c_str(), &img_fd);
+            if (hImg != INVALID_HANDLE_VALUE) {
+                do {
+                    std::wstring img_path = label_dir + L"\\" + img_fd.cFileName;
+                    TrainingSample sample = ImportImageAsSample(img_path, label_id);
+                    if (sample.features.values.empty()) continue;
+                    ai_state_.training_samples.push_back(sample);
+                    ++imported;
+                } while (FindNextFileW(hImg, &img_fd));
+                FindClose(hImg);
+            }
+
+            // .bmp
+            hImg = FindFirstFileW((label_dir + L"\\*.bmp").c_str(), &img_fd);
+            if (hImg != INVALID_HANDLE_VALUE) {
+                do {
+                    std::wstring img_path = label_dir + L"\\" + img_fd.cFileName;
+                    TrainingSample sample = ImportImageAsSample(img_path, label_id);
+                    if (sample.features.values.empty()) continue;
+                    ai_state_.training_samples.push_back(sample);
+                    ++imported;
+                } while (FindNextFileW(hImg, &img_fd));
+                FindClose(hImg);
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+
+        ai_state_.RecalcSampleCounts();
+        UpdateAiLabelList();
+        UpdateAiSampleCount();
+
+        wchar_t buf[128];
+        swprintf(buf, 128, L"Imported %d samples from dataset '%s'.", imported, root.c_str());
+        SetStatus(buf);
+
+        HWND status_label = GetDlgItem(hwnd_, kIdAiDatasetStatusLabel);
+        if (status_label) {
+            wchar_t ds_buf[256];
+            swprintf(ds_buf, 256, GetLocStr(LocId::AI_STATUS_DATASET_IMPORTED, current_language_),
+                imported, ai_state_.labels.size());
+            SetWindowTextW(status_label, ds_buf);
+        }
+    }
+
+    TrainingSample ImportImageAsSample(const std::wstring& path, int label_id) {
+        TrainingSample sample;
+        sample.label_id = label_id;
+
+        // Use ImageExporter to load image
+        std::filesystem::path fs_path(path);
+        ImageFrame frame;
+        std::wstring error;
+        if (!ImageExporter::LoadRasterImage(fs_path, frame, error)) return sample;
+
+        HWND size_edit = GetDlgItem(hwnd_, kIdAiInputSizeEdit);
+        int input_size = 64;
+        if (size_edit) {
+            wchar_t buf[16] = {};
+            GetWindowTextW(size_edit, buf, 16);
+            input_size = _wtoi(buf);
+            if (input_size < 8) input_size = 8;
+            if (input_size > 256) input_size = 256;
+        }
+
+        // Extract features from BGR data
+        int w = frame.width, h = frame.height;
+        sample.features.values = ExtractRGBFeatures(frame.bgr.data(), w, h, frame.stride,
+                                                     input_size, input_size);
+        return sample;
+    }
+
+    // ── Model Center methods ────────────────────────────────────────────
+
+    void UpdateAiVersionList() {
+        HWND list = GetDlgItem(hwnd_, kIdAiModelVersionList);
+        if (!list) return;
+
+        SendMessageW(list, LB_RESETCONTENT, 0, 0);
+        const auto& versions = ai_state_.model_manager.GetVersions();
+
+        for (const auto& v : versions) {
+            wchar_t buf[256];
+            swprintf(buf, 256, L"v%d %s | Acc:%.1f%% | %s | %s",
+                v.version_id,
+                v.deployed ? L"[DEPLOYED]" : L"",
+                v.train_accuracy * 100.0f,
+                v.created_at.c_str(),
+                v.notes.c_str());
+            int idx = static_cast<int>(SendMessageW(list, LB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(buf)));
+            SendMessageW(list, LB_SETITEMDATA, idx, v.version_id);
+        }
+
+        if (versions.empty()) {
+            SendMessageW(list, LB_ADDSTRING, 0,
+                reinterpret_cast<LPARAM>(L"No version history."));
+        }
+    }
+
+    void UpdateAiDeployStatus() {
+        int deployed_id = ai_state_.model_manager.GetDeployedVersionId();
+        HWND label = GetDlgItem(hwnd_, kIdAiDeployStatusLabel);
+        if (!label) return;
+
+        if (deployed_id >= 0) {
+            wchar_t buf[128];
+            swprintf(buf, 128, GetLocStr(LocId::AI_DEPLOY_STATUS_FORMAT, current_language_), deployed_id);
+            SetWindowTextW(label, buf);
+        } else {
+            SetWindowTextW(label, GetLocStr(LocId::AI_DEPLOY_STATUS_NONE, current_language_));
+        }
+    }
+
+    void AiDeployVersion() {
+        HWND list = GetDlgItem(hwnd_, kIdAiModelVersionList);
+        if (!list) return;
+
+        int sel = static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+        if (sel < 0) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_SELECT_VERSION_DEPLOY, current_language_));
+            return;
+        }
+
+        LRESULT version_id = SendMessageW(list, LB_GETITEMDATA, sel, 0);
+        if (version_id == LB_ERR) return;
+
+        ai_state_.model_manager.Deploy(static_cast<int>(version_id));
+        UpdateAiVersionList();
+        UpdateAiDeployStatus();
+        ai_state_.model_manager.SaveVersionHistory();
+
+        SetStatus(GetLocStr(LocId::AI_STATUS_VERSION_DEPLOYED, current_language_));
+    }
+
+    void AiEvaluateModel() {
+        if (ai_state_.training_samples.empty()) {
+            SetStatus(GetLocStr(LocId::AI_STATUS_NO_SAMPLES_FOR_TRAINING, current_language_));
+            return;
+        }
+
+        float accuracy = ai_state_.engine.EvaluateAccuracy(ai_state_.training_samples);
+
+        wchar_t buf[128];
+        swprintf(buf, 128, GetLocStr(LocId::AI_STATUS_MODEL_EVALUATED, current_language_),
+            accuracy * 100.0f);
+        SetStatus(buf);
+
+        HWND acc_label = GetDlgItem(hwnd_, kIdAiModelAccuracyLabel);
+        if (acc_label) SetWindowTextW(acc_label, buf);
+    }
+
     void ApplyFunctionPanelDockedLeft(bool dock_left, bool announce)
     {
         if (function_panel_docked_left_ == dock_left) {
@@ -1186,7 +2108,9 @@ public:
         LayoutControls(hwnd_);
         InvalidateRect(hwnd_, nullptr, FALSE);
         if (announce) {
-            SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+            SetStatus(function_panel_docked_left_
+                ? GetLocStr(LocId::STATUS_PANEL_DOCKED_LEFT, current_language_)
+                : GetLocStr(LocId::STATUS_PANEL_DOCKED_RIGHT, current_language_));
         }
     }
 
@@ -1336,7 +2260,9 @@ public:
         if (GetCapture() == hwnd_) {
             ReleaseCapture();
         }
-        SetStatus(function_panel_docked_left_ ? L"Function panel docked left." : L"Function panel docked right.");
+        SetStatus(function_panel_docked_left_
+            ? GetLocStr(LocId::STATUS_PANEL_DOCKED_LEFT, current_language_)
+            : GetLocStr(LocId::STATUS_PANEL_DOCKED_RIGHT, current_language_));
         return true;
     }
 
@@ -1441,8 +2367,12 @@ public:
         SetTextColor(item.hDC, RGB(0, 128, 210));
         HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         HGDIOBJ old_font = SelectObject(item.hDC, font);
-        const std::vector<std::wstring>& labels = WindowControlLayout::PanelCategoryLabels();
-        const std::wstring& label = labels[static_cast<std::size_t>(category)];
+        static const LocId card_loc_ids[] = {
+            LocId::PANEL_CAMERA, LocId::PANEL_IMAGE, LocId::PANEL_FLUORESCENCE,
+            LocId::PANEL_PROCESSING, LocId::PANEL_MEASUREMENT, LocId::PANEL_PROJECT,
+            LocId::PANEL_HISTOGRAM, LocId::PANEL_AI
+        };
+        const std::wstring label(GetLocStr(card_loc_ids[static_cast<std::size_t>(category)], current_language_));
         DrawTextW(
             item.hDC,
             label.c_str(),
@@ -1684,7 +2614,7 @@ public:
     {
         EnsureObjectiveCalibrationCount();
         if (objective_labels_.size() <= 1U) {
-            SetStatus(L"Keep at least one objective.");
+            SetStatus(GetLocStr(LocId::OBJECTIVE_KEEP_ONE, current_language_));
             return;
         }
 
@@ -3102,7 +4032,7 @@ public:
     {
         if (processing_frames_.DisplaySource() != ProcessingResultDisplaySource::Stitch ||
             !processing_frames_.ProcessingResult().IsValid()) {
-            SetStatus(L"No stitched result to save.");
+            SetStatus(GetLocStr(LocId::STATUS_STITCH_NO_RESULT, current_language_));
             return;
         }
 
@@ -3483,6 +4413,18 @@ public:
                 display_frame,
                 image_viewport_,
                 BuildMeasurementOverlayModel());
+
+            // Draw AI overlays (detection boxes, segmentation mask, classification label)
+            AiOverlayModel ai_overlay;
+            ai_overlay.show_detection_boxes = ai_state_.show_detection_boxes;
+            ai_overlay.show_segmentation_overlay = ai_state_.show_segmentation_overlay;
+            ai_overlay.seg_alpha = ai_state_.seg_alpha;
+            ai_overlay.detections = &ai_state_.last_detections;
+            ai_overlay.segmentation = &ai_state_.last_segmentation;
+            ai_overlay.classification = &ai_state_.last_classification;
+            ai_overlay.labels = &ai_state_.labels;
+            ai_overlay.yolo_detections = &ai_state_.last_yolo_detections;
+            overlay_renderer_.DrawAiOverlay(hdc, preview, display_frame, image_viewport_, ai_overlay);
         } else {
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(210, 216, 224));
@@ -3801,7 +4743,7 @@ public:
 
         image_viewport_.Reset();
         InvalidatePreview(hwnd_);
-        SetStatus(L"Image fit to view. " + ViewportInteractionActions::FormatZoomStatus(image_viewport_.Zoom()));
+        SetStatus(GetLocStr(LocId::STATUS_IMAGE_FIT_VIEW, current_language_) + ViewportInteractionActions::FormatZoomStatus(image_viewport_.Zoom()));
     }
 
     bool BeginPan(POINT point)
@@ -4116,7 +5058,7 @@ public:
 
         std::wstring file_name;
         if (!FileDialog::SaveImage(hwnd_, file_name)) {
-            SetStatus(L"Image export canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_IMAGE_EXPORT_CANCELED, current_language_));
             return;
         }
 
@@ -4143,7 +5085,7 @@ public:
     bool OpenImageFile(const std::wstring& file_name, bool dropped)
     {
         if (file_name.empty()) {
-            SetStatus(L"No image file selected.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_IMAGE_FILE, current_language_));
             return false;
         }
 
@@ -4173,7 +5115,7 @@ public:
     void OpenDroppedFiles(const std::vector<std::wstring>& file_names)
     {
         if (file_names.empty()) {
-            SetStatus(L"No dropped image files.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_DROPPED_FILES, current_language_));
             return;
         }
         if (file_names.size() == 1U) {
@@ -4194,7 +5136,7 @@ public:
             }
         }
         if (frames.empty()) {
-            SetStatus(L"No dropped image files could be added to stitch tiles.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_DROPPED_FILES_TILES, current_language_));
             return;
         }
 
@@ -4216,7 +5158,7 @@ public:
             StitchTileListActions::AddFrames(stitch_tiles_, std::move(frames), stitch_search_percent_);
         if (!result.changed) {
             SetStatus(failed_count > 0
-                ? L"No dropped image files could be added to stitch tiles."
+                ? GetLocStr(LocId::STATUS_NO_DROPPED_FILES_TILES, current_language_)
                 : result.message);
             return;
         }
@@ -4246,7 +5188,7 @@ public:
     {
         const ImageFrame& report_frame = CurrentPreviewFrame();
         if (!report_frame.IsValid()) {
-            SetStatus(L"No image frame to report.");
+            SetStatus(GetLocStr(LocId::STATUS_NO_IMAGE_FOR_REPORT, current_language_));
             return;
         }
 
@@ -4264,7 +5206,7 @@ public:
             std::filesystem::create_directories(image_path.parent_path(), directory_error);
         }
         if (directory_error) {
-            SetStatus(L"Failed to create report image folder.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_IMAGE_FOLDER_FAILED, current_language_));
             return;
         }
 
@@ -4277,7 +5219,8 @@ public:
         const ExportActionResult image_result =
             ExportActions::SaveImage(image_path, report_frame, measurements_, preview_mode, &calibration_);
         if (!image_result.saved) {
-            SetStatus(L"Report image failed: " + image_result.message);
+            SetStatus(FormatLocStr(LocId::STATUS_REPORT_IMAGE_FAILED, current_language_,
+                {{L"{msg}", image_result.message}}));
             return;
         }
 
@@ -4298,7 +5241,7 @@ public:
     {
         std::wstring file_name;
         if (!FileDialog::OpenText(hwnd_, file_name)) {
-            SetStatus(L"Report template load canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_LOAD_CANCELED, current_language_));
             return;
         }
 
@@ -4309,7 +5252,7 @@ public:
             return;
         }
         if (text.empty()) {
-            SetStatus(L"Report template is empty.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_EMPTY, current_language_));
             return;
         }
 
@@ -4399,19 +5342,19 @@ public:
             state);
         if (!designer) {
             delete state;
-            SetStatus(L"Failed to open report template designer.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_DESIGNER_FAILED, current_language_));
             return;
         }
 
         report_template_designer_ = designer;
-        SetStatus(L"Report template designer opened.");
+        SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_DESIGNER_OPENED, current_language_));
     }
 
     void SaveProject()
     {
         std::wstring file_name;
         if (!FileDialog::SaveProject(hwnd_, file_name)) {
-            SetStatus(L"Project save canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_PROJECT_SAVE_CANCELED, current_language_));
             return;
         }
 
@@ -5834,7 +6777,7 @@ private:
         std::wstring file_name;
         if (!FileDialog::SaveTemplate(owner, file_name)) {
             SetDesignerStatus(state->status, L"Template save canceled.");
-            SetStatus(L"Report template save canceled.");
+            SetStatus(GetLocStr(LocId::STATUS_REPORT_TEMPLATE_SAVE_CANCELED, current_language_));
             return;
         }
 
@@ -8267,6 +9210,7 @@ private:
     HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
     HistogramRenderer histo_renderer_;
     UILanguage current_language_ = UILanguage::English;
+    AiPanelState ai_state_;
     ImageAdjustParams image_adjust_;
     mutable ImageFrame adjusted_preview_;
     mutable unsigned long long histogram_cache_seq_ = 0;
@@ -8704,6 +9648,56 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             return 0;
         case kIdAbout:
             app->ShowAboutDialog();
+            return 0;
+        // ── AI Panel ──────────────────────────────────────────────────
+        case kIdAiAddLabel:
+            app->AiAddLabel();
+            return 0;
+        case kIdAiDeleteLabel:
+            app->AiDeleteLabel();
+            return 0;
+        case kIdAiCaptureSample:
+            app->AiCaptureSample();
+            return 0;
+        case kIdAiTrainModel:
+            app->AiTrainModel();
+            return 0;
+        case kIdAiLoadModel:
+            app->AiLoadSelectedModel();
+            return 0;
+        case kIdAiSaveModel:
+            app->AiSaveModelToFile();
+            return 0;
+        case kIdAiDeleteModel:
+            app->AiDeleteModel();
+            return 0;
+        case kIdAiRunInference:
+            app->AiRunInference();
+            return 0;
+        case kIdAiShowBoxes:
+            app->AiSetShowDetectionBoxes(
+                SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case kIdAiShowSegOverlay:
+            app->AiSetShowSegmentationOverlay(
+                SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case kIdAiClearResults:
+            app->AiClearResults();
+            return 0;
+        case kIdAiClearSamples:
+            app->AiClearSamples();
+            return 0;
+        case kIdAiImportDataset:
+            app->AiImportDataset();
+            return 0;
+        case kIdAiDeployVersion:
+            app->AiDeployVersion();
+            return 0;
+        case kIdAiEvaluateModel:
+            app->AiEvaluateModel();
             return 0;
         case kIdExit:
             DestroyWindow(hwnd);

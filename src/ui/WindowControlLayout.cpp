@@ -357,6 +357,116 @@ void AddSidePanel(
         // Reserve space for histogram chart + stats drawn in Paint
         content_y += 170;  // 140 chart + 22 stats + 8 padding
         break;
+    case 7: { // AI Panel — YOLO Neural Network
+        constexpr int kCardPadX = 6;
+        constexpr int kCardRadiusX = 10;   // card left/right margin
+        const int kCardInnerW = w - kCardRadiusX * 2;
+        constexpr int kColW = 64;           // label column width
+        constexpr int kEditX = kCardRadiusX + kColW;
+        const int kEditW = kCardInnerW - kColW;
+        constexpr int kRowH = kControlHeight;
+        constexpr int kRowGap = 2;
+        constexpr int kSectGap = 6;
+        constexpr int kSectPadTop = 4;
+
+        auto addRow = [&](int idLabel, int idCtrl, int lblW) {
+            add(idLabel, x + kCardRadiusX, content_y + 5, lblW, 20);
+            add(idCtrl, x + kCardRadiusX + lblW, content_y, kCardInnerW - lblW, kRowH);
+            content_y += kRowH + kRowGap;
+        };
+        auto addSectionHeader = [&](int id, int& cy) {
+            cy += kSectPadTop;
+            add(id, x + 2, cy + 2, w - 4, 18);
+            cy += 20;
+        };
+        auto addButtonRow = [&](int id, int& cy) {
+            add(id, x + kCardRadiusX, cy, kCardInnerW, kRowH);
+            cy += kRowH + kRowGap;
+        };
+        auto addTwoButtonRow = [&](int id1, int id2, int& cy, int w1, int w2) {
+            add(id1, x + kCardRadiusX, cy, w1 - kCardPadX, kRowH);
+            add(id2, x + kCardRadiusX + w1 + kCardPadX, cy, w2 - kCardPadX, kRowH);
+            cy += kRowH + kRowGap;
+        };
+
+        // ── Section 1: Model Configuration ──
+        addSectionHeader(kIdAiTrainConfigSectionLabel, content_y);
+        addRow(kIdAiModelArchitectureLabel, kIdAiTaskTypeCombo, kColW);
+        add(kIdAiYoloInputSizeCombo, x + kCardRadiusX, content_y, kCardInnerW, 200);
+        content_y += kRowH + kRowGap;
+        addRow(kIdAiTrainingEpochsLabel, kIdAiTrainingEpochsEdit, kColW);
+        addRow(kIdAiYoloLearningRateLabel, kIdAiYoloLearningRateEdit, kColW);
+        addRow(kIdAiYoloBatchSizeLabel, kIdAiYoloBatchSizeEdit, kColW);
+        addRow(kIdAiValidationSplitLabel, kIdAiValidationSplitEdit, kColW);
+        addRow(kIdAiConfThresholdLabel, kIdAiConfThresholdEdit, kColW);
+        addButtonRow(kIdAiCreateModel, content_y);
+        content_y += kSectGap;
+
+        // ── Section 2: YOLO Advanced ──
+        addSectionHeader(kIdAiYoloAdvancedSectionLabel, content_y);
+        addRow(kIdAiYoloNumAnchorsLabel, kIdAiYoloNumAnchorsEdit, kColW);
+        addRow(kIdAiYoloObjThresholdLabel, kIdAiYoloObjThresholdEdit, kColW);
+        addRow(kIdAiYoloNmsThresholdLabel, kIdAiYoloNmsThresholdEdit, kColW);
+        content_y += kSectGap;
+
+        // ── Section 3: Dataset & Labels ──
+        addSectionHeader(kIdAiDatasetSectionLabel, content_y);
+        addTwoButtonRow(kIdAiDatasetPathEdit, kIdAiImportDataset, content_y, half_width, half_width);
+        add(kIdAiDatasetStatusLabel, x + kCardRadiusX, content_y, kCardInnerW, 20);
+        content_y += 20 + kRowGap;
+        addTwoButtonRow(kIdAiLabelNameEdit, kIdAiAddLabel, content_y, half_width, half_width);
+        add(kIdAiLabelList, x + kCardRadiusX, content_y, kCardInnerW, 56);
+        content_y += 56 + kRowGap;
+        addButtonRow(kIdAiDeleteLabel, content_y);
+        content_y += kSectGap;
+
+        // ── Section 4: Training ──
+        addSectionHeader(kIdAiTrainingSectionLabel, content_y);
+        addTwoButtonRow(kIdAiCaptureSample, kIdAiClearSamples, content_y, half_width, half_width);
+        add(kIdAiSampleCountLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        addButtonRow(kIdAiTrainModel, content_y);
+        add(kIdAiTrainingProgress, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        add(kIdAiTrainingLossLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        add(kIdAiTrainingStatusLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap + kSectGap;
+
+        // ── Section 5: Model Center ──
+        addSectionHeader(kIdAiModelCenterSectionLabel, content_y);
+        addTwoButtonRow(kIdAiModelNameEdit, kIdAiSaveModel, content_y, half_width, half_width);
+        add(kIdAiModelList, x + kCardRadiusX, content_y, kCardInnerW, 48);
+        content_y += 48 + kRowGap;
+        {
+            const int btnGap = 4;
+            const int btnW = (kCardInnerW - btnGap * 2) / 3;
+            const int bx = x + kCardRadiusX;
+            add(kIdAiLoadModel, bx, content_y, btnW, kRowH);
+            add(kIdAiDeleteModel, bx + btnW + btnGap, content_y, btnW, kRowH);
+            add(kIdAiDeployVersion, bx + (btnW + btnGap) * 2, content_y, btnW, kRowH);
+        }
+        content_y += kRowH + kRowGap;
+        add(kIdAiModelVersionList, x + kCardRadiusX, content_y, kCardInnerW, 36);
+        content_y += 36 + kRowGap;
+        add(kIdAiModelAccuracyLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        add(kIdAiDeployStatusLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap + kSectGap;
+
+        // ── Section 6: Inference ──
+        addSectionHeader(kIdAiInferenceSectionLabel, content_y);
+        addButtonRow(kIdAiRunInference, content_y);
+        add(kIdAiInferenceTimeLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        add(kIdAiResultLabel, x + kCardRadiusX, content_y, kCardInnerW, 18);
+        content_y += 18 + kRowGap;
+        add(kIdAiResultList, x + kCardRadiusX, content_y, kCardInnerW, 56);
+        content_y += 56 + kRowGap;
+        addTwoButtonRow(kIdAiShowBoxes, kIdAiShowSegOverlay, content_y, half_width, half_width);
+        addButtonRow(kIdAiClearResults, content_y);
+        break;
+    }
     case 0:
     default:
         add(kIdDeviceLabel, x, content_y, w, 20);
@@ -390,9 +500,10 @@ void AddSidePanel(
         kIdProcessingPanelCard,
         kIdMeasurementPanelCard,
         kIdProjectPanelCard,
-        kIdHistogramPanelCard
+        kIdHistogramPanelCard,
+        kIdAiPanelCard
     };
-    constexpr int kHeaderCount = 7;
+    constexpr int kHeaderCount = 8;
     for (int category = 0; category < kHeaderCount; ++category) {
         add(header_ids[category], header_x, y, header_w, kPanelHeaderHeight);
         y += kPanelHeaderHeight;
@@ -481,7 +592,8 @@ const std::vector<std::wstring>& WindowControlLayout::PanelCategoryLabels()
         L"Processing",
         L"Measurement",
         L"Project",
-        L"Histogram"
+        L"Histogram",
+        L"AI"
     };
     return labels;
 }
@@ -512,6 +624,8 @@ int WindowControlLayout::PanelCategoryFromCardControl(int control_id)
         return 5;
     case kIdHistogramPanelCard:
         return 6;
+    case kIdAiPanelCard:
+        return 7;
     default:
         return -1;
     }
@@ -668,7 +782,65 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdRenameMeasurement,
         kIdResultsLabel,
         kIdResultsList,
-        kIdPanelScrollBar
+        kIdPanelScrollBar,
+        kIdAiPanelCard,
+        kIdAiTaskTypeCombo,
+        kIdAiModelArchitectureLabel,
+        kIdAiYoloInputSizeCombo,
+        kIdAiYoloAdvancedSectionLabel,
+        kIdAiYoloNumAnchorsLabel,
+        kIdAiYoloNumAnchorsEdit,
+        kIdAiYoloObjThresholdLabel,
+        kIdAiYoloObjThresholdEdit,
+        kIdAiYoloNmsThresholdLabel,
+        kIdAiYoloNmsThresholdEdit,
+        kIdAiYoloLearningRateLabel,
+        kIdAiYoloLearningRateEdit,
+        kIdAiYoloBatchSizeLabel,
+        kIdAiYoloBatchSizeEdit,
+        kIdAiCreateModel,
+        kIdAiModelNameEdit,
+        kIdAiLabelNameEdit,
+        kIdAiLabelList,
+        kIdAiAddLabel,
+        kIdAiDeleteLabel,
+        kIdAiCaptureSample,
+        kIdAiSampleCountLabel,
+        kIdAiTrainModel,
+        kIdAiTrainingProgress,
+        kIdAiTrainingLossLabel,
+        kIdAiModelList,
+        kIdAiLoadModel,
+        kIdAiSaveModel,
+        kIdAiDeleteModel,
+        kIdAiRunInference,
+        kIdAiResultLabel,
+        kIdAiResultList,
+        kIdAiShowBoxes,
+        kIdAiShowSegOverlay,
+        kIdAiClearResults,
+        kIdAiModelVersionList,
+        kIdAiDeployVersion,
+        kIdAiEvaluateModel,
+        kIdAiModelAccuracyLabel,
+        kIdAiDeployStatusLabel,
+        kIdAiTrainingEpochsLabel,
+        kIdAiTrainingEpochsEdit,
+        kIdAiValidationSplitLabel,
+        kIdAiValidationSplitEdit,
+        kIdAiTrainingStatusLabel,
+        kIdAiTrainingSectionLabel,
+        kIdAiTrainConfigSectionLabel,
+        kIdAiDatasetSectionLabel,
+        kIdAiModelCenterSectionLabel,
+        kIdAiInferenceSectionLabel,
+        kIdAiImportDataset,
+        kIdAiDatasetPathEdit,
+        kIdAiDatasetStatusLabel,
+        kIdAiConfThresholdLabel,
+        kIdAiConfThresholdEdit,
+        kIdAiInferenceTimeLabel,
+        kIdAiClearSamples
     };
     return side_controls;
 }

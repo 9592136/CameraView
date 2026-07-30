@@ -138,6 +138,11 @@ enum class LocId : std::size_t {
     STATUS_PANEL_DRAGGING,
     STATUS_RELEASE_DOCK_LEFT,
     STATUS_RELEASE_DOCK_RIGHT,
+    STATUS_IDLE,
+    STATUS_PREPARING,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_NO_FRAME,
 
     // Calibration
     STATUS_CALIBRATED,
@@ -346,6 +351,136 @@ enum class LocId : std::size_t {
     ABOUT_DESCRIPTION,
     ABOUT_OK,
 
+    // Panel cards
+    PANEL_AI,
+
+    // AI Panel
+    AI_TASK_TYPE,
+    AI_BACKEND,
+    AI_INPUT_SIZE,
+    AI_MODEL_NAME,
+    AI_LABEL_NAME,
+    AI_LABELS,
+    AI_ADD_LABEL,
+    AI_DELETE_LABEL,
+    AI_CAPTURE_SAMPLE,
+    AI_SAMPLE_COUNT,
+    AI_TRAIN_MODEL,
+    AI_TRAINING_PROGRESS,
+    AI_MODELS,
+    AI_LOAD_MODEL,
+    AI_SAVE_MODEL,
+    AI_DELETE_MODEL,
+    AI_RUN_INFERENCE,
+    AI_RESULTS,
+    AI_SHOW_BOXES,
+    AI_SEG_OVERLAY,
+    AI_CLEAR_RESULTS,
+    AI_STATUS_NO_LABEL_SELECTED,
+    AI_STATUS_NO_IMAGE,
+    AI_STATUS_NO_TRAINING_SAMPLES,
+    AI_STATUS_NO_LABELS,
+    AI_STATUS_MODEL_TRAINED,
+    AI_STATUS_MODEL_SELECTED,
+    AI_STATUS_NO_MODEL,
+    AI_STATUS_MODEL_SAVED,
+    AI_STATUS_MODEL_SAVE_FAILED,
+    AI_STATUS_INFERENCE_COMPLETE,
+    AI_STATUS_RESULTS_CLEARED,
+    AI_STATUS_SAMPLE_CAPTURED,
+    AI_STATUS_SELECT_MODEL,
+
+    // AI Panel — Section Headers
+    AI_SECTION_MODEL_CONFIG,
+    AI_SECTION_YOLO_ADVANCED,
+    AI_SECTION_DATASET,
+    AI_SECTION_TRAINING,
+    AI_SECTION_MODEL_CENTER,
+    AI_SECTION_INFERENCE,
+
+    // AI Panel — YOLO Architecture
+    AI_ARCH_TINY_YOLO,
+    AI_ARCH_CLASS_CNN,
+    AI_ARCH_SEG_NET,
+
+    // AI Panel — YOLO Advanced
+    AI_YOLO_ANCHORS,
+    AI_YOLO_OBJ_THRESHOLD,
+    AI_YOLO_NMS_THRESHOLD,
+    AI_YOLO_LEARNING_RATE,
+    AI_YOLO_BATCH_SIZE,
+    AI_YOLO_INPUT_SIZE_320,
+    AI_YOLO_INPUT_SIZE_416,
+    AI_YOLO_INPUT_SIZE_512,
+    AI_YOLO_INPUT_SIZE_608,
+
+    // AI Panel — Training config
+    AI_TRAINING_EPOCHS,
+    AI_VALIDATION_SPLIT,
+    AI_CONF_THRESHOLD,
+    AI_CREATE_MODEL,
+
+    // AI Panel — Dataset
+    AI_DATASET_PATH,
+    AI_IMPORT_DATASET,
+    AI_DATASET_STATUS,
+    AI_CLEAR_SAMPLES,
+    AI_TRAINING_STATUS,
+    AI_TRAINING_LOSS,
+
+    // AI Panel — Model Center
+    AI_MODEL_ARCHITECTURE,
+    AI_MODEL_LIST,
+    AI_DEPLOY,
+    AI_EVALUATE,
+    AI_MODEL_ACCURACY,
+    AI_DEPLOY_STATUS,
+    AI_MODEL_VERSION_LIST,
+
+    // AI Panel — Inference
+    AI_INFERENCE_TIME,
+
+    // AI Status Messages — YOLO specific
+    AI_STATUS_MODEL_CREATED,
+    AI_STATUS_TRAINING_STARTED,
+    AI_STATUS_TRAINING_EPOCH,
+    AI_STATUS_TRAINING_COMPLETE,
+    AI_STATUS_TRAINING_SAVED,
+    AI_STATUS_TRAINING_SAVE_FAILED,
+    AI_STATUS_NO_YOLO_MODEL,
+    AI_STATUS_YOLO_MODEL_LOADED,
+    AI_STATUS_YOLO_MODEL_LOAD_FAILED,
+    AI_STATUS_YOLO_INFERENCE_DONE,
+    AI_STATUS_YOLO_DETECTIONS,
+    AI_STATUS_YOLO_INFERENCE_TIME,
+    AI_STATUS_NO_SAMPLES_FOR_TRAINING,
+    AI_STATUS_NEED_LABELS_AND_SAMPLES,
+    AI_STATUS_SAMPLES_CLEARED,
+    AI_STATUS_DATASET_IMPORTED,
+    AI_STATUS_DATASET_IMPORT_FAILED,
+    AI_STATUS_MODEL_EVALUATED,
+
+    // AI — Additional status messages
+    AI_STATUS_SELECT_MODEL_LOAD,
+    AI_STATUS_NO_MODEL_TO_SAVE,
+    AI_STATUS_DATASET_PATH_CTRL,
+    AI_STATUS_SELECT_VERSION_DEPLOY,
+    AI_STATUS_VERSION_DEPLOYED,
+    AI_DEPLOY_STATUS_FORMAT,
+    AI_DEPLOY_STATUS_NONE,
+
+    // AI — Task type labels
+    AI_TASK_CLASSIFICATION,
+    AI_TASK_DETECTION,
+    AI_TASK_SEGMENTATION,
+    AI_TASK_UNKNOWN,
+
+    // AI — Backend labels
+    AI_BACKEND_KNN,
+    AI_BACKEND_SVM,
+    AI_BACKEND_KMEANS,
+    AI_BACKEND_UNKNOWN,
+
     // ── Sentinel ──
     COUNT
 };
@@ -484,6 +619,11 @@ constexpr LocEntry kTranslationTable[] = {
     { LocId::STATUS_PANEL_DRAGGING,        L"Dragging function panel.",        L"正在拖动功能面板。" },
     { LocId::STATUS_RELEASE_DOCK_LEFT,     L"Release to dock panel left.",     L"释放以停靠到左侧。" },
     { LocId::STATUS_RELEASE_DOCK_RIGHT,    L"Release to dock panel right.",    L"释放以停靠到右侧。" },
+    { LocId::STATUS_IDLE,                  L"Idle",                              L"空闲" },
+    { LocId::STATUS_PREPARING,             L"Preparing...",                      L"准备中..." },
+    { LocId::STATUS_DONE,                  L"Done",                              L"完成" },
+    { LocId::STATUS_FAILED,                L"Failed",                            L"失败" },
+    { LocId::STATUS_NO_FRAME,              L"No image available. Open a camera or load an image first.", L"无可用图像，请打开摄像头或加载图像。" },
 
     // ── Status - Calibration ──
     { LocId::STATUS_CALIBRATED,            L"Calibrated: {scale} pix/µm. Magnification: {mag}x.", L"已标定：{scale} pix/µm。倍率：{mag}x。" },
@@ -697,6 +837,135 @@ constexpr LocEntry kTranslationTable[] = {
     { LocId::ABOUT_AUTHOR,                   L"Author: liyuan.cn@gmail.com",        L"作者：liyuan.cn@gmail.com" },
     { LocId::ABOUT_DESCRIPTION,              L"A professional microscopy camera control and image processing application.", L"专业的显微相机控制与图像处理应用。" },
     { LocId::ABOUT_OK,                       L"OK",                                 L"确定" },
+
+    // Panel cards
+    { LocId::PANEL_AI,                       L"AI",                                 L"智能识别" },
+
+    // AI Panel
+    { LocId::AI_TASK_TYPE,                   L"Task Type",                          L"任务类型" },
+    { LocId::AI_BACKEND,                     L"Algorithm",                          L"算法" },
+    { LocId::AI_INPUT_SIZE,                  L"Input Size",                         L"输入尺寸" },
+    { LocId::AI_MODEL_NAME,                  L"Model Name",                         L"模型名称" },
+    { LocId::AI_LABEL_NAME,                  L"Label Name",                         L"标签名称" },
+    { LocId::AI_LABELS,                      L"Labels",                             L"标签列表" },
+    { LocId::AI_ADD_LABEL,                   L"Add Label",                          L"添加标签" },
+    { LocId::AI_DELETE_LABEL,                L"Delete",                             L"删除" },
+    { LocId::AI_CAPTURE_SAMPLE,              L"Capture Sample",                     L"捕获样本" },
+    { LocId::AI_SAMPLE_COUNT,                L"Samples: 0",                         L"样本数：0" },
+    { LocId::AI_TRAIN_MODEL,                 L"Train Model",                        L"训练模型" },
+    { LocId::AI_TRAINING_PROGRESS,           L"",                                   L"" },
+    { LocId::AI_MODELS,                      L"Models",                             L"模型列表" },
+    { LocId::AI_LOAD_MODEL,                  L"Load",                               L"加载" },
+    { LocId::AI_SAVE_MODEL,                  L"Save Model",                         L"保存模型" },
+    { LocId::AI_DELETE_MODEL,                L"Delete",                             L"删除" },
+    { LocId::AI_RUN_INFERENCE,               L"Run Inference",                      L"运行推理" },
+    { LocId::AI_RESULTS,                     L"Results",                            L"结果" },
+    { LocId::AI_SHOW_BOXES,                  L"Show Boxes",                         L"显示检测框" },
+    { LocId::AI_SEG_OVERLAY,                 L"Seg. Overlay",                       L"分割叠加" },
+    { LocId::AI_CLEAR_RESULTS,               L"Clear",                              L"清除" },
+    { LocId::AI_STATUS_NO_LABEL_SELECTED,    L"Select a label first.",              L"请先选择标签。" },
+    { LocId::AI_STATUS_NO_IMAGE,             L"No image available.",                L"无可用图像。" },
+    { LocId::AI_STATUS_NO_TRAINING_SAMPLES,  L"No training samples.",               L"无训练样本。" },
+    { LocId::AI_STATUS_NO_LABELS,            L"No labels defined.",                 L"未定义标签。" },
+    { LocId::AI_STATUS_MODEL_TRAINED,        L"Model trained. Accuracy: %.1f%%.",   L"模型已训练。准确率：%.1f%%。" },
+    { LocId::AI_STATUS_MODEL_SELECTED,       L"Model '%s' selected.",               L"已选择模型 '%s'。" },
+    { LocId::AI_STATUS_NO_MODEL,             L"No trained model available.",        L"无可用训练模型。" },
+    { LocId::AI_STATUS_MODEL_SAVED,          L"Model saved to '%s'.",               L"模型已保存到 '%s'。" },
+    { LocId::AI_STATUS_MODEL_SAVE_FAILED,    L"Failed to save model.",              L"模型保存失败。" },
+    { LocId::AI_STATUS_INFERENCE_COMPLETE,   L"Inference complete.",                L"推理完成。" },
+    { LocId::AI_STATUS_RESULTS_CLEARED,      L"AI results cleared.",                L"AI结果已清除。" },
+    { LocId::AI_STATUS_SAMPLE_CAPTURED,      L"Sample %zu captured for '%s'.",      L"已为 '%2$s' 捕获第 %1$zu 个样本。" },
+    { LocId::AI_STATUS_SELECT_MODEL,         L"Select a model first.",              L"请先选择模型。" },
+
+    // ── AI Panel — Section Headers ──
+    { LocId::AI_SECTION_MODEL_CONFIG,        L"▸  Model Configuration",              L"▸  模型配置" },
+    { LocId::AI_SECTION_YOLO_ADVANCED,       L"▸  YOLO Advanced",                    L"▸  YOLO 高级参数" },
+    { LocId::AI_SECTION_DATASET,             L"▸  Dataset & Labels",                 L"▸  数据集与标签" },
+    { LocId::AI_SECTION_TRAINING,            L"▸  Training",                         L"▸  训练" },
+    { LocId::AI_SECTION_MODEL_CENTER,        L"▸  Model Center",                     L"▸  模型中心" },
+    { LocId::AI_SECTION_INFERENCE,           L"▸  Inference",                        L"▸  推理" },
+
+    // ── AI Panel — YOLO Architecture ──
+    { LocId::AI_ARCH_TINY_YOLO,              L"TinyYOLO (Detection)",                L"TinyYOLO（目标检测）" },
+    { LocId::AI_ARCH_CLASS_CNN,              L"ClassCNN (Classification)",           L"ClassCNN（图像分类）" },
+    { LocId::AI_ARCH_SEG_NET,                L"SegNet (Segmentation)",               L"SegNet（图像分割）" },
+
+    // ── AI Panel — YOLO Advanced ──
+    { LocId::AI_YOLO_ANCHORS,               L"Anchors",                              L"锚框数" },
+    { LocId::AI_YOLO_OBJ_THRESHOLD,          L"Obj Thresh",                          L"目标阈值" },
+    { LocId::AI_YOLO_NMS_THRESHOLD,          L"NMS Thresh",                          L"NMS 阈值" },
+    { LocId::AI_YOLO_LEARNING_RATE,          L"Learn Rate",                          L"学习率" },
+    { LocId::AI_YOLO_BATCH_SIZE,             L"Batch Size",                          L"批大小" },
+    { LocId::AI_YOLO_INPUT_SIZE_320,         L"Input: 320×320",                      L"输入：320×320" },
+    { LocId::AI_YOLO_INPUT_SIZE_416,         L"Input: 416×416 (Default)",            L"输入：416×416（默认）" },
+    { LocId::AI_YOLO_INPUT_SIZE_512,         L"Input: 512×512",                      L"输入：512×512" },
+    { LocId::AI_YOLO_INPUT_SIZE_608,         L"Input: 608×608",                      L"输入：608×608" },
+
+    // ── AI Panel — Training Config ──
+    { LocId::AI_TRAINING_EPOCHS,             L"Epochs",                              L"训练轮数" },
+    { LocId::AI_VALIDATION_SPLIT,            L"Val Split",                           L"验证比例" },
+    { LocId::AI_CONF_THRESHOLD,              L"Conf Thresh",                         L"置信度阈值" },
+    { LocId::AI_CREATE_MODEL,                L"Create YOLO Model",                   L"创建 YOLO 模型" },
+
+    // ── AI Panel — Dataset ──
+    { LocId::AI_DATASET_PATH,                L"Dataset Path",                        L"数据集路径" },
+    { LocId::AI_IMPORT_DATASET,              L"Import Dataset",                      L"导入数据集" },
+    { LocId::AI_DATASET_STATUS,              L"No dataset loaded.",                  L"未加载数据集。" },
+    { LocId::AI_CLEAR_SAMPLES,               L"Clear Samples",                       L"清除样本" },
+    { LocId::AI_TRAINING_STATUS,             L"Training ready.",                     L"准备训练。" },
+    { LocId::AI_TRAINING_LOSS,               L"Loss: %.4f",                          L"损失：%.4f" },
+
+    // ── AI Panel — Model Center ──
+    { LocId::AI_MODEL_ARCHITECTURE,          L"Architecture",                        L"网络架构" },
+    { LocId::AI_MODEL_LIST,                  L"Models",                              L"模型列表" },
+    { LocId::AI_DEPLOY,                      L"Deploy",                              L"部署" },
+    { LocId::AI_EVALUATE,                    L"Evaluate",                            L"评估" },
+    { LocId::AI_MODEL_ACCURACY,              L"Accuracy: N/A",                       L"准确率：N/A" },
+    { LocId::AI_DEPLOY_STATUS,               L"Not deployed.",                       L"未部署。" },
+    { LocId::AI_MODEL_VERSION_LIST,          L"Version History",                     L"版本历史" },
+
+    // ── AI Panel — Inference ──
+    { LocId::AI_INFERENCE_TIME,              L"Inference: -- ms",                    L"推理时间：-- ms" },
+
+    // ── AI Status Messages — YOLO specific ──
+    { LocId::AI_STATUS_MODEL_CREATED,        L"YOLO model '%s' created successfully.",           L"YOLO 模型 '%s' 创建成功。" },
+    { LocId::AI_STATUS_TRAINING_STARTED,      L"YOLO training started: %zu epochs, lr=%.4f.",     L"YOLO 训练已启动：%zu 轮，学习率=%.4f。" },
+    { LocId::AI_STATUS_TRAINING_EPOCH,        L"Epoch %zu/%zu — loss: %.4f",                     L"第 %zu/%zu 轮 — 损失：%.4f" },
+    { LocId::AI_STATUS_TRAINING_COMPLETE,     L"YOLO training complete! Final loss: %.4f.",       L"YOLO 训练完成！最终损失：%.4f。" },
+    { LocId::AI_STATUS_TRAINING_SAVED,        L"YOLO model saved to '%s'.",                       L"YOLO 模型已保存至 '%s'。" },
+    { LocId::AI_STATUS_TRAINING_SAVE_FAILED,  L"Failed to save YOLO model.",                      L"YOLO 模型保存失败。" },
+    { LocId::AI_STATUS_NO_YOLO_MODEL,         L"No YOLO model loaded. Create or load a model first.", L"未加载 YOLO 模型。请先创建或加载模型。" },
+    { LocId::AI_STATUS_YOLO_MODEL_LOADED,     L"YOLO model '%s' loaded successfully.",            L"YOLO 模型 '%s' 加载成功。" },
+    { LocId::AI_STATUS_YOLO_MODEL_LOAD_FAILED,L"Failed to load YOLO model.",                      L"YOLO 模型加载失败。" },
+    { LocId::AI_STATUS_YOLO_INFERENCE_DONE,   L"YOLO inference complete: %zu detection(s).",      L"YOLO 推理完成：检测到 %zu 个目标。" },
+    { LocId::AI_STATUS_YOLO_INFERENCE_TIME,   L"YOLO inference: %.1f ms",                         L"YOLO 推理时间：%.1f ms" },
+    { LocId::AI_STATUS_NO_SAMPLES_FOR_TRAINING, L"No training samples captured.",                  L"未捕获训练样本。" },
+    { LocId::AI_STATUS_NEED_LABELS_AND_SAMPLES, L"Define labels and capture samples first.",       L"请先定义标签并捕获样本。" },
+    { LocId::AI_STATUS_SAMPLES_CLEARED,       L"Training samples cleared.",                        L"训练样本已清除。" },
+    { LocId::AI_STATUS_DATASET_IMPORTED,      L"Dataset imported: %zu samples, %zu labels.",       L"数据集已导入：%zu 个样本，%zu 个标签。" },
+    { LocId::AI_STATUS_DATASET_IMPORT_FAILED, L"Failed to import dataset.",                        L"数据集导入失败。" },
+    { LocId::AI_STATUS_MODEL_EVALUATED,       L"Model evaluated. Accuracy: %.1f%%.",               L"模型已评估。准确率：%.1f%%。" },
+
+    // ── AI Status — additional messages ──
+    { LocId::AI_STATUS_SELECT_MODEL_LOAD,   L"Select a model to load.",                      L"请先选择模型加载。" },
+    { LocId::AI_STATUS_NO_MODEL_TO_SAVE,    L"No trained model to save. Train a model first.", L"无训练模型可保存。请先训练模型。" },
+    { LocId::AI_STATUS_DATASET_PATH_CTRL,   L"Dataset path control not found.",              L"数据集路径控件未找到。" },
+    { LocId::AI_STATUS_SELECT_VERSION_DEPLOY, L"Select a version to deploy.",                L"请选择要部署的版本。" },
+    { LocId::AI_STATUS_VERSION_DEPLOYED,    L"Version deployed successfully.",               L"版本已成功部署。" },
+    { LocId::AI_DEPLOY_STATUS_FORMAT,       L"Deployed: v%d",                                L"已部署：v%d" },
+    { LocId::AI_DEPLOY_STATUS_NONE,         L"Deployed: None",                               L"部署：无" },
+
+    // ── AI Task type labels ──
+    { LocId::AI_TASK_CLASSIFICATION,        L"Classification",                               L"分类" },
+    { LocId::AI_TASK_DETECTION,             L"Detection",                                    L"检测" },
+    { LocId::AI_TASK_SEGMENTATION,          L"Segmentation",                                 L"分割" },
+    { LocId::AI_TASK_UNKNOWN,               L"Unknown",                                      L"未知" },
+
+    // ── AI Backend labels ──
+    { LocId::AI_BACKEND_KNN,                L"k-NN",                                         L"k-NN" },
+    { LocId::AI_BACKEND_SVM,                L"SVM",                                          L"SVM" },
+    { LocId::AI_BACKEND_KMEANS,             L"k-Means",                                      L"k-Means" },
+    { LocId::AI_BACKEND_UNKNOWN,            L"Unknown",                                      L"未知" },
 };
 
 // ──── O(1) Lookup (static array indexed by LocId) ────────────────────────

@@ -202,7 +202,7 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 comdlg32 ole32 windowscodecs shell32 comctl32)
+target_link_libraries(CameraView PRIVATE user32 gdi32 msimg32 comdlg32 ole32 windowscodecs shell32 comctl32)
 if(CAMERAVIEW_OPENCV_AVAILABLE)
     target_compile_definitions(CameraView PRIVATE CAMERAVIEW_WITH_OPENCV)
     target_include_directories(CameraView PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -427,7 +427,7 @@ if(CAMERAVIEW_BUILD_TESTS)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
-    target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs)
+    target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs gdi32 msimg32)
     if(CAMERAVIEW_OPENCV_AVAILABLE)
         target_compile_definitions(CameraViewDomainTests PRIVATE CAMERAVIEW_WITH_OPENCV)
         target_include_directories(CameraViewDomainTests PRIVATE ${OpenCV_INCLUDE_DIRS})
