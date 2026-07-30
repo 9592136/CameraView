@@ -8,6 +8,7 @@ bool ProcessingResultFrames::Clear()
     processing_result_ = ImageFrame();
     edf_composite_frame_ = ImageFrame();
     edf_focus_map_ = ImageFrame();
+    stitch_metadata_ = StitchResultMetadata();
     show_processing_result_ = false;
     display_source_ = ProcessingResultDisplaySource::None;
     return was_visible;
@@ -23,10 +24,12 @@ bool ProcessingResultFrames::Apply(ProcessingJobResult result)
         edf_composite_frame_ = result.image;
         edf_focus_map_ = std::move(result.focus_map);
         processing_result_ = std::move(result.image);
+        stitch_metadata_ = StitchResultMetadata();
         display_source_ = ProcessingResultDisplaySource::EdfComposite;
     } else {
         edf_composite_frame_ = ImageFrame();
         edf_focus_map_ = ImageFrame();
+        stitch_metadata_ = std::move(result.stitch_metadata);
         processing_result_ = std::move(result.image);
         display_source_ = ProcessingResultDisplaySource::Stitch;
     }

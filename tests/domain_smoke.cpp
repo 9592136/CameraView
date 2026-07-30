@@ -1875,12 +1875,19 @@ int main()
     stitch_frame_result.kind = ProcessingJobKind::Stitch;
     stitch_frame_result.succeeded = true;
     stitch_frame_result.image = MakeSolidImage(2, 2, 10, 20, 30);
+    stitch_frame_result.stitch_metadata.available = true;
+    stitch_frame_result.stitch_metadata.backend = L"Test backend";
+    stitch_frame_result.stitch_metadata.registration_method = L"phase";
+    stitch_frame_result.stitch_metadata.tiles.push_back(StitchResultTileMetadata{0, 0, 2, 2, false});
     if (!processing_frames.Apply(std::move(stitch_frame_result)) ||
         !processing_frames.IsProcessingResultVisible() ||
         processing_frames.ProcessingResult().width != 2 ||
         processing_frames.DisplaySource() != ProcessingResultDisplaySource::Stitch ||
         processing_frames.DisplayKindLabel() != L"Stitch" ||
         processing_frames.DisplaySourceLabel() != L"Stitch result" ||
+        !processing_frames.StitchMetadata().available ||
+        processing_frames.StitchMetadata().backend != L"Test backend" ||
+        processing_frames.StitchMetadata().tiles.size() != 1U ||
         processing_frames.EdfCompositeFrame().IsValid() ||
         processing_frames.EdfFocusMap().IsValid()) {
         return Fail("ProcessingResultFrames did not apply a stitch result.");
@@ -1894,6 +1901,7 @@ int main()
         !processing_frames.IsProcessingResultVisible() ||
         processing_frames.EdfCompositeFrame().width != 3 ||
         !processing_frames.EdfFocusMap().IsValid() ||
+        processing_frames.StitchMetadata().available ||
         processing_frames.ProcessingResult().bgr[0] != 1 ||
         processing_frames.DisplaySource() != ProcessingResultDisplaySource::EdfComposite ||
         processing_frames.DisplayKindLabel() != L"EDF" ||
@@ -1920,6 +1928,7 @@ int main()
     }
     if (processing_frames.IsProcessingResultVisible() ||
         processing_frames.ProcessingResult().IsValid() ||
+        processing_frames.StitchMetadata().available ||
         processing_frames.DisplaySource() != ProcessingResultDisplaySource::None ||
         processing_frames.DisplayKindLabel() != L"" ||
         processing_frames.DisplaySourceLabel() != L"(none)" ||
@@ -2622,6 +2631,16 @@ int main()
     diagnostic_input.image_processing.fluorescence_channels = 2;
     diagnostic_input.image_processing.stitch_tiles = 6;
     diagnostic_input.image_processing.stitch_search_percent = 12;
+    diagnostic_input.image_processing.stitch_result_backend = L"OpenCV C++";
+    diagnostic_input.image_processing.stitch_result_layout = L"grid";
+    diagnostic_input.image_processing.stitch_result_registration = L"micro";
+    diagnostic_input.image_processing.stitch_result_transform = L"affine";
+    diagnostic_input.image_processing.stitch_result_blend = L"linear";
+    diagnostic_input.image_processing.stitch_result_overlap_percent = 25;
+    diagnostic_input.image_processing.stitch_result_tiles = 6;
+    diagnostic_input.image_processing.stitch_result_relations = 7;
+    diagnostic_input.image_processing.stitch_result_tile_positions =
+        L"1: 320x240 @ 0,0; 2: 320x240 @ 240,1 estimated";
     diagnostic_input.image_processing.edf_frames = 7;
     diagnostic_input.image_processing.edf_focus_radius = 3;
     diagnostic_input.image_processing.processing_result_visible = true;
@@ -2646,6 +2665,9 @@ int main()
         diagnostic_report.find(L"Microns per pixel: 0.50000000") == std::wstring::npos ||
         diagnostic_report.find(L"Preview display mode: Pseudo color: Hot") == std::wstring::npos ||
         diagnostic_report.find(L"Pseudo color: Hot") == std::wstring::npos ||
+        diagnostic_report.find(L"Stitch result backend: OpenCV C++") == std::wstring::npos ||
+        diagnostic_report.find(L"Stitch result registration: micro") == std::wstring::npos ||
+        diagnostic_report.find(L"Stitch result tile positions: 1: 320x240 @ 0,0; 2: 320x240 @ 240,1 estimated") == std::wstring::npos ||
         diagnostic_report.find(L"Processing result visible: Yes") == std::wstring::npos ||
         diagnostic_report.find(L"Processing result kind: Stitch") == std::wstring::npos ||
         diagnostic_report.find(L"Processing result source: Stitch result") == std::wstring::npos ||
@@ -2654,12 +2676,13 @@ int main()
     }
     const std::wstring template_report = DiagnosticReportBuilder::BuildFromTemplate(
         diagnostic_input,
-        L"Report {{Generated}}\nObjective={{Objective}}\nScale={{MicronsPerPixel}}\nTotal={{TotalMeasurements}}\nMode={{PreviewDisplayMode}}\nUnknown={{UnknownToken}}");
+        L"Report {{Generated}}\nObjective={{Objective}}\nScale={{MicronsPerPixel}}\nTotal={{TotalMeasurements}}\nMode={{PreviewDisplayMode}}\nStitch={{StitchResultBackend}}/{{StitchResultRelations}}\nUnknown={{UnknownToken}}");
     if (template_report.find(L"Report 2026-06-29 09:08:07") == std::wstring::npos ||
         template_report.find(L"Objective=20x Oil") == std::wstring::npos ||
         template_report.find(L"Scale=0.50000000") == std::wstring::npos ||
         template_report.find(L"Total=4") == std::wstring::npos ||
         template_report.find(L"Mode=Pseudo color: Hot") == std::wstring::npos ||
+        template_report.find(L"Stitch=OpenCV C++/7") == std::wstring::npos ||
         template_report.find(L"Unknown={{UnknownToken}}") == std::wstring::npos) {
         return Fail("DiagnosticReportBuilder did not replace custom template placeholders.");
     }
@@ -2694,6 +2717,16 @@ int main()
     action_diagnostic_input.fluorescence_channels = 3;
     action_diagnostic_input.stitch_tiles = 2;
     action_diagnostic_input.stitch_search_percent = 55;
+    action_diagnostic_input.stitch_result_backend = L"Built-in";
+    action_diagnostic_input.stitch_result_layout = L"linear";
+    action_diagnostic_input.stitch_result_registration = L"phase";
+    action_diagnostic_input.stitch_result_transform = L"translation";
+    action_diagnostic_input.stitch_result_blend = L"none";
+    action_diagnostic_input.stitch_result_overlap_percent = 45;
+    action_diagnostic_input.stitch_result_tiles = 2;
+    action_diagnostic_input.stitch_result_relations = 1;
+    action_diagnostic_input.stitch_result_tile_positions =
+        L"1: 6x5 @ 0,0; 2: 6x5 @ 3,0 estimated";
     action_diagnostic_input.edf_frames = 6;
     action_diagnostic_input.edf_focus_radius = 7;
     action_diagnostic_input.processing_result_visible = true;
@@ -2728,6 +2761,8 @@ int main()
         action_diagnostic_report.find(L"Preview display mode: Processing result: EDF focus map") == std::wstring::npos ||
         action_diagnostic_report.find(L"Pseudo color: Cyan") == std::wstring::npos ||
         action_diagnostic_report.find(L"Dye profiles: 4") == std::wstring::npos ||
+        action_diagnostic_report.find(L"Stitch result backend: Built-in") == std::wstring::npos ||
+        action_diagnostic_report.find(L"Stitch result relations: 1") == std::wstring::npos ||
         action_diagnostic_report.find(L"EDF focus radius: 7") == std::wstring::npos ||
         action_diagnostic_report.find(L"Processing result kind: EDF") == std::wstring::npos ||
         action_diagnostic_report.find(L"Processing result source: EDF focus map") == std::wstring::npos ||
@@ -2916,7 +2951,7 @@ int main()
             diagnostic_measurements,
             L"custom_image.png",
             report_image,
-            L"{{ImageTag}} {{MeasurementTable}} {{Objective}} {{ImageSize}} {{UnknownToken}}");
+            L"{{ImageTag}} {{MeasurementTable}} {{Objective}} {{ImageSize}} {{StitchResultTilePositions}} {{UnknownToken}}");
     const std::wstring captioned_image_report =
         DiagnosticReportActions::BuildImageReport(
             image_report_input,
@@ -2940,6 +2975,7 @@ int main()
     }
     if (templated_image_report.find(L"custom_image.png") == std::wstring::npos ||
         templated_image_report.find(L"10x6") == std::wstring::npos ||
+        templated_image_report.find(L"1: 6x5 @ 0,0; 2: 6x5 @ 3,0 estimated") == std::wstring::npos ||
         templated_image_report.find(L"{{UnknownToken}}") == std::wstring::npos) {
         return Fail("DiagnosticReportActions did not replace image report template placeholders.");
     }
@@ -4324,6 +4360,18 @@ int main()
         if (!NonDecreasingProgress(opencv_stitch_progress)) {
             return Fail("OpenCV stitch backend did not report monotonic progress.");
         }
+        const ProcessingJobResult opencv_stitch_job = ProcessingJobExecutor::RunStitch(
+            45,
+            {opencv_left_tile, opencv_right_tile},
+            opencv_options);
+        if (opencv_stitch_job.job_id != 45 ||
+            !opencv_stitch_job.succeeded ||
+            opencv_stitch_job.stitch_metadata.backend != L"OpenCV C++" ||
+            opencv_stitch_job.stitch_metadata.registration_method != L"phase" ||
+            opencv_stitch_job.stitch_metadata.tiles.size() != 2U ||
+            std::abs(opencv_stitch_job.stitch_metadata.tiles[1].offset_x - 64) > 1) {
+            return Fail("ProcessingJobExecutor did not expose OpenCV stitch metadata.");
+        }
     }
     std::atomic_bool cancel_stitch = true;
     if (ImageStitcher::StitchAverage({left_tile, right_tile}, StitchBlendMode::Linear, &cancel_stitch).IsValid()) {
@@ -4343,6 +4391,11 @@ int main()
         !stitch_job_result.succeeded ||
         !stitch_job_result.image.IsValid() ||
         stitch_job_result.image.width != 3 ||
+        !stitch_job_result.stitch_metadata.available ||
+        stitch_job_result.stitch_metadata.backend != L"Built-in" ||
+        stitch_job_result.stitch_metadata.registration_method != L"phase" ||
+        stitch_job_result.stitch_metadata.tiles.size() != 2U ||
+        stitch_job_result.stitch_metadata.tiles[1].offset_x != 1 ||
         stitch_job_result.status.empty()) {
         return Fail("ProcessingJobExecutor did not produce a successful stitch result.");
     }
@@ -4361,7 +4414,9 @@ int main()
         !large_stitch_job_result.succeeded ||
         !large_stitch_job_result.image.IsValid() ||
         large_stitch_job_result.image.width != 344 ||
-        large_stitch_job_result.image.height != 252) {
+        large_stitch_job_result.image.height != 252 ||
+        !large_stitch_job_result.stitch_metadata.available ||
+        large_stitch_job_result.stitch_metadata.tiles.size() != 2U) {
         return Fail(
             "ProcessingJobExecutor did not refine a larger estimated stitch result; got " +
             std::to_string(large_stitch_job_result.image.width) +
@@ -5095,6 +5150,62 @@ int main()
         unsupported_image_export.status != ExportActionStatus::WriteFailed ||
         unsupported_image_export.message != L"Unsupported image export format.") {
         return Fail("ExportActions did not reject unsupported image export formats.");
+    }
+
+    const std::filesystem::path stitch_metadata_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsStitchMetadata.txt";
+    std::filesystem::remove(stitch_metadata_path);
+    StitchResultMetadata stitch_export_metadata;
+    stitch_export_metadata.available = true;
+    stitch_export_metadata.backend = L"OpenCV C++";
+    stitch_export_metadata.layout_mode = L"Sequence";
+    stitch_export_metadata.registration_method = L"Micro feature";
+    stitch_export_metadata.transform_model = L"Translation";
+    stitch_export_metadata.blend_mode = L"Feather";
+    stitch_export_metadata.overlap_percent = 25;
+    stitch_export_metadata.grid_rows = 1;
+    stitch_export_metadata.grid_cols = 2;
+    stitch_export_metadata.relation_count = 1;
+    stitch_export_metadata.tiles.push_back(StitchResultTileMetadata{0, 0, 64, 48, false});
+    stitch_export_metadata.tiles.push_back(StitchResultTileMetadata{54, -2, 64, 48, true});
+    const ExportActionResult stitch_metadata_export =
+        ExportActions::SaveStitchMetadata(stitch_metadata_path, stitch_export_metadata);
+    if (!stitch_metadata_export.saved ||
+        stitch_metadata_export.status != ExportActionStatus::Saved ||
+        stitch_metadata_export.message != L"Stitch metadata saved." ||
+        !std::filesystem::exists(stitch_metadata_path)) {
+        std::filesystem::remove(stitch_metadata_path);
+        return Fail("ExportActions did not save stitch metadata.");
+    }
+    std::ifstream stitch_metadata_file(stitch_metadata_path, std::ios::binary);
+    stitch_metadata_file.seekg(0, std::ios::end);
+    const std::streamoff stitch_metadata_size = stitch_metadata_file.tellg();
+    stitch_metadata_file.seekg(0, std::ios::beg);
+    std::string stitch_metadata_bytes(static_cast<std::size_t>(stitch_metadata_size), '\0');
+    if (!stitch_metadata_bytes.empty()) {
+        stitch_metadata_file.read(
+            stitch_metadata_bytes.data(),
+            static_cast<std::streamsize>(stitch_metadata_bytes.size()));
+    }
+    stitch_metadata_file.close();
+    std::filesystem::remove(stitch_metadata_path);
+    if (stitch_metadata_bytes.size() < 3 ||
+        static_cast<unsigned char>(stitch_metadata_bytes[0]) != 0xEF ||
+        static_cast<unsigned char>(stitch_metadata_bytes[1]) != 0xBB ||
+        static_cast<unsigned char>(stitch_metadata_bytes[2]) != 0xBF ||
+        stitch_metadata_bytes.find("Backend: OpenCV C++") == std::string::npos ||
+        stitch_metadata_bytes.find("Registration: Micro feature") == std::string::npos ||
+        stitch_metadata_bytes.find("2: 64x48 @ 54,-2 estimated") == std::string::npos) {
+        return Fail("Stitch metadata export did not preserve UTF-8 BOM or tile placement fields.");
+    }
+    const ExportActionResult empty_stitch_metadata_export =
+        ExportActions::SaveStitchMetadata(
+            std::filesystem::temp_directory_path() / "CameraViewDomainTestsEmptyStitchMetadata.txt",
+            StitchResultMetadata{});
+    if (empty_stitch_metadata_export.saved ||
+        empty_stitch_metadata_export.status != ExportActionStatus::NoStitchMetadata ||
+        empty_stitch_metadata_export.message != L"No stitch metadata to save.") {
+        return Fail("ExportActions did not reject empty stitch metadata export.");
     }
 
     const std::filesystem::path action_report_path =

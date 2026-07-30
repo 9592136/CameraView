@@ -3296,6 +3296,13 @@ private:
         return directory / (std::wstring(file_prefix) + L"_latest.bmp");
     }
 
+    static std::filesystem::path AbsolutePathOrSelf(const std::filesystem::path& path)
+    {
+        std::error_code absolute_error;
+        std::filesystem::path absolute_path = std::filesystem::absolute(path, absolute_error);
+        return absolute_error ? path : absolute_path;
+    }
+
     std::wstring SaveVisibleProcessingResult(
         const wchar_t* subdirectory,
         const wchar_t* file_prefix,
@@ -3319,10 +3326,21 @@ private:
             return L"Auto-save failed: " + save_result.message;
         }
 
-        std::error_code absolute_error;
-        std::filesystem::path absolute_path = std::filesystem::absolute(path, absolute_error);
-        if (absolute_error) {
-            absolute_path = path;
+        const std::filesystem::path absolute_path = AbsolutePathOrSelf(path);
+        if (processing_frames_.DisplaySource() == ProcessingResultDisplaySource::Stitch) {
+            const StitchResultMetadata& metadata = processing_frames_.StitchMetadata();
+            if (metadata.available) {
+                std::filesystem::path metadata_path = path;
+                metadata_path.replace_extension(L".txt");
+                const ExportActionResult metadata_result =
+                    ExportActions::SaveStitchMetadata(metadata_path, metadata);
+                if (!metadata_result.saved) {
+                    return L"Saved to: " + absolute_path.wstring() +
+                        L". Metadata auto-save failed: " + metadata_result.message;
+                }
+                return L"Saved to: " + absolute_path.wstring() +
+                    L". Metadata: " + AbsolutePathOrSelf(metadata_path).wstring();
+            }
         }
         return L"Saved to: " + absolute_path.wstring();
     }
@@ -3903,6 +3921,10 @@ private:
             {L"Pseudo color", L"{{PseudoColor}}"},
             {L"Fluorescence channels", L"{{FluorescenceChannels}}"},
             {L"Stitch tiles", L"{{StitchTiles}}"},
+            {L"Stitch backend", L"{{StitchResultBackend}}"},
+            {L"Stitch registration", L"{{StitchResultRegistration}}"},
+            {L"Stitch relations", L"{{StitchResultRelations}}"},
+            {L"Stitch tile positions", L"{{StitchResultTilePositions}}"},
             {L"EDF frames", L"{{EdfFrames}}"}};
         count = sizeof(kEntries) / sizeof(kEntries[0]);
         return kEntries;
@@ -6501,6 +6523,30 @@ private:
         SetStatus(final_status);
     }
 
+    static std::wstring FormatStitchTilePositions(const StitchResultMetadata& metadata)
+    {
+        if (!metadata.available || metadata.tiles.empty()) {
+            return {};
+        }
+
+        std::wostringstream output;
+        for (std::size_t index = 0; index < metadata.tiles.size(); ++index) {
+            if (index > 0) {
+                output << L"; ";
+            }
+            const StitchResultTileMetadata& tile = metadata.tiles[index];
+            output << (index + 1U)
+                   << L": "
+                   << tile.width << L"x" << tile.height
+                   << L" @ "
+                   << tile.offset_x << L"," << tile.offset_y;
+            if (tile.estimated_position) {
+                output << L" estimated";
+            }
+        }
+        return output.str();
+    }
+
     DiagnosticReportActionInput BuildDiagnosticsInput()
     {
         SYSTEMTIME now = {};
@@ -6562,6 +6608,18 @@ private:
             input.processing_result_height = processing_result.height;
             input.processing_result_kind = processing_frames_.DisplayKindLabel();
             input.processing_result_source = processing_frames_.DisplaySourceLabel();
+        }
+        const StitchResultMetadata& stitch_metadata = processing_frames_.StitchMetadata();
+        if (stitch_metadata.available) {
+            input.stitch_result_backend = stitch_metadata.backend;
+            input.stitch_result_layout = stitch_metadata.layout_mode;
+            input.stitch_result_registration = stitch_metadata.registration_method;
+            input.stitch_result_transform = stitch_metadata.transform_model;
+            input.stitch_result_blend = stitch_metadata.blend_mode;
+            input.stitch_result_overlap_percent = stitch_metadata.overlap_percent;
+            input.stitch_result_tiles = stitch_metadata.tiles.size();
+            input.stitch_result_relations = stitch_metadata.relation_count;
+            input.stitch_result_tile_positions = FormatStitchTilePositions(stitch_metadata);
         }
 
         return input;

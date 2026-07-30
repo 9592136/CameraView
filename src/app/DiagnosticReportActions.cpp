@@ -963,6 +963,15 @@ DiagnosticReportInput BuildReportInput(
     report.image_processing.fluorescence_channels = input.fluorescence_channels;
     report.image_processing.stitch_tiles = input.stitch_tiles;
     report.image_processing.stitch_search_percent = input.stitch_search_percent;
+    report.image_processing.stitch_result_backend = std::move(input.stitch_result_backend);
+    report.image_processing.stitch_result_layout = std::move(input.stitch_result_layout);
+    report.image_processing.stitch_result_registration = std::move(input.stitch_result_registration);
+    report.image_processing.stitch_result_transform = std::move(input.stitch_result_transform);
+    report.image_processing.stitch_result_blend = std::move(input.stitch_result_blend);
+    report.image_processing.stitch_result_overlap_percent = input.stitch_result_overlap_percent;
+    report.image_processing.stitch_result_tiles = input.stitch_result_tiles;
+    report.image_processing.stitch_result_relations = input.stitch_result_relations;
+    report.image_processing.stitch_result_tile_positions = std::move(input.stitch_result_tile_positions);
     report.image_processing.edf_frames = input.edf_frames;
     report.image_processing.edf_focus_radius = input.edf_focus_radius;
     report.image_processing.processing_result_visible = input.processing_result_visible;
@@ -1029,6 +1038,36 @@ std::wstring ApplyImageReportTemplate(
     ReplaceAll(output, L"{{StitchTiles}}", std::to_wstring(report.image_processing.stitch_tiles));
     ReplaceAll(output, L"{{StitchSearchPercent}}",
         std::to_wstring(report.image_processing.stitch_search_percent));
+    ReplaceAll(output, L"{{StitchResultBackend}}",
+        HtmlEscape(report.image_processing.stitch_result_backend.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_backend));
+    ReplaceAll(output, L"{{StitchResultLayout}}",
+        HtmlEscape(report.image_processing.stitch_result_layout.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_layout));
+    ReplaceAll(output, L"{{StitchResultRegistration}}",
+        HtmlEscape(report.image_processing.stitch_result_registration.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_registration));
+    ReplaceAll(output, L"{{StitchResultTransform}}",
+        HtmlEscape(report.image_processing.stitch_result_transform.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_transform));
+    ReplaceAll(output, L"{{StitchResultBlend}}",
+        HtmlEscape(report.image_processing.stitch_result_blend.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_blend));
+    ReplaceAll(output, L"{{StitchResultOverlapPercent}}",
+        std::to_wstring(report.image_processing.stitch_result_overlap_percent));
+    ReplaceAll(output, L"{{StitchResultTiles}}",
+        std::to_wstring(report.image_processing.stitch_result_tiles));
+    ReplaceAll(output, L"{{StitchResultRelations}}",
+        std::to_wstring(report.image_processing.stitch_result_relations));
+    ReplaceAll(output, L"{{StitchResultTilePositions}}",
+        HtmlEscape(report.image_processing.stitch_result_tile_positions.empty()
+            ? L"(none)"
+            : report.image_processing.stitch_result_tile_positions));
     ReplaceAll(output, L"{{EdfFrames}}", std::to_wstring(report.image_processing.edf_frames));
     ReplaceAll(output, L"{{EdfFocusRadius}}", std::to_wstring(report.image_processing.edf_focus_radius));
     ReplaceAll(output, L"{{ProcessingResultKind}}",
@@ -1223,6 +1262,9 @@ footer { border-top: 1px solid #d8dee6; color: #607080; font-size: 12px; margin-
                 report << LR"(<tr><th>Pseudo color</th><td>{{PseudoColor}}</td></tr>
 <tr><th>Fluorescence channels</th><td>{{FluorescenceChannels}}</td></tr>
 <tr><th>Stitch tiles</th><td>{{StitchTiles}}</td></tr>
+<tr><th>Stitch backend</th><td>{{StitchResultBackend}}</td></tr>
+<tr><th>Stitch registration</th><td>{{StitchResultRegistration}}</td></tr>
+<tr><th>Stitch tile positions</th><td>{{StitchResultTilePositions}}</td></tr>
 <tr><th>EDF frames</th><td>{{EdfFrames}}</td></tr>
 )";
             }

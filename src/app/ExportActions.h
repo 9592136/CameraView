@@ -3,6 +3,7 @@
 #include "../domain/CalibrationProfile.h"
 #include "../domain/ImageFrame.h"
 #include "../domain/MeasurementCollection.h"
+#include "../imaging/ProcessingJobState.h"
 
 #include <filesystem>
 #include <string>
@@ -11,6 +12,7 @@ enum class ExportActionStatus {
     Saved,
     NoMeasurements,
     NoImageFrame,
+    NoStitchMetadata,
     WriteFailed
 };
 
@@ -42,6 +44,10 @@ public:
         const MeasurementCollection& measurements,
         const std::wstring& display_mode = L"",
         const CalibrationProfile* calibration = nullptr);
+
+    static ExportActionResult SaveStitchMetadata(
+        const std::filesystem::path& path,
+        const StitchResultMetadata& metadata);
 
     static ExportActionResult SaveDiagnosticReport(
         const std::filesystem::path& path,

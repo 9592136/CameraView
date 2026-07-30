@@ -133,6 +133,92 @@ std::vector<StitchTile> ApplyOptimizedOffsets(
     }
     return full_tiles;
 }
+
+const wchar_t* Label(StitchRegistrationMethod method)
+{
+    switch (method) {
+    case StitchRegistrationMethod::Phase:
+        return L"phase";
+    case StitchRegistrationMethod::Feature:
+        return L"feature";
+    case StitchRegistrationMethod::Auto:
+        return L"auto";
+    case StitchRegistrationMethod::Sift:
+        return L"sift";
+    case StitchRegistrationMethod::Micro:
+        return L"micro";
+    default:
+        return L"unknown";
+    }
+}
+
+const wchar_t* Label(StitchTransformModel model)
+{
+    switch (model) {
+    case StitchTransformModel::Translation:
+        return L"translation";
+    case StitchTransformModel::Affine:
+        return L"affine";
+    case StitchTransformModel::Homography:
+        return L"homography";
+    default:
+        return L"unknown";
+    }
+}
+
+const wchar_t* Label(StitchBlendMode mode)
+{
+    switch (mode) {
+    case StitchBlendMode::Linear:
+        return L"linear";
+    case StitchBlendMode::None:
+        return L"none";
+    default:
+        return L"unknown";
+    }
+}
+
+const wchar_t* Label(StitchLayoutMode mode)
+{
+    switch (mode) {
+    case StitchLayoutMode::Grid:
+        return L"grid";
+    case StitchLayoutMode::Linear:
+        return L"linear";
+    default:
+        return L"unknown";
+    }
+}
+
+StitchResultMetadata BuildStitchMetadata(
+    const std::vector<StitchTile>& tiles,
+    const StitchProcessingOptions& options,
+    int relation_count,
+    const std::wstring& backend)
+{
+    StitchResultMetadata metadata;
+    metadata.available = !tiles.empty();
+    metadata.backend = backend;
+    metadata.layout_mode = Label(options.layout_mode);
+    metadata.registration_method = Label(options.registration_method);
+    metadata.transform_model = Label(options.transform_model);
+    metadata.blend_mode = Label(options.blend_mode);
+    metadata.overlap_percent = options.overlap_percent;
+    metadata.grid_rows = options.grid_rows;
+    metadata.grid_cols = options.grid_cols;
+    metadata.relation_count = relation_count;
+    metadata.tiles.reserve(tiles.size());
+    for (const StitchTile& tile : tiles) {
+        StitchResultTileMetadata tile_metadata;
+        tile_metadata.offset_x = tile.offset_x;
+        tile_metadata.offset_y = tile.offset_y;
+        tile_metadata.width = tile.frame.width;
+        tile_metadata.height = tile.frame.height;
+        tile_metadata.estimated_position = tile.estimated_position;
+        metadata.tiles.push_back(tile_metadata);
+    }
+    return metadata;
+}
 }
 
 int StitchStepForDimension(int dimension, int overlap_percent)
@@ -198,6 +284,13 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
         const bool canceled = IsCanceled(cancel_requested);
         result.image = std::move(open_cv_result.image);
         result.succeeded = open_cv_result.succeeded && !canceled;
+        if (result.succeeded) {
+            result.stitch_metadata = BuildStitchMetadata(
+                open_cv_result.positioned_tiles,
+                options,
+                open_cv_result.constraint_count,
+                L"OpenCV C++");
+        }
         result.status = canceled
             ? ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch)
             : result.succeeded
@@ -279,6 +372,13 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
 
     const bool canceled = IsCanceled(cancel_requested);
     result.succeeded = result.image.IsValid() && !canceled;
+    if (result.succeeded) {
+        result.stitch_metadata = BuildStitchMetadata(
+            output_tiles,
+            options,
+            ready_constraint_count,
+            L"Built-in");
+    }
     result.status = canceled
         ? ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch)
         : result.succeeded
@@ -297,6 +397,14 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
     ProcessingJobResult result;
     result.job_id = job_id;
     result.kind = ProcessingJobKind::Stitch;
+    StitchProcessingOptions processing_options;
+    processing_options.overlap_percent = ProcessingParameterRules::OverlapPercentFromSearch(search_percent);
+    processing_options.layout_mode = StitchLayoutMode::Linear;
+    processing_options.registration_method = use_orb_registration ?
+        StitchRegistrationMethod::Micro :
+        StitchRegistrationMethod::Phase;
+    processing_options.transform_model = StitchTransformModel::Translation;
+    processing_options.blend_mode = StitchBlendMode::Linear;
 
     const int optimization_scale = OptimizationPreviewScale(tiles);
     const std::vector<StitchTile> optimization_tiles =
@@ -304,9 +412,7 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
     StitchOptimizationOptions optimization_options =
         BuildPreviewOptimizationOptions(optimization_tiles, search_percent);
     optimization_options.use_orb_registration = use_orb_registration;
-    optimization_options.registration_method = use_orb_registration ?
-        StitchRegistrationMethod::Micro :
-        StitchRegistrationMethod::Phase;
+    optimization_options.registration_method = processing_options.registration_method;
 
     auto alignment_progress = [&progress_callback](int percent) {
         if (progress_callback) {
@@ -333,9 +439,7 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
         full_refinement_options.search_radius_y = std::clamp(optimization_scale * 4, 6, 24);
         full_refinement_options.iterations = 8;
         full_refinement_options.use_orb_registration = use_orb_registration;
-        full_refinement_options.registration_method = use_orb_registration ?
-            StitchRegistrationMethod::Micro :
-            StitchRegistrationMethod::Phase;
+        full_refinement_options.registration_method = processing_options.registration_method;
         auto refinement_progress = [&progress_callback](int percent) {
             if (progress_callback) {
                 progress_callback(30 + (percent * 10) / 100);
@@ -371,6 +475,13 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
 
     const bool canceled = IsCanceled(cancel_requested);
     result.succeeded = result.image.IsValid() && !canceled;
+    if (result.succeeded) {
+        result.stitch_metadata = BuildStitchMetadata(
+            output_tiles,
+            processing_options,
+            ready_constraint_count,
+            L"Built-in");
+    }
     result.status = canceled
         ? ProcessingStatusFormatter::FormatCanceled(ProcessingJobKind::Stitch)
         : result.succeeded

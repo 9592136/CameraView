@@ -150,6 +150,40 @@ std::wstring DiagnosticReportBuilder::Build(const DiagnosticReportInput& input)
     report << L"Fluorescence channels: " << input.image_processing.fluorescence_channels << L"\n";
     report << L"Stitch tiles: " << input.image_processing.stitch_tiles << L"\n";
     report << L"Stitch search percent: " << input.image_processing.stitch_search_percent << L"\n";
+    report << L"Stitch result backend: "
+           << (input.image_processing.stitch_result_backend.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_backend)
+           << L"\n";
+    report << L"Stitch result layout: "
+           << (input.image_processing.stitch_result_layout.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_layout)
+           << L"\n";
+    report << L"Stitch result registration: "
+           << (input.image_processing.stitch_result_registration.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_registration)
+           << L"\n";
+    report << L"Stitch result transform: "
+           << (input.image_processing.stitch_result_transform.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_transform)
+           << L"\n";
+    report << L"Stitch result blend: "
+           << (input.image_processing.stitch_result_blend.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_blend)
+           << L"\n";
+    report << L"Stitch result overlap percent: "
+           << input.image_processing.stitch_result_overlap_percent << L"\n";
+    report << L"Stitch result tiles: " << input.image_processing.stitch_result_tiles << L"\n";
+    report << L"Stitch result relations: " << input.image_processing.stitch_result_relations << L"\n";
+    report << L"Stitch result tile positions: "
+           << (input.image_processing.stitch_result_tile_positions.empty()
+                   ? L"(none)"
+                   : input.image_processing.stitch_result_tile_positions)
+           << L"\n";
     report << L"EDF frames: " << input.image_processing.edf_frames << L"\n";
     report << L"EDF focus radius: " << input.image_processing.edf_focus_radius << L"\n";
     report << L"Processing result visible: " << YesNo(input.image_processing.processing_result_visible) << L"\n";
@@ -231,6 +265,36 @@ std::wstring DiagnosticReportBuilder::BuildFromTemplate(
     ReplaceAll(output, L"{{StitchTiles}}", std::to_wstring(input.image_processing.stitch_tiles));
     ReplaceAll(output, L"{{StitchSearchPercent}}",
         std::to_wstring(input.image_processing.stitch_search_percent));
+    ReplaceAll(output, L"{{StitchResultBackend}}",
+        input.image_processing.stitch_result_backend.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_backend);
+    ReplaceAll(output, L"{{StitchResultLayout}}",
+        input.image_processing.stitch_result_layout.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_layout);
+    ReplaceAll(output, L"{{StitchResultRegistration}}",
+        input.image_processing.stitch_result_registration.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_registration);
+    ReplaceAll(output, L"{{StitchResultTransform}}",
+        input.image_processing.stitch_result_transform.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_transform);
+    ReplaceAll(output, L"{{StitchResultBlend}}",
+        input.image_processing.stitch_result_blend.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_blend);
+    ReplaceAll(output, L"{{StitchResultOverlapPercent}}",
+        std::to_wstring(input.image_processing.stitch_result_overlap_percent));
+    ReplaceAll(output, L"{{StitchResultTiles}}",
+        std::to_wstring(input.image_processing.stitch_result_tiles));
+    ReplaceAll(output, L"{{StitchResultRelations}}",
+        std::to_wstring(input.image_processing.stitch_result_relations));
+    ReplaceAll(output, L"{{StitchResultTilePositions}}",
+        input.image_processing.stitch_result_tile_positions.empty()
+            ? L"(none)"
+            : input.image_processing.stitch_result_tile_positions);
     ReplaceAll(output, L"{{EdfFrames}}", std::to_wstring(input.image_processing.edf_frames));
     ReplaceAll(output, L"{{EdfFocusRadius}}", std::to_wstring(input.image_processing.edf_focus_radius));
     ReplaceAll(output, L"{{ProcessingResultKind}}",

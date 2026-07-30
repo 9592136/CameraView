@@ -6,11 +6,34 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 enum class ProcessingJobKind {
     None,
     Stitch,
     Edf
+};
+
+struct StitchResultTileMetadata {
+    int offset_x = 0;
+    int offset_y = 0;
+    int width = 0;
+    int height = 0;
+    bool estimated_position = false;
+};
+
+struct StitchResultMetadata {
+    bool available = false;
+    std::wstring backend;
+    std::wstring layout_mode;
+    std::wstring registration_method;
+    std::wstring transform_model;
+    std::wstring blend_mode;
+    int overlap_percent = 0;
+    int grid_rows = 0;
+    int grid_cols = 0;
+    int relation_count = 0;
+    std::vector<StitchResultTileMetadata> tiles;
 };
 
 struct ProcessingJobResult {
@@ -20,6 +43,7 @@ struct ProcessingJobResult {
     bool succeeded = false;
     ImageFrame image;
     ImageFrame focus_map;
+    StitchResultMetadata stitch_metadata;
     std::wstring status;
 };
 

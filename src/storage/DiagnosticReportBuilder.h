@@ -37,6 +37,15 @@ struct DiagnosticImageProcessingSummary {
     std::size_t fluorescence_channels = 0;
     std::size_t stitch_tiles = 0;
     int stitch_search_percent = 0;
+    std::wstring stitch_result_backend;
+    std::wstring stitch_result_layout;
+    std::wstring stitch_result_registration;
+    std::wstring stitch_result_transform;
+    std::wstring stitch_result_blend;
+    int stitch_result_overlap_percent = 0;
+    std::size_t stitch_result_tiles = 0;
+    int stitch_result_relations = 0;
+    std::wstring stitch_result_tile_positions;
     std::size_t edf_frames = 0;
     int edf_focus_radius = 1;
     bool processing_result_visible = false;

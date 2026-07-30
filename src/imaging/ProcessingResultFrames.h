@@ -19,6 +19,7 @@ public:
     const ImageFrame& EdfFocusMap() const { return edf_focus_map_; }
     bool IsProcessingResultVisible() const { return show_processing_result_ && processing_result_.IsValid(); }
     ProcessingResultDisplaySource DisplaySource() const { return display_source_; }
+    const StitchResultMetadata& StitchMetadata() const { return stitch_metadata_; }
     std::wstring DisplaySourceLabel() const;
     std::wstring DisplayKindLabel() const;
 
@@ -31,6 +32,7 @@ private:
     ImageFrame processing_result_;
     ImageFrame edf_composite_frame_;
     ImageFrame edf_focus_map_;
+    StitchResultMetadata stitch_metadata_;
     bool show_processing_result_ = false;
     ProcessingResultDisplaySource display_source_ = ProcessingResultDisplaySource::None;
 };
