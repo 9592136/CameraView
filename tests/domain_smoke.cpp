@@ -23,7 +23,9 @@
 #include "../src/imaging/HistogramCalculator.h"
 #include "../src/imaging/ImageAdjuster.h"
 #include "../src/imaging/ImageRegistration.h"
+#include "../src/imaging/LiveStitchCapturePlanner.h"
 #include "../src/imaging/ImageStitcher.h"
+#include "../src/imaging/LiveStitchPreviewBuilder.h"
 #include "../src/imaging/OpenCvStitchBackend.h"
 #include "../src/imaging/ImageViewport.h"
 #include "../src/imaging/OverlayRenderer.h"
@@ -506,12 +508,30 @@ int main()
         WindowControlLayout::Compute(wide_client, 3);
     const WindowControlPlacement* processing_stitch_mode_combo =
         FindPlacement(processing_control_layout, kIdStitchModeCombo);
+    const WindowControlPlacement* processing_live_section =
+        FindPlacement(processing_control_layout, kIdStitchLiveSectionLabel);
+    const WindowControlPlacement* processing_import_section =
+        FindPlacement(processing_control_layout, kIdStitchImportSectionLabel);
+    const WindowControlPlacement* processing_gallery_section =
+        FindPlacement(processing_control_layout, kIdStitchGallerySectionLabel);
+    const WindowControlPlacement* processing_settings_section =
+        FindPlacement(processing_control_layout, kIdStitchSettingsSectionLabel);
+    const WindowControlPlacement* processing_output_section =
+        FindPlacement(processing_control_layout, kIdStitchOutputSectionLabel);
     const WindowControlPlacement* processing_stitch_method_combo =
         FindPlacement(processing_control_layout, kIdStitchMethodCombo);
     const WindowControlPlacement* processing_stitch_overlap_slider =
         FindPlacement(processing_control_layout, kIdStitchOverlapSlider);
+    const WindowControlPlacement* processing_stitch_orb =
+        FindPlacement(processing_control_layout, kIdStitchOrbRegistration);
     const WindowControlPlacement* processing_select_stitch_directory =
         FindPlacement(processing_control_layout, kIdSelectStitchDirectory);
+    const WindowControlPlacement* processing_live_interval =
+        FindPlacement(processing_control_layout, kIdLiveStitchIntervalEdit);
+    const WindowControlPlacement* processing_start_live_stitch =
+        FindPlacement(processing_control_layout, kIdStartLiveStitch);
+    const WindowControlPlacement* processing_stop_live_stitch =
+        FindPlacement(processing_control_layout, kIdStopLiveStitch);
     const WindowControlPlacement* processing_stitch_tile_label =
         FindPlacement(processing_control_layout, kIdStitchTileLabel);
     const WindowControlPlacement* processing_stitch_tile_list =
@@ -607,9 +627,22 @@ int main()
         return Fail("WindowControlLayout did not compute the expected measurement category placement.");
     }
     if (!processing_stitch_mode_combo ||
-        !processing_stitch_mode_combo->visible ||
+        !processing_live_section ||
+        !processing_live_section->visible ||
+        !processing_import_section ||
+        !processing_import_section->visible ||
+        !processing_gallery_section ||
+        !processing_gallery_section->visible ||
+        !processing_settings_section ||
+        !processing_output_section ||
         !processing_select_stitch_directory ||
         !processing_select_stitch_directory->visible ||
+        !processing_live_interval ||
+        !processing_live_interval->visible ||
+        !processing_start_live_stitch ||
+        !processing_start_live_stitch->visible ||
+        !processing_stop_live_stitch ||
+        !processing_stop_live_stitch->visible ||
         !processing_stitch_tile_label ||
         !processing_stitch_tile_label->visible ||
         !processing_stitch_tile_list ||
@@ -619,9 +652,11 @@ int main()
         !processing_clear_stitch_tiles ||
         !processing_clear_stitch_tiles->visible ||
         !processing_stitch_method_combo ||
+        !processing_stitch_orb ||
         !processing_stitch_overlap_slider ||
-        processing_stitch_tile_list->bounds.bottom <= processing_stitch_tile_list->bounds.top) {
-        return Fail("WindowControlLayout did not expose the Python-style stitch controls and tile gallery.");
+        processing_stitch_tile_list->bounds.bottom <= processing_stitch_tile_list->bounds.top ||
+        processing_stitch_tile_list->bounds.bottom - processing_stitch_tile_list->bounds.top < 120) {
+        return Fail("WindowControlLayout did not expose grouped live stitch controls and the larger tile gallery.");
     }
     if (!project_design_template ||
         !project_design_template->visible ||
@@ -640,19 +675,19 @@ int main()
         WindowControlLayout::Compute(compact_client, 3);
     const std::vector<WindowControlPlacement> scrolled_compact_processing_layout =
         WindowControlLayout::Compute(compact_client, 3, std::min(54, compact_processing_scroll));
-    const WindowControlPlacement* compact_stitch_mode =
-        FindPlacement(compact_processing_layout, kIdStitchModeCombo);
-    const WindowControlPlacement* scrolled_compact_stitch_mode =
-        FindPlacement(scrolled_compact_processing_layout, kIdStitchModeCombo);
+    const WindowControlPlacement* compact_live_section =
+        FindPlacement(compact_processing_layout, kIdStitchLiveSectionLabel);
+    const WindowControlPlacement* scrolled_compact_live_section =
+        FindPlacement(scrolled_compact_processing_layout, kIdStitchLiveSectionLabel);
     const WindowControlPlacement* compact_panel_scroll_bar =
         FindPlacement(compact_processing_layout, kIdPanelScrollBar);
     const RECT compact_panel = WindowLayout::SidePanelRect(compact_client);
     if (compact_processing_scroll <= 0 ||
-        !compact_stitch_mode ||
-        !compact_stitch_mode->visible ||
-        !scrolled_compact_stitch_mode ||
-        !scrolled_compact_stitch_mode->visible ||
-        scrolled_compact_stitch_mode->bounds.top >= compact_stitch_mode->bounds.top) {
+        !compact_live_section ||
+        !compact_live_section->visible ||
+        !scrolled_compact_live_section ||
+        !scrolled_compact_live_section->visible ||
+        scrolled_compact_live_section->bounds.top >= compact_live_section->bounds.top) {
         return Fail("WindowControlLayout did not scroll compact side-panel content.");
     }
     if (!compact_panel_scroll_bar ||
@@ -1891,6 +1926,24 @@ int main()
         processing_frames.EdfCompositeFrame().IsValid() ||
         processing_frames.EdfFocusMap().IsValid()) {
         return Fail("ProcessingResultFrames did not apply a stitch result.");
+    }
+    StitchResultMetadata live_preview_metadata;
+    live_preview_metadata.available = true;
+    live_preview_metadata.backend = L"Live preview";
+    live_preview_metadata.tiles.push_back(StitchResultTileMetadata{0, 0, 4, 3, true});
+    if (!processing_frames.ShowStitchPreview(MakeSolidImage(4, 3, 4, 5, 6), live_preview_metadata) ||
+        !processing_frames.IsProcessingResultVisible() ||
+        processing_frames.ProcessingResult().width != 4 ||
+        processing_frames.DisplaySource() != ProcessingResultDisplaySource::Stitch ||
+        processing_frames.StitchMetadata().backend != L"Live preview" ||
+        processing_frames.StitchMetadata().tiles.size() != 1U ||
+        processing_frames.EdfCompositeFrame().IsValid() ||
+        processing_frames.EdfFocusMap().IsValid()) {
+        return Fail("ProcessingResultFrames did not show a live stitch preview.");
+    }
+    if (processing_frames.ShowStitchPreview(ImageFrame{}, StitchResultMetadata{}) ||
+        processing_frames.ProcessingResult().width != 4) {
+        return Fail("ProcessingResultFrames should reject an empty live stitch preview.");
     }
     ProcessingJobResult edf_frame_result;
     edf_frame_result.kind = ProcessingJobKind::Edf;
@@ -4178,6 +4231,106 @@ int main()
     }
     if (!NonDecreasingProgress(stitch_progress)) {
         return Fail("Image stitching did not report monotonic progress from 0 to 100.");
+    }
+    StitchTile live_preview_left;
+    live_preview_left.frame = MakeSolidImage(640, 320, 10, 20, 30);
+    live_preview_left.offset_x = 0;
+    live_preview_left.offset_y = 0;
+    StitchTile live_preview_right;
+    live_preview_right.frame = MakeSolidImage(640, 320, 40, 50, 60);
+    live_preview_right.offset_x = 480;
+    live_preview_right.offset_y = 0;
+    live_preview_right.estimated_position = true;
+    LiveStitchPreviewOptions live_preview_options;
+    live_preview_options.max_preview_edge = 512;
+    live_preview_options.overlap_percent = 25;
+    const LiveStitchPreviewResult live_preview =
+        LiveStitchPreviewBuilder::Build({live_preview_left, live_preview_right}, live_preview_options);
+    if (!live_preview.image.IsValid() ||
+        live_preview.scale != 3 ||
+        live_preview.image.width != 374 ||
+        live_preview.image.height != 107 ||
+        !live_preview.metadata.available ||
+        live_preview.metadata.backend != L"Live preview (downsampled)" ||
+        live_preview.metadata.overlap_percent != 25 ||
+        live_preview.metadata.tiles.size() != 2U ||
+        live_preview.metadata.tiles[1].offset_x != 160 ||
+        !live_preview.metadata.tiles[1].estimated_position) {
+        return Fail("LiveStitchPreviewBuilder did not create a downsampled live mosaic preview.");
+    }
+    const ImageFrame live_capture_pattern = MakePatternImage(900, 360);
+    StitchTile live_capture_reference;
+    live_capture_reference.frame = CropImage(live_capture_pattern, 0, 40, 360, 220);
+    live_capture_reference.offset_x = 0;
+    live_capture_reference.offset_y = 0;
+    LiveStitchCaptureOptions live_capture_options;
+    live_capture_options.max_registration_edge = 256;
+    live_capture_options.min_movement_percent = 20;
+    live_capture_options.min_overlap_percent = 15;
+    live_capture_options.search_percent = 85;
+    const LiveStitchCaptureDecision live_first_decision =
+        LiveStitchCapturePlanner::Evaluate({}, live_capture_reference.frame, live_capture_options);
+    if (!live_first_decision.should_capture || !live_first_decision.first_tile) {
+        return Fail("LiveStitchCapturePlanner did not accept the first live tile.");
+    }
+    const LiveStitchCaptureDecision live_still_decision =
+        LiveStitchCapturePlanner::Evaluate({live_capture_reference}, live_capture_reference.frame, live_capture_options);
+    if (live_still_decision.should_capture ||
+        !live_still_decision.registration_valid ||
+        live_still_decision.out_of_range_warning ||
+        live_still_decision.movement_percent >= live_capture_options.min_movement_percent) {
+        return Fail("LiveStitchCapturePlanner did not skip a still live frame.");
+    }
+    const ImageFrame live_capture_neighbor =
+        CropImage(live_capture_pattern, 250, 40, 360, 220);
+    const LiveStitchCaptureDecision live_move_decision =
+        LiveStitchCapturePlanner::Evaluate({live_capture_reference}, live_capture_neighbor, live_capture_options);
+    if (!live_move_decision.should_capture ||
+        !live_move_decision.registration_valid ||
+        std::abs(live_move_decision.dx - 250) > 8 ||
+        std::abs(live_move_decision.dy) > 8 ||
+        live_move_decision.overlap_percent < live_capture_options.min_overlap_percent) {
+        return Fail("LiveStitchCapturePlanner did not accept a moved overlapping live frame.");
+    }
+    LiveStitchCaptureOptions live_fast_capture_options = live_capture_options;
+    live_fast_capture_options.fast_mode = true;
+    live_fast_capture_options.max_registration_edge = 192;
+    live_fast_capture_options.reference_tile_count = 3;
+    const ImageFrame live_capture_low_overlap_neighbor =
+        CropImage(live_capture_pattern, 300, 40, 360, 220);
+    const LiveStitchCaptureDecision live_fast_low_overlap_decision =
+        LiveStitchCapturePlanner::Evaluate(
+            {live_capture_reference},
+            live_capture_low_overlap_neighbor,
+            live_fast_capture_options);
+    if (!live_fast_low_overlap_decision.should_capture ||
+        !live_fast_low_overlap_decision.registration_valid ||
+        std::abs(live_fast_low_overlap_decision.dx - 300) > 14 ||
+        std::abs(live_fast_low_overlap_decision.dy) > 14 ||
+        live_fast_low_overlap_decision.overlap_percent < live_capture_options.min_overlap_percent) {
+        return Fail("LiveStitchCapturePlanner fast mode did not accept a low-overlap adjacent live frame.");
+    }
+    const ImageFrame live_capture_borderline_neighbor =
+        CropImage(live_capture_pattern, 315, 40, 360, 220);
+    const LiveStitchCaptureDecision live_borderline_decision =
+        LiveStitchCapturePlanner::Evaluate(
+            {live_capture_reference},
+            live_capture_borderline_neighbor,
+            live_fast_capture_options);
+    if (live_borderline_decision.should_capture ||
+        live_borderline_decision.out_of_range_warning ||
+        (!live_borderline_decision.registration_valid && !live_borderline_decision.match_missing) ||
+        (live_borderline_decision.registration_valid &&
+            live_borderline_decision.overlap_percent >= live_capture_options.min_overlap_percent)) {
+        return Fail("LiveStitchCapturePlanner should treat borderline overlap as uncertain, not outside.");
+    }
+    const ImageFrame live_capture_far_neighbor =
+        CropImage(live_capture_pattern, 520, 40, 360, 220);
+    const LiveStitchCaptureDecision live_far_decision =
+        LiveStitchCapturePlanner::Evaluate({live_capture_reference}, live_capture_far_neighbor, live_capture_options);
+    if (live_far_decision.should_capture ||
+        (!live_far_decision.out_of_range_warning && !live_far_decision.match_missing)) {
+        return Fail("LiveStitchCapturePlanner did not flag a far live field as outside or unmatched.");
     }
     StitchTile exposure_left_tile;
     exposure_left_tile.frame = MakeSolidImage(96, 64, 90, 100, 110);

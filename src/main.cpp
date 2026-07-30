@@ -29,6 +29,8 @@
 #include "imaging/FluorescenceChannelListActions.h"
 #include "imaging/FluorescenceChannelUpdater.h"
 #include "imaging/ImageStitcher.h"
+#include "imaging/LiveStitchCapturePlanner.h"
+#include "imaging/LiveStitchPreviewBuilder.h"
 #include "imaging/ImageViewport.h"
 #include "imaging/OverlayRenderer.h"
 #include "imaging/PreviewDisplayActions.h"
@@ -73,6 +75,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
@@ -93,6 +96,25 @@ namespace {
 constexpr UINT kMsgFrameReady = WM_APP + 1;
 constexpr UINT kMsgStatusChanged = WM_APP + 2;
 constexpr UINT kMsgProcessingFinished = WM_APP + 3;
+constexpr UINT kMsgLiveStitchPreviewReady = WM_APP + 4;
+constexpr UINT kMsgLiveStitchCaptureReady = WM_APP + 5;
+constexpr UINT_PTR kLiveStitchTimerId = 5001;
+constexpr int kDefaultLiveStitchIntervalMs = 1200;
+constexpr int kMinLiveStitchIntervalMs = 250;
+constexpr int kMaxLiveStitchIntervalMs = 10000;
+constexpr int kLiveStitchPreviewMaxEdge = 960;
+constexpr int kLiveStitchPreviewTileMaxEdge = 640;
+constexpr int kLiveStitchRegistrationMaxEdge = 224;
+constexpr int kLiveStitchMinMovementPercent = 15;
+constexpr int kLiveStitchMinOverlapPercent = 15;
+constexpr int kLiveStitchReferenceTileCount = 5;
+constexpr int kLiveStitchOutOfRangeWarningFrames = 3;
+constexpr int kLiveStitchMissingMatchWarningFrames = 6;
+constexpr DWORD kLiveStitchStatusMinIntervalMs = 1000;
+constexpr DWORD kLiveStitchPreviewStatusMinIntervalMs = 700;
+constexpr DWORD kLiveStitchWarningBeepMinIntervalMs = 2500;
+constexpr DWORD kLivePreviewOverlayMinIntervalMs = 50;
+constexpr int kLivePreviewOverlayMaxEdge = 420;
 constexpr int kPanelTitleHeight = 34;
 constexpr int kFunctionPanelResizeGripWidth = 8;
 constexpr const wchar_t* kFunctionPanelVisibleProperty = L"CameraViewFunctionPanelVisible";
@@ -165,6 +187,24 @@ constexpr int kTemplateDesignerMeasurementPrecisionTwo = 4154;
 constexpr int kTemplateDesignerMeasurementPrecisionThree = 4155;
 constexpr int kTemplateDesignerLeftScrollBar = 4156;
 constexpr int kTemplatePlaceholderMenuBase = 4300;
+
+struct LiveStitchCaptureRequest {
+    std::vector<LiveStitchPreviewTile> reference_tiles;
+    std::shared_ptr<const ImageFrame> frame;
+    LiveStitchCaptureOptions options;
+    unsigned long long generation = 0;
+    unsigned long long sequence = 0;
+    std::size_t base_tile_count = 0;
+};
+
+struct LiveStitchCaptureResult {
+    LiveStitchCaptureDecision decision;
+    std::shared_ptr<const ImageFrame> frame;
+    unsigned long long generation = 0;
+    unsigned long long sequence = 0;
+    std::size_t base_tile_count = 0;
+    long long elapsed_ms = 0;
+};
 
 enum class PreviewFrameCacheKind {
     None,
@@ -272,6 +312,8 @@ HMENU CreateMainMenu()
     AppendMenuW(camera_menu, MF_STRING, kIdWhiteBalance, L"White Balance");
 
     AppendMenuW(processing_menu, MF_STRING, kIdAddStitchTile, L"Add Tile");
+    AppendMenuW(processing_menu, MF_STRING, kIdStartLiveStitch, L"Start Live Stitch");
+    AppendMenuW(processing_menu, MF_STRING, kIdStopLiveStitch, L"Stop Live Stitch");
     AppendMenuW(processing_menu, MF_STRING, kIdBuildStitch, L"Stitch");
     AppendMenuW(processing_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(processing_menu, MF_STRING, kIdAddEdfFrame, L"Add EDF Frame");
@@ -509,6 +551,8 @@ public:
             report_template_designer_ = nullptr;
         }
         Stop();
+        WaitForLiveStitchCaptureWorker();
+        WaitForLiveStitchPreviewWorker();
         RequestProcessingCancel();
         WaitForProcessingWorker();
         ReleasePaintBuffer();
@@ -532,6 +576,7 @@ public:
 
     void Stop()
     {
+        StopLiveStitchCapture(false);
         running_ = false;
         if (worker_.joinable()) {
             worker_.join();
@@ -1476,6 +1521,9 @@ public:
             InvalidatePreview(hwnd_);
         }
         if (result.changed) {
+            InvalidateLiveStitchCaptureState();
+            ClearLiveStitchPreviewTileCache();
+            ClearLiveStitchReferenceTileCache();
             HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList);
             AppendStitchTileListItem(stitch_tile_list);
             if (stitch_tile_list && result.stitch_tile_count > 0) {
@@ -1484,6 +1532,715 @@ public:
             SetStitchSourceStatus(std::to_wstring(stitch_tiles_.size()) + L" image(s) | camera/current image");
         }
         SetStatus(L"Add Tile " + std::to_wstring(add_tile_ms) + L" ms. " + result.message);
+    }
+
+    LiveStitchPreviewOptions CurrentLiveStitchPreviewOptions() const
+    {
+        LiveStitchPreviewOptions options;
+        options.max_preview_edge = kLiveStitchPreviewMaxEdge;
+        options.overlap_percent = stitch_overlap_percent_;
+        options.blend_mode = stitch_options_.blend_mode;
+        return options;
+    }
+
+    LiveStitchCaptureOptions CurrentLiveStitchCaptureOptions() const
+    {
+        LiveStitchCaptureOptions options;
+        options.max_registration_edge = kLiveStitchRegistrationMaxEdge;
+        options.min_movement_percent = kLiveStitchMinMovementPercent;
+        options.min_overlap_percent = kLiveStitchMinOverlapPercent;
+        options.search_percent =
+            std::max(stitch_search_percent_, 100 - kLiveStitchMinOverlapPercent);
+        options.fast_mode = true;
+        options.reference_tile_count = kLiveStitchReferenceTileCount;
+        return options;
+    }
+
+    void ClearLiveStitchPreviewTileCache()
+    {
+        live_stitch_preview_tiles_.clear();
+        live_stitch_preview_tile_scale_ = 0;
+    }
+
+    void ClearLiveStitchReferenceTileCache()
+    {
+        live_stitch_reference_tiles_.clear();
+    }
+
+    static LiveStitchPreviewTile BuildSharedTileRef(
+        const StitchTile& tile,
+        std::shared_ptr<const ImageFrame> shared_frame = nullptr)
+    {
+        LiveStitchPreviewTile tile_ref;
+        tile_ref.frame = shared_frame ? std::move(shared_frame) : std::make_shared<ImageFrame>(tile.frame);
+        tile_ref.offset_x = tile.offset_x;
+        tile_ref.offset_y = tile.offset_y;
+        tile_ref.estimated_position = tile.estimated_position;
+        return tile_ref;
+    }
+
+    static std::vector<StitchTile> BuildStitchTilesFromRefs(
+        const std::vector<LiveStitchPreviewTile>& refs)
+    {
+        std::vector<StitchTile> tiles;
+        tiles.reserve(refs.size());
+        for (const LiveStitchPreviewTile& ref : refs) {
+            if (!ref.frame || !ref.frame->IsValid()) {
+                continue;
+            }
+            StitchTile tile;
+            tile.frame = *ref.frame;
+            tile.offset_x = ref.offset_x;
+            tile.offset_y = ref.offset_y;
+            tile.estimated_position = ref.estimated_position;
+            tiles.push_back(std::move(tile));
+        }
+        return tiles;
+    }
+
+    void AppendLiveStitchReferenceTileCache(
+        const StitchTile& tile,
+        std::shared_ptr<const ImageFrame> shared_frame = nullptr)
+    {
+        if (!tile.frame.IsValid() && !shared_frame) {
+            return;
+        }
+        live_stitch_reference_tiles_.push_back(BuildSharedTileRef(tile, std::move(shared_frame)));
+        const std::size_t max_references =
+            static_cast<std::size_t>(std::max(1, kLiveStitchReferenceTileCount));
+        if (live_stitch_reference_tiles_.size() > max_references) {
+            live_stitch_reference_tiles_.erase(
+                live_stitch_reference_tiles_.begin(),
+                live_stitch_reference_tiles_.begin() +
+                    static_cast<std::ptrdiff_t>(live_stitch_reference_tiles_.size() - max_references));
+        }
+    }
+
+    void RebuildLiveStitchReferenceTileCache()
+    {
+        ClearLiveStitchReferenceTileCache();
+        const std::size_t reference_count =
+            std::min(static_cast<std::size_t>(kLiveStitchReferenceTileCount), stitch_tiles_.size());
+        const std::size_t first_index = stitch_tiles_.size() - reference_count;
+        for (std::size_t index = first_index; index < stitch_tiles_.size(); ++index) {
+            AppendLiveStitchReferenceTileCache(stitch_tiles_[index]);
+        }
+    }
+
+    void AppendLiveStitchPreviewTileCache(
+        const StitchTile& tile,
+        std::shared_ptr<const ImageFrame> shared_frame = nullptr)
+    {
+        if (live_stitch_preview_tiles_.size() + 1U != stitch_tiles_.size()) {
+            ClearLiveStitchPreviewTileCache();
+            return;
+        }
+        if (live_stitch_preview_tile_scale_ <= 0) {
+            live_stitch_preview_tile_scale_ =
+                FastDownsampleScaleFor(tile.frame, kLiveStitchPreviewTileMaxEdge);
+        }
+
+        ImageFrame preview_frame =
+            BuildFastDownsampledFrame(
+                shared_frame ? *shared_frame : tile.frame,
+                std::max(1, live_stitch_preview_tile_scale_));
+        if (!preview_frame.IsValid()) {
+            ClearLiveStitchPreviewTileCache();
+            return;
+        }
+
+        LiveStitchPreviewTile preview_tile;
+        preview_tile.frame = std::make_shared<ImageFrame>(std::move(preview_frame));
+        preview_tile.offset_x =
+            static_cast<int>(std::lround(
+                static_cast<double>(tile.offset_x) / static_cast<double>(live_stitch_preview_tile_scale_)));
+        preview_tile.offset_y =
+            static_cast<int>(std::lround(
+                static_cast<double>(tile.offset_y) / static_cast<double>(live_stitch_preview_tile_scale_)));
+        preview_tile.estimated_position = tile.estimated_position;
+        live_stitch_preview_tiles_.push_back(std::move(preview_tile));
+    }
+
+    void RebuildLiveStitchPreviewTileCache()
+    {
+        ClearLiveStitchPreviewTileCache();
+        if (stitch_tiles_.empty()) {
+            return;
+        }
+
+        int scale = 1;
+        for (const StitchTile& tile : stitch_tiles_) {
+            if (tile.frame.IsValid()) {
+                scale = std::max(scale, FastDownsampleScaleFor(tile.frame, kLiveStitchPreviewTileMaxEdge));
+            }
+        }
+        live_stitch_preview_tile_scale_ = std::max(1, scale);
+
+        live_stitch_preview_tiles_.reserve(stitch_tiles_.size());
+        for (const StitchTile& tile : stitch_tiles_) {
+            if (!tile.frame.IsValid()) {
+                continue;
+            }
+
+            ImageFrame preview_frame =
+                BuildFastDownsampledFrame(tile.frame, live_stitch_preview_tile_scale_);
+            if (!preview_frame.IsValid()) {
+                ClearLiveStitchPreviewTileCache();
+                return;
+            }
+
+            LiveStitchPreviewTile preview_tile;
+            preview_tile.frame = std::make_shared<ImageFrame>(std::move(preview_frame));
+            preview_tile.offset_x =
+                static_cast<int>(std::lround(
+                    static_cast<double>(tile.offset_x) / static_cast<double>(live_stitch_preview_tile_scale_)));
+            preview_tile.offset_y =
+                static_cast<int>(std::lround(
+                    static_cast<double>(tile.offset_y) / static_cast<double>(live_stitch_preview_tile_scale_)));
+            preview_tile.estimated_position = tile.estimated_position;
+            live_stitch_preview_tiles_.push_back(std::move(preview_tile));
+        }
+    }
+
+    std::vector<LiveStitchPreviewTile> BuildLiveStitchPreviewSnapshot() const
+    {
+        if (live_stitch_active_ &&
+            !live_stitch_preview_tiles_.empty() &&
+            live_stitch_preview_tiles_.size() == stitch_tiles_.size()) {
+            return live_stitch_preview_tiles_;
+        }
+        if (live_stitch_active_) {
+            return live_stitch_preview_tiles_;
+        }
+
+        std::vector<LiveStitchPreviewTile> snapshot;
+        snapshot.reserve(stitch_tiles_.size());
+        for (const StitchTile& tile : stitch_tiles_) {
+            if (tile.frame.IsValid()) {
+                snapshot.push_back(BuildSharedTileRef(tile));
+            }
+        }
+        return snapshot;
+    }
+
+    std::vector<LiveStitchPreviewTile> BuildLiveStitchReferenceSnapshot()
+    {
+        if (live_stitch_reference_tiles_.empty() && !stitch_tiles_.empty()) {
+            RebuildLiveStitchReferenceTileCache();
+        }
+
+        std::vector<LiveStitchPreviewTile> snapshot;
+        const std::size_t reference_count =
+            std::min(static_cast<std::size_t>(kLiveStitchReferenceTileCount), live_stitch_reference_tiles_.size());
+        snapshot.reserve(reference_count);
+        const std::size_t first_index = live_stitch_reference_tiles_.size() - reference_count;
+        for (std::size_t index = first_index; index < live_stitch_reference_tiles_.size(); ++index) {
+            snapshot.push_back(live_stitch_reference_tiles_[index]);
+        }
+        return snapshot;
+    }
+
+    void InvalidateLiveStitchPreviewState()
+    {
+        std::lock_guard<std::mutex> lock(live_stitch_preview_mutex_);
+        ++live_stitch_preview_generation_;
+        live_stitch_preview_min_generation_ = live_stitch_preview_generation_;
+        live_stitch_preview_request_pending_ = false;
+        live_stitch_preview_ready_ = false;
+        live_stitch_preview_pending_tiles_.clear();
+        live_stitch_preview_ready_image_ = ImageFrame();
+        live_stitch_preview_ready_metadata_ = StitchResultMetadata();
+    }
+
+    void WaitForLiveStitchPreviewWorker()
+    {
+        InvalidateLiveStitchPreviewState();
+        if (live_stitch_preview_worker_.joinable()) {
+            live_stitch_preview_worker_.join();
+        }
+    }
+
+    void RequestLiveStitchPreviewUpdate()
+    {
+        if (stitch_tiles_.empty()) {
+            return;
+        }
+
+        std::vector<LiveStitchPreviewTile> tiles_snapshot = BuildLiveStitchPreviewSnapshot();
+        const LiveStitchPreviewOptions options = CurrentLiveStitchPreviewOptions();
+        bool start_worker = false;
+        {
+            std::lock_guard<std::mutex> lock(live_stitch_preview_mutex_);
+            live_stitch_preview_pending_tiles_ = std::move(tiles_snapshot);
+            live_stitch_preview_pending_options_ = options;
+            live_stitch_preview_request_pending_ = true;
+            ++live_stitch_preview_generation_;
+            live_stitch_preview_pending_generation_ = live_stitch_preview_generation_;
+            live_stitch_preview_min_generation_ = live_stitch_preview_generation_;
+            if (!live_stitch_preview_worker_running_) {
+                live_stitch_preview_worker_running_ = true;
+                start_worker = true;
+            }
+        }
+
+        if (start_worker) {
+            if (live_stitch_preview_worker_.joinable()) {
+                live_stitch_preview_worker_.join();
+            }
+            live_stitch_preview_worker_ = std::thread(&CameraPreviewApp::LiveStitchPreviewThread, this);
+        }
+    }
+
+    void LiveStitchPreviewThread()
+    {
+        for (;;) {
+            std::vector<LiveStitchPreviewTile> tiles;
+            LiveStitchPreviewOptions options;
+            unsigned long long generation = 0;
+            {
+                std::lock_guard<std::mutex> lock(live_stitch_preview_mutex_);
+                if (!live_stitch_preview_request_pending_) {
+                    live_stitch_preview_worker_running_ = false;
+                    return;
+                }
+                tiles = std::move(live_stitch_preview_pending_tiles_);
+                options = live_stitch_preview_pending_options_;
+                generation = live_stitch_preview_pending_generation_;
+                live_stitch_preview_request_pending_ = false;
+            }
+
+            LiveStitchPreviewResult preview =
+                LiveStitchPreviewBuilder::Build(tiles, options);
+            if (!preview.image.IsValid()) {
+                continue;
+            }
+
+            bool should_post = false;
+            {
+                std::lock_guard<std::mutex> lock(live_stitch_preview_mutex_);
+                if (generation >= live_stitch_preview_min_generation_) {
+                    live_stitch_preview_ready_image_ = std::move(preview.image);
+                    live_stitch_preview_ready_metadata_ = std::move(preview.metadata);
+                    live_stitch_preview_ready_generation_ = generation;
+                    live_stitch_preview_ready_ = true;
+                    should_post = true;
+                }
+            }
+            if (should_post) {
+                PostMessageW(hwnd_, kMsgLiveStitchPreviewReady, 0, 0);
+            }
+        }
+    }
+
+    void ApplyLiveStitchPreviewResult()
+    {
+        ImageFrame image;
+        StitchResultMetadata metadata;
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> lock(live_stitch_preview_mutex_);
+            ready =
+                live_stitch_preview_ready_ &&
+                live_stitch_preview_ready_generation_ >= live_stitch_preview_min_generation_;
+            if (ready) {
+                image = std::move(live_stitch_preview_ready_image_);
+                metadata = std::move(live_stitch_preview_ready_metadata_);
+                live_stitch_preview_ready_ = false;
+            }
+        }
+        if (!ready || !image.IsValid()) {
+            return;
+        }
+
+        if (processing_frames_.ShowStitchPreview(std::move(image), std::move(metadata))) {
+            image_viewport_.Reset();
+            InvalidatePreviewFrameCache();
+            InvalidatePreview(hwnd_);
+            const DWORD now = GetTickCount();
+            if (live_stitch_active_ &&
+                now - live_stitch_preview_status_tick_ >= kLiveStitchPreviewStatusMinIntervalMs) {
+                live_stitch_preview_status_tick_ = now;
+                SetLiveStitchStatus(L"Live stitch preview updated.");
+            }
+        }
+    }
+
+    void InvalidateLiveStitchCaptureState()
+    {
+        std::lock_guard<std::mutex> lock(live_stitch_capture_mutex_);
+        ++live_stitch_capture_generation_;
+        live_stitch_capture_min_generation_ = live_stitch_capture_generation_;
+        live_stitch_capture_request_pending_ = false;
+        live_stitch_capture_ready_ = false;
+        live_stitch_capture_pending_request_ = LiveStitchCaptureRequest();
+        live_stitch_capture_ready_result_ = LiveStitchCaptureResult();
+    }
+
+    void WaitForLiveStitchCaptureWorker()
+    {
+        InvalidateLiveStitchCaptureState();
+        if (live_stitch_capture_worker_.joinable()) {
+            live_stitch_capture_worker_.join();
+        }
+    }
+
+    void RequestLiveStitchCaptureEvaluation(
+        std::shared_ptr<const ImageFrame> frame,
+        LiveStitchCaptureOptions options)
+    {
+        if (!frame || !frame->IsValid()) {
+            return;
+        }
+
+        LiveStitchCaptureRequest request;
+        request.reference_tiles = BuildLiveStitchReferenceSnapshot();
+        request.frame = std::move(frame);
+        request.options = options;
+        request.sequence = request.frame->sequence;
+        request.base_tile_count = stitch_tiles_.size();
+
+        bool start_worker = false;
+        {
+            std::lock_guard<std::mutex> lock(live_stitch_capture_mutex_);
+            ++live_stitch_capture_generation_;
+            request.generation = live_stitch_capture_generation_;
+            live_stitch_capture_min_generation_ = live_stitch_capture_generation_;
+            live_stitch_capture_pending_request_ = std::move(request);
+            live_stitch_capture_request_pending_ = true;
+            if (!live_stitch_capture_worker_running_) {
+                live_stitch_capture_worker_running_ = true;
+                start_worker = true;
+            }
+        }
+
+        if (start_worker) {
+            if (live_stitch_capture_worker_.joinable()) {
+                live_stitch_capture_worker_.join();
+            }
+            live_stitch_capture_worker_ = std::thread(&CameraPreviewApp::LiveStitchCaptureThread, this);
+        }
+    }
+
+    void LiveStitchCaptureThread()
+    {
+        for (;;) {
+            LiveStitchCaptureRequest request;
+            {
+                std::lock_guard<std::mutex> lock(live_stitch_capture_mutex_);
+                if (!live_stitch_capture_request_pending_) {
+                    live_stitch_capture_worker_running_ = false;
+                    return;
+                }
+                request = std::move(live_stitch_capture_pending_request_);
+                live_stitch_capture_pending_request_ = LiveStitchCaptureRequest();
+                live_stitch_capture_request_pending_ = false;
+            }
+
+            const auto start = std::chrono::steady_clock::now();
+            LiveStitchCaptureDecision decision;
+            if (request.frame && request.frame->IsValid()) {
+                std::vector<StitchTile> reference_tiles =
+                    BuildStitchTilesFromRefs(request.reference_tiles);
+                decision = LiveStitchCapturePlanner::Evaluate(
+                    reference_tiles,
+                    *request.frame,
+                    request.options);
+            } else {
+                decision.message = L"Live stitch waiting for camera frame.";
+            }
+
+            LiveStitchCaptureResult result;
+            result.decision = std::move(decision);
+            result.frame = std::move(request.frame);
+            result.generation = request.generation;
+            result.sequence = request.sequence;
+            result.base_tile_count = request.base_tile_count;
+            result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start).count();
+
+            bool should_post = false;
+            {
+                std::lock_guard<std::mutex> lock(live_stitch_capture_mutex_);
+                if (result.generation >= live_stitch_capture_min_generation_) {
+                    live_stitch_capture_ready_result_ = std::move(result);
+                    live_stitch_capture_ready_ = true;
+                    should_post = true;
+                }
+            }
+            if (should_post) {
+                PostMessageW(hwnd_, kMsgLiveStitchCaptureReady, 0, 0);
+            }
+        }
+    }
+
+    void ApplyLiveStitchCaptureResult()
+    {
+        LiveStitchCaptureResult result;
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> lock(live_stitch_capture_mutex_);
+            ready =
+                live_stitch_capture_ready_ &&
+                live_stitch_capture_ready_result_.generation >= live_stitch_capture_min_generation_;
+            if (ready) {
+                result = std::move(live_stitch_capture_ready_result_);
+                live_stitch_capture_ready_result_ = LiveStitchCaptureResult();
+                live_stitch_capture_ready_ = false;
+            }
+        }
+        if (!ready || !live_stitch_active_) {
+            return;
+        }
+
+        const LiveStitchCaptureDecision& decision = result.decision;
+        if (!decision.should_capture) {
+            if (decision.match_missing) {
+                live_stitch_out_of_range_candidate_count_ = 0;
+                ++live_stitch_missing_match_count_;
+                const bool confirmed_warning =
+                    live_stitch_missing_match_count_ >= kLiveStitchMissingMatchWarningFrames;
+                if (!confirmed_warning) {
+                    live_stitch_out_of_range_warning_ = false;
+                    SetStitchSourceStatus(
+                        std::to_wstring(stitch_tiles_.size()) +
+                        L" image(s) | live camera capture");
+                    SetLiveStitchStatus(decision.message);
+                    return;
+                }
+
+                const bool warning_changed = !live_stitch_out_of_range_warning_;
+                const DWORD now = GetTickCount();
+                if (warning_changed ||
+                    now - live_stitch_last_warning_beep_tick_ >= kLiveStitchWarningBeepMinIntervalMs) {
+                    MessageBeep(MB_ICONWARNING);
+                    live_stitch_last_warning_beep_tick_ = now;
+                }
+                live_stitch_out_of_range_warning_ = true;
+                SetStitchSourceStatus(
+                    std::to_wstring(stitch_tiles_.size()) +
+                    L" image(s) | WARNING: outside stitch range");
+                SetLiveStitchStatus(
+                    L"Live stitch warning: no overlap match for several frames. Move back toward the last tile.",
+                    warning_changed);
+                return;
+            }
+
+            if (decision.out_of_range_warning) {
+                live_stitch_missing_match_count_ = 0;
+                ++live_stitch_out_of_range_candidate_count_;
+                const bool confirmed_warning =
+                    live_stitch_out_of_range_candidate_count_ >= kLiveStitchOutOfRangeWarningFrames;
+                if (!confirmed_warning) {
+                    live_stitch_out_of_range_warning_ = false;
+                    SetStitchSourceStatus(
+                        std::to_wstring(stitch_tiles_.size()) +
+                        L" image(s) | live camera capture");
+                    SetLiveStitchStatus(
+                        L"Live stitch registration uncertain. Keep at least " +
+                        std::to_wstring(kLiveStitchMinOverlapPercent) +
+                        L"% overlap.");
+                    return;
+                }
+
+                const bool warning_changed = !live_stitch_out_of_range_warning_;
+                const DWORD now = GetTickCount();
+                if ((warning_changed ||
+                        now - live_stitch_last_warning_beep_tick_ >= kLiveStitchWarningBeepMinIntervalMs)) {
+                    MessageBeep(MB_ICONWARNING);
+                    live_stitch_last_warning_beep_tick_ = now;
+                }
+                live_stitch_out_of_range_warning_ = true;
+                SetStitchSourceStatus(
+                    std::to_wstring(stitch_tiles_.size()) +
+                    L" image(s) | WARNING: outside stitch range");
+                if (!decision.message.empty()) {
+                    SetLiveStitchStatus(decision.message, warning_changed);
+                }
+                return;
+            }
+
+            live_stitch_out_of_range_candidate_count_ = 0;
+            live_stitch_missing_match_count_ = 0;
+            live_stitch_out_of_range_warning_ = false;
+            SetStitchSourceStatus(
+                std::to_wstring(stitch_tiles_.size()) + L" image(s) | live camera capture");
+            if (!decision.message.empty()) {
+                SetLiveStitchStatus(decision.message);
+            }
+            return;
+        }
+
+        if (!result.frame || !result.frame->IsValid()) {
+            SetLiveStitchStatus(L"Live stitch skipped: camera frame was no longer available.");
+            return;
+        }
+        if (result.base_tile_count != stitch_tiles_.size()) {
+            SetLiveStitchStatus(L"Live stitch skipped stale registration result.");
+            return;
+        }
+
+        live_stitch_out_of_range_warning_ = false;
+        live_stitch_out_of_range_candidate_count_ = 0;
+        live_stitch_missing_match_count_ = 0;
+        StitchTile tile;
+        tile.frame = *result.frame;
+        if (!stitch_tiles_.empty()) {
+            tile.offset_x = decision.tile_offset_x;
+            tile.offset_y = decision.tile_offset_y;
+            tile.estimated_position = !decision.registration_valid;
+        }
+        stitch_tiles_.push_back(std::move(tile));
+        AppendLiveStitchReferenceTileCache(stitch_tiles_.back(), result.frame);
+        AppendLiveStitchPreviewTileCache(stitch_tiles_.back(), result.frame);
+        ++live_stitch_capture_count_;
+        processing_frames_.Clear();
+        InvalidateLiveStitchCaptureState();
+
+        HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList);
+        AppendStitchTileListItem(stitch_tile_list);
+        if (stitch_tile_list && !stitch_tiles_.empty()) {
+            SendMessageW(stitch_tile_list, LB_SETCURSEL, stitch_tiles_.size() - 1U, 0);
+        }
+        RequestLiveStitchPreviewUpdate();
+        SetStitchSourceStatus(
+            std::to_wstring(stitch_tiles_.size()) + L" image(s) | live camera capture");
+
+        std::wstring message =
+            L"Live tile " + std::to_wstring(live_stitch_capture_count_) +
+            L" captured. Registration " + std::to_wstring(result.elapsed_ms) +
+            L" ms in background.";
+        if (!decision.message.empty()) {
+            message += L" " + decision.message;
+        }
+        message += L" Preview updating.";
+        SetLiveStitchStatus(message, true);
+    }
+
+    void SyncLiveStitchControls()
+    {
+        if (HWND interval = GetDlgItem(hwnd_, kIdLiveStitchIntervalEdit)) {
+            SetWindowTextW(interval, std::to_wstring(live_stitch_interval_ms_).c_str());
+            EnableWindow(interval, live_stitch_active_ ? FALSE : TRUE);
+        }
+        EnableWindow(GetDlgItem(hwnd_, kIdStartLiveStitch), live_stitch_active_ ? FALSE : TRUE);
+        EnableWindow(GetDlgItem(hwnd_, kIdStopLiveStitch), live_stitch_active_ ? TRUE : FALSE);
+    }
+
+    void StartLiveStitchCapture()
+    {
+        if (live_stitch_active_) {
+            SetStatus(L"Live stitch is already running.");
+            return;
+        }
+        if (!running_.load()) {
+            SetStatus(L"Open camera before live stitch capture.");
+            return;
+        }
+        if (!frame_buffer_.HasFrame()) {
+            SetStatus(L"Live stitch waiting for the first camera frame.");
+            return;
+        }
+
+        int interval_ms = live_stitch_interval_ms_;
+        if (!ReadIntegerRange(
+                GetDlgItem(hwnd_, kIdLiveStitchIntervalEdit),
+                kMinLiveStitchIntervalMs,
+                kMaxLiveStitchIntervalMs,
+                interval_ms,
+                L"Live interval must be 250-10000 ms.")) {
+            return;
+        }
+
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
+        RebuildLiveStitchReferenceTileCache();
+        RebuildLiveStitchPreviewTileCache();
+        live_stitch_active_ = true;
+        live_stitch_interval_ms_ = interval_ms;
+        live_stitch_last_evaluated_sequence_ = 0;
+        live_stitch_capture_count_ = 0;
+        live_stitch_out_of_range_warning_ = false;
+        live_stitch_out_of_range_candidate_count_ = 0;
+        live_stitch_missing_match_count_ = 0;
+        live_stitch_last_warning_beep_tick_ = 0;
+        live_stitch_tick_in_progress_ = false;
+        live_stitch_last_status_tick_ = 0;
+        live_stitch_preview_status_tick_ = 0;
+        live_stitch_last_status_message_.clear();
+        SyncLiveStitchControls();
+        SetStatus(L"Live stitch started. Move the stage; frames will be captured automatically.");
+        SetTimer(hwnd_, kLiveStitchTimerId, static_cast<UINT>(live_stitch_interval_ms_), nullptr);
+        CaptureLiveStitchTick();
+    }
+
+    void StopLiveStitchCapture(bool update_status = true)
+    {
+        if (!live_stitch_active_) {
+            return;
+        }
+        KillTimer(hwnd_, kLiveStitchTimerId);
+        live_stitch_active_ = false;
+        live_stitch_tick_in_progress_ = false;
+        live_stitch_out_of_range_candidate_count_ = 0;
+        live_stitch_missing_match_count_ = 0;
+        InvalidateLiveStitchCaptureState();
+        SyncLiveStitchControls();
+        if (update_status) {
+            SetStatus(L"Live stitch stopped. Tiles: " + std::to_wstring(stitch_tiles_.size()) + L".");
+        }
+    }
+
+    void CaptureLiveStitchTick()
+    {
+        if (!live_stitch_active_) {
+            return;
+        }
+        if (live_stitch_tick_in_progress_) {
+            return;
+        }
+
+        live_stitch_tick_in_progress_ = true;
+        struct TickGuard {
+            bool& active;
+            ~TickGuard() { active = false; }
+        } guard{live_stitch_tick_in_progress_};
+
+        if (processing_state_.IsRunning()) {
+            SetLiveStitchStatus(L"Live stitch paused while processing is running.");
+            return;
+        }
+
+        const std::shared_ptr<const ImageFrame> frame = frame_buffer_.SnapshotShared();
+        if (!frame || !frame->IsValid()) {
+            SetLiveStitchStatus(L"Live stitch waiting for camera frame.");
+            return;
+        }
+        if (frame->sequence != 0 && frame->sequence == live_stitch_last_evaluated_sequence_) {
+            return;
+        }
+        live_stitch_last_evaluated_sequence_ = frame->sequence;
+
+        int overlap_percent = stitch_overlap_percent_;
+        if (!ReadIntegerRange(
+                GetDlgItem(hwnd_, kIdStitchSearchEdit),
+                ProcessingParameterRules::MinStitchOverlapPercent(),
+                ProcessingParameterRules::MaxStitchOverlapPercent(),
+                overlap_percent,
+                L"Estimated overlap must be 5-50 percent.")) {
+            StopLiveStitchCapture(false);
+            return;
+        }
+        if (overlap_percent != stitch_overlap_percent_) {
+            stitch_overlap_percent_ = overlap_percent;
+            stitch_search_percent_ = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_percent_);
+            stitch_options_.overlap_percent = stitch_overlap_percent_;
+            SyncStitchOverlapControls();
+        }
+
+        RequestLiveStitchCaptureEvaluation(frame, CurrentLiveStitchCaptureOptions());
+        SetLiveStitchStatus(L"Live stitch registration running in background.");
     }
 
     void DeleteSelectedStitchTile()
@@ -1497,6 +2254,10 @@ public:
             return;
         }
 
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         processing_frames_.Clear();
         RefreshStitchTileList(list);
         if (list && result.next_selection) {
@@ -1511,12 +2272,17 @@ public:
     }
     void ClearStitchTiles()
     {
+        StopLiveStitchCapture(false);
         const StitchTileListActionResult result = StitchTileListActions::Clear(stitch_tiles_);
         if (!result.changed) {
             SetStatus(result.message);
             return;
         }
 
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         processing_frames_.Clear();
         RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         InvalidatePreviewFrameCache();
@@ -1572,8 +2338,25 @@ public:
 
     void SetStitchSourceStatus(std::wstring status)
     {
+        if (stitch_source_status_ == status) {
+            return;
+        }
         stitch_source_status_ = std::move(status);
         SyncStitchSourceStatusControl();
+    }
+
+    void SetLiveStitchStatus(const std::wstring& message, bool force = false)
+    {
+        const DWORD now = GetTickCount();
+        if (!force &&
+            message == live_stitch_last_status_message_ &&
+            now - live_stitch_last_status_tick_ < kLiveStitchStatusMinIntervalMs) {
+            return;
+        }
+
+        live_stitch_last_status_tick_ = now;
+        live_stitch_last_status_message_ = message;
+        SetStatus(message);
     }
 
     void SyncStitchSettingsControls()
@@ -1647,6 +2430,7 @@ public:
         }
         stitch_options_.overlap_percent = stitch_overlap_percent_;
         SyncStitchSettingsControls();
+        SyncLiveStitchControls();
     }
 
     bool ReadIntegerRange(HWND edit, int min_value, int max_value, int& value, const std::wstring& message)
@@ -1801,6 +2585,10 @@ public:
             return;
         }
 
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         processing_frames_.Clear();
         RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         if (HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList)) {
@@ -1870,6 +2658,11 @@ public:
 
     void BuildStitchPreview()
     {
+        StopLiveStitchCapture(false);
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         const std::optional<StitchProcessingOptions> options = ReadStitchProcessingOptions();
         if (!options) {
             return;
@@ -1971,6 +2764,11 @@ public:
 
     void ClearProcessing()
     {
+        StopLiveStitchCapture(false);
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         const ProcessingPanelActionResult result = ProcessingPanelActions::Clear(
             processing_state_,
             stitch_tiles_,
@@ -2013,6 +2811,201 @@ public:
                     false)) {
                 SetStatus(result.message);
             }
+        }
+    }
+
+    bool IsLiveCameraPreviewOverlayVisible() const
+    {
+        return running_.load() &&
+            processing_frames_.IsProcessingResultVisible() &&
+            processing_frames_.DisplaySource() == ProcessingResultDisplaySource::Stitch;
+    }
+
+    static bool HasDrawableBgrRows(const ImageFrame& frame)
+    {
+        if (!frame.IsValid() || frame.stride < frame.width * 3) {
+            return false;
+        }
+
+        const std::size_t required =
+            static_cast<std::size_t>(frame.height - 1) * static_cast<std::size_t>(frame.stride) +
+            static_cast<std::size_t>(frame.width) * 3U;
+        return frame.bgr.size() >= required;
+    }
+
+    static int FastDownsampleScaleFor(const ImageFrame& source, int max_edge)
+    {
+        if (!HasDrawableBgrRows(source)) {
+            return 1;
+        }
+
+        const int capped_edge = std::max(64, max_edge);
+        const int source_max_edge = std::max(source.width, source.height);
+        return std::max(1, (source_max_edge + capped_edge - 1) / capped_edge);
+    }
+
+    static ImageFrame BuildFastDownsampledFrame(const ImageFrame& source, int scale)
+    {
+        if (!HasDrawableBgrRows(source)) {
+            return {};
+        }
+
+        if (scale <= 1) {
+            return source;
+        }
+
+        ImageFrame preview;
+        preview.width = std::max(1, (source.width + scale - 1) / scale);
+        preview.height = std::max(1, (source.height + scale - 1) / scale);
+        preview.stride = (preview.width * 3 + 3) & ~3;
+        preview.timestamp = source.timestamp;
+        preview.sequence = source.sequence;
+        preview.bgr.assign(
+            static_cast<std::size_t>(preview.stride) * static_cast<std::size_t>(preview.height),
+            0);
+
+        for (int y = 0; y < preview.height; ++y) {
+            const int source_y = std::min(source.height - 1, y * scale);
+            const unsigned char* source_row =
+                source.bgr.data() + static_cast<std::size_t>(source_y) * static_cast<std::size_t>(source.stride);
+            unsigned char* preview_row =
+                preview.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(preview.stride);
+            for (int x = 0; x < preview.width; ++x) {
+                const int source_x = std::min(source.width - 1, x * scale);
+                const unsigned char* source_pixel = source_row + static_cast<std::size_t>(source_x) * 3U;
+                unsigned char* preview_pixel = preview_row + static_cast<std::size_t>(x) * 3U;
+                preview_pixel[0] = source_pixel[0];
+                preview_pixel[1] = source_pixel[1];
+                preview_pixel[2] = source_pixel[2];
+            }
+        }
+
+        return preview;
+    }
+
+    static ImageFrame BuildLivePreviewOverlayFrame(const ImageFrame& source)
+    {
+        return BuildFastDownsampledFrame(
+            source,
+            FastDownsampleScaleFor(source, kLivePreviewOverlayMaxEdge));
+    }
+
+    RECT LiveCameraPreviewOverlayRect(const RECT& preview) const
+    {
+        constexpr int kMargin = 16;
+        const int area_width = preview.right - preview.left;
+        const int area_height = preview.bottom - preview.top;
+        if (area_width <= kMargin * 2 + 80 || area_height <= kMargin * 2 + 80) {
+            return RECT{0, 0, 0, 0};
+        }
+
+        int width = std::clamp(area_width / 4, 220, 360);
+        int height = std::clamp(area_height / 4, 160, 260);
+        width = std::min(width, area_width - kMargin * 2);
+        height = std::min(height, area_height - kMargin * 2);
+        return RECT{
+            preview.right - kMargin - width,
+            preview.top + kMargin,
+            preview.right - kMargin,
+            preview.top + kMargin + height};
+    }
+
+    static RECT FitFrameRect(const RECT& bounds, const ImageFrame& frame)
+    {
+        const int bounds_width = bounds.right - bounds.left;
+        const int bounds_height = bounds.bottom - bounds.top;
+        if (bounds_width <= 0 || bounds_height <= 0 || !frame.IsValid()) {
+            return bounds;
+        }
+
+        const double scale = std::min(
+            static_cast<double>(bounds_width) / static_cast<double>(std::max(1, frame.width)),
+            static_cast<double>(bounds_height) / static_cast<double>(std::max(1, frame.height)));
+        const int draw_width = std::max(1, static_cast<int>(std::lround(frame.width * scale)));
+        const int draw_height = std::max(1, static_cast<int>(std::lround(frame.height * scale)));
+        return RECT{
+            bounds.left + (bounds_width - draw_width) / 2,
+            bounds.top + (bounds_height - draw_height) / 2,
+            bounds.left + (bounds_width - draw_width) / 2 + draw_width,
+            bounds.top + (bounds_height - draw_height) / 2 + draw_height};
+    }
+
+    void DrawLiveCameraPreviewOverlay(HDC hdc, const RECT& preview)
+    {
+        if (!IsLiveCameraPreviewOverlayVisible()) {
+            return;
+        }
+
+        const RECT panel = LiveCameraPreviewOverlayRect(preview);
+        if (panel.right <= panel.left || panel.bottom <= panel.top) {
+            return;
+        }
+
+        RECT shadow = panel;
+        OffsetRect(&shadow, 3, 3);
+        FillSolidRect(hdc, shadow, RGB(5, 8, 12));
+        FillSolidRect(hdc, panel, RGB(24, 29, 36));
+
+        HPEN border_pen = CreatePen(PS_SOLID, 1, RGB(94, 110, 130));
+        HGDIOBJ old_pen = SelectObject(hdc, border_pen);
+        HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, panel.left, panel.top, panel.right, panel.bottom);
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
+        DeleteObject(border_pen);
+
+        RECT header = panel;
+        header.bottom = std::min(header.bottom, header.top + 24);
+        FillSolidRect(hdc, header, RGB(37, 45, 55));
+        RECT header_text = header;
+        header_text.left += 8;
+        header_text.right -= 8;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(226, 232, 240));
+        DrawTextW(hdc, L"Live Preview", -1, &header_text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        RECT image_bounds = panel;
+        image_bounds.left += 6;
+        image_bounds.top = header.bottom + 6;
+        image_bounds.right -= 6;
+        image_bounds.bottom -= 6;
+        FillSolidRect(hdc, image_bounds, RGB(12, 15, 20));
+
+        const std::shared_ptr<const ImageFrame> live_frame = live_preview_overlay_buffer_.SnapshotShared();
+        if (!live_frame || !HasDrawableBgrRows(*live_frame)) {
+            SetTextColor(hdc, RGB(170, 180, 192));
+            DrawTextW(hdc, L"No live frame", -1, &image_bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return;
+        }
+
+        const RECT image_rect = FitFrameRect(image_bounds, *live_frame);
+        BITMAPINFO info = {};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = live_frame->width;
+        info.bmiHeader.biHeight = -live_frame->height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 24;
+        info.bmiHeader.biCompression = BI_RGB;
+
+        const int saved_dc = SaveDC(hdc);
+        IntersectClipRect(hdc, image_bounds.left, image_bounds.top, image_bounds.right, image_bounds.bottom);
+        SetStretchBltMode(hdc, COLORONCOLOR);
+        StretchDIBits(
+            hdc,
+            image_rect.left,
+            image_rect.top,
+            image_rect.right - image_rect.left,
+            image_rect.bottom - image_rect.top,
+            0,
+            0,
+            live_frame->width,
+            live_frame->height,
+            live_frame->bgr.data(),
+            &info,
+            DIB_RGB_COLORS,
+            SRCCOPY);
+        if (saved_dc) {
+            RestoreDC(hdc, saved_dc);
         }
     }
 
@@ -2084,6 +3077,7 @@ public:
             SetTextColor(hdc, RGB(210, 216, 224));
             DrawTextW(hdc, L"No frame", -1, &preview, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
+        DrawLiveCameraPreviewOverlay(hdc, preview);
 
         if (panel_category_ == 6) {
             constexpr int kHeaderH = 30;
@@ -2193,6 +3187,41 @@ public:
         const int dirty_height = dirty.bottom - dirty.top;
         if (width <= 0 || height <= 0 || dirty_width <= 0 || dirty_height <= 0) {
             return;
+        }
+
+        if (IsLiveCameraPreviewOverlayVisible()) {
+            const RECT preview = GetPreviewRect(hwnd_);
+            RECT overlay = LiveCameraPreviewOverlayRect(preview);
+            if (overlay.right > overlay.left && overlay.bottom > overlay.top) {
+                overlay.right += 4;
+                overlay.bottom += 4;
+                const bool dirty_inside_overlay =
+                    dirty.left >= overlay.left &&
+                    dirty.top >= overlay.top &&
+                    dirty.right <= overlay.right &&
+                    dirty.bottom <= overlay.bottom;
+                if (dirty_inside_overlay && EnsurePaintBuffer(hdc, width, height)) {
+                    const int saved_dc = SaveDC(paint_buffer_dc_);
+                    if (saved_dc) {
+                        IntersectClipRect(paint_buffer_dc_, dirty.left, dirty.top, dirty.right, dirty.bottom);
+                    }
+                    DrawLiveCameraPreviewOverlay(paint_buffer_dc_, preview);
+                    if (saved_dc) {
+                        RestoreDC(paint_buffer_dc_, saved_dc);
+                    }
+                    BitBlt(
+                        hdc,
+                        dirty.left,
+                        dirty.top,
+                        dirty_width,
+                        dirty_height,
+                        paint_buffer_dc_,
+                        dirty.left,
+                        dirty.top,
+                        SRCCOPY);
+                    return;
+                }
+            }
         }
 
         if (!EnsurePaintBuffer(hdc, width, height)) {
@@ -2781,6 +3810,10 @@ public:
             return;
         }
 
+        InvalidateLiveStitchPreviewState();
+        InvalidateLiveStitchCaptureState();
+        ClearLiveStitchPreviewTileCache();
+        ClearLiveStitchReferenceTileCache();
         processing_frames_.Clear();
         RefreshStitchTileList(GetDlgItem(hwnd_, kIdStitchTileList));
         if (HWND stitch_tile_list = GetDlgItem(hwnd_, kIdStitchTileList)) {
@@ -3192,6 +4225,11 @@ public:
         preview_frame_cache_valid_ = false;
         preview_frame_cache_kind_ = PreviewFrameCacheKind::None;
         preview_frame_cache_source_data_ = nullptr;
+    }
+
+    void HandleFrameReady()
+    {
+        OnFrameReady();
     }
 
     void ApplyProcessingResult()
@@ -6421,10 +7459,40 @@ private:
     void ClearLatestFrame()
     {
         frame_buffer_.Clear();
+        live_preview_overlay_buffer_.Clear();
+        live_preview_overlay_last_sequence_ = 0;
+        live_preview_overlay_last_invalidate_tick_ = 0;
         InvalidatePreviewFrameCache();
         SetLatestFrameSource(L"");
         SetPreviewTelemetry(L"");
         image_viewport_.Reset();
+        InvalidatePreview(hwnd_);
+    }
+
+    void OnFrameReady()
+    {
+        preview_source_frame_.reset();
+        if (IsLiveCameraPreviewOverlayVisible()) {
+            const std::shared_ptr<const ImageFrame> live_preview =
+                live_preview_overlay_buffer_.SnapshotShared();
+            const DWORD now = GetTickCount();
+            if (live_preview &&
+                live_preview->sequence != live_preview_overlay_last_sequence_ &&
+                now - live_preview_overlay_last_invalidate_tick_ >= kLivePreviewOverlayMinIntervalMs) {
+                live_preview_overlay_last_sequence_ = live_preview->sequence;
+                live_preview_overlay_last_invalidate_tick_ = now;
+                RECT overlay = LiveCameraPreviewOverlayRect(GetPreviewRect(hwnd_));
+                if (overlay.right > overlay.left && overlay.bottom > overlay.top) {
+                    overlay.right += 4;
+                    overlay.bottom += 4;
+                    InvalidateRect(hwnd_, &overlay, FALSE);
+                }
+                return;
+            }
+            return;
+        }
+
+        InvalidatePreviewFrameCache();
         InvalidatePreview(hwnd_);
     }
 
@@ -6480,6 +7548,7 @@ private:
         unsigned long long sequence = 0;
         int fail_count = 0;
         DWORD last_fps_tick = GetTickCount();
+        DWORD last_overlay_preview_tick = 0;
         unsigned long long last_fps_sequence = 0;
         std::wstring final_status = CameraControlStatusFormatter::FormatPreviewStopped();
 
@@ -6489,10 +7558,17 @@ private:
                 fail_count = 0;
                 sequence = frame.sequence;
                 const unsigned long timestamp = frame.timestamp;
+                const DWORD now = GetTickCount();
+                if (now - last_overlay_preview_tick >= kLivePreviewOverlayMinIntervalMs) {
+                    ImageFrame overlay_preview = BuildLivePreviewOverlayFrame(frame);
+                    if (overlay_preview.IsValid()) {
+                        live_preview_overlay_buffer_.Publish(std::move(overlay_preview));
+                        last_overlay_preview_tick = now;
+                    }
+                }
                 frame_buffer_.Publish(std::move(frame));
                 PostMessageW(hwnd_, kMsgFrameReady, 0, 0);
 
-                const DWORD now = GetTickCount();
                 if (now - last_fps_tick >= 1000) {
                     const double fps = (sequence - last_fps_sequence) * 1000.0 / static_cast<double>(now - last_fps_tick);
                     last_fps_tick = now;
@@ -6742,11 +7818,16 @@ private:
     std::atomic_bool running_ = false;
     std::thread worker_;
     std::thread processing_worker_;
+    std::thread live_stitch_capture_worker_;
+    std::thread live_stitch_preview_worker_;
 
     std::mutex status_mutex_;
     std::mutex settings_mutex_;
+    std::mutex live_stitch_capture_mutex_;
+    std::mutex live_stitch_preview_mutex_;
 
     FrameBuffer frame_buffer_;
+    FrameBuffer live_preview_overlay_buffer_;
     mutable std::shared_ptr<const ImageFrame> preview_source_frame_;
     mutable ImageFrame empty_preview_frame_;
     mutable ImageFrame preview_frame_cache_;
@@ -6787,6 +7868,41 @@ private:
     bool stitch_use_orb_registration_ = true;
     StitchProcessingOptions stitch_options_;
     std::wstring stitch_source_status_ = L"(no images selected)";
+    bool live_stitch_active_ = false;
+    int live_stitch_interval_ms_ = kDefaultLiveStitchIntervalMs;
+    bool live_stitch_tick_in_progress_ = false;
+    unsigned long long live_stitch_last_evaluated_sequence_ = 0;
+    std::size_t live_stitch_capture_count_ = 0;
+    bool live_stitch_out_of_range_warning_ = false;
+    int live_stitch_out_of_range_candidate_count_ = 0;
+    int live_stitch_missing_match_count_ = 0;
+    DWORD live_stitch_last_status_tick_ = 0;
+    DWORD live_stitch_preview_status_tick_ = 0;
+    DWORD live_stitch_last_warning_beep_tick_ = 0;
+    std::wstring live_stitch_last_status_message_;
+    bool live_stitch_capture_worker_running_ = false;
+    bool live_stitch_capture_request_pending_ = false;
+    bool live_stitch_capture_ready_ = false;
+    unsigned long long live_stitch_capture_generation_ = 0;
+    unsigned long long live_stitch_capture_min_generation_ = 0;
+    LiveStitchCaptureRequest live_stitch_capture_pending_request_;
+    LiveStitchCaptureResult live_stitch_capture_ready_result_;
+    std::vector<LiveStitchPreviewTile> live_stitch_preview_tiles_;
+    std::vector<LiveStitchPreviewTile> live_stitch_reference_tiles_;
+    int live_stitch_preview_tile_scale_ = 0;
+    bool live_stitch_preview_worker_running_ = false;
+    bool live_stitch_preview_request_pending_ = false;
+    bool live_stitch_preview_ready_ = false;
+    unsigned long long live_stitch_preview_generation_ = 0;
+    unsigned long long live_stitch_preview_min_generation_ = 0;
+    unsigned long long live_stitch_preview_pending_generation_ = 0;
+    unsigned long long live_stitch_preview_ready_generation_ = 0;
+    std::vector<LiveStitchPreviewTile> live_stitch_preview_pending_tiles_;
+    LiveStitchPreviewOptions live_stitch_preview_pending_options_;
+    ImageFrame live_stitch_preview_ready_image_;
+    StitchResultMetadata live_stitch_preview_ready_metadata_;
+    unsigned long long live_preview_overlay_last_sequence_ = 0;
+    DWORD live_preview_overlay_last_invalidate_tick_ = 0;
     std::vector<ImageFrame> edf_stack_;
     ProcessingRetryState processing_retry_;
     ProcessingResultFrames processing_frames_;
@@ -7284,6 +8400,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         case kIdAddStitchTile:
             app->AddCurrentFrameAsStitchTile();
             return 0;
+        case kIdStartLiveStitch:
+            app->StartLiveStitchCapture();
+            return 0;
+        case kIdStopLiveStitch:
+            app->StopLiveStitchCapture();
+            return 0;
         case kIdBuildStitch:
             app->BuildStitchPreview();
             return 0;
@@ -7470,9 +8592,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     }
     case kMsgFrameReady:
         if (CameraPreviewApp* app = GetApp(hwnd)) {
-            app->InvalidatePreviewFrameCache();
+            app->HandleFrameReady();
+        } else {
+            InvalidatePreview(hwnd);
         }
-        InvalidatePreview(hwnd);
         return 0;
     case kMsgStatusChanged:
         InvalidateStatus(hwnd);
@@ -7484,6 +8607,28 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         }
         return 0;
     }
+    case kMsgLiveStitchPreviewReady: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        if (app) {
+            app->ApplyLiveStitchPreviewResult();
+        }
+        return 0;
+    }
+    case kMsgLiveStitchCaptureReady: {
+        CameraPreviewApp* app = GetApp(hwnd);
+        if (app) {
+            app->ApplyLiveStitchCaptureResult();
+        }
+        return 0;
+    }
+    case WM_TIMER:
+        if (wparam == kLiveStitchTimerId) {
+            if (CameraPreviewApp* app = GetApp(hwnd)) {
+                app->CaptureLiveStitchTick();
+            }
+            return 0;
+        }
+        break;
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT: {

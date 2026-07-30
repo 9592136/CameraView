@@ -70,8 +70,12 @@ add_executable(CameraView WIN32
     src/imaging/FluorescenceFormatter.h
     src/imaging/ImageRegistration.cpp
     src/imaging/ImageRegistration.h
+    src/imaging/LiveStitchCapturePlanner.cpp
+    src/imaging/LiveStitchCapturePlanner.h
     src/imaging/ImageStitcher.cpp
     src/imaging/ImageStitcher.h
+    src/imaging/LiveStitchPreviewBuilder.cpp
+    src/imaging/LiveStitchPreviewBuilder.h
     src/imaging/OpenCvStitchBackend.cpp
     src/imaging/OpenCvStitchBackend.h
     src/imaging/ImageViewport.cpp
@@ -296,8 +300,12 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/imaging/FluorescenceFormatter.h
         src/imaging/ImageRegistration.cpp
         src/imaging/ImageRegistration.h
+        src/imaging/LiveStitchCapturePlanner.cpp
+        src/imaging/LiveStitchCapturePlanner.h
         src/imaging/ImageStitcher.cpp
         src/imaging/ImageStitcher.h
+        src/imaging/LiveStitchPreviewBuilder.cpp
+        src/imaging/LiveStitchPreviewBuilder.h
         src/imaging/OpenCvStitchBackend.cpp
         src/imaging/OpenCvStitchBackend.h
         src/imaging/ImageViewport.cpp

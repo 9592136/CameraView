@@ -174,25 +174,41 @@ void AddSidePanel(
         content_y += kControlHeight;
         break;
     case 3:
-        add(kIdStitchModeLabel, x, content_y + 5, 54, 20);
-        add(kIdStitchModeCombo, x + 64, content_y, w - 64, 90);
-        content_y += kControlHeight + kControlGap;
-        add(kIdStitchSourceLabel, x, content_y, w, 20);
+        add(kIdStitchLiveSectionLabel, x, content_y, w, 20);
         content_y += 24;
+        add(kIdLiveStitchIntervalLabel, x, content_y + 5, 78, 20);
+        add(kIdLiveStitchIntervalEdit, x + 84, content_y, 72, kControlHeight);
+        add(kIdAddStitchTile, second_column, content_y, half_width, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        add(kIdStartLiveStitch, x, content_y, half_width, kControlHeight);
+        add(kIdStopLiveStitch, second_column, content_y, half_width, kControlHeight);
+        content_y += kControlHeight + kControlGap;
+        add(kIdStitchSourceStatus, x, content_y, w, 42);
+        content_y += 42 + kControlGap + 8;
+
+        add(kIdStitchImportSectionLabel, x, content_y, w, 20);
+        content_y += 24;
+        add(kIdStitchSourceLabel, x, content_y, w, 20);
+        content_y += 22;
         add(kIdSelectStitchDirectory, x, content_y, half_width, kControlHeight);
         add(kIdSelectStitchFiles, second_column, content_y, half_width, kControlHeight);
-        content_y += kControlHeight + kControlGap;
-        add(kIdAddStitchTile, x, content_y, w, kControlHeight);
-        content_y += kControlHeight + 4;
-        add(kIdStitchSourceStatus, x, content_y, w, 34);
-        content_y += 38 + kControlGap;
-        add(kIdStitchTileLabel, x, content_y, w, 20);
+        content_y += kControlHeight + kControlGap + 8;
+
+        add(kIdStitchGallerySectionLabel, x, content_y, w, 20);
         content_y += 24;
-        add(kIdStitchTileList, x, content_y, w, 72);
-        content_y += 72 + kControlGap;
+        add(kIdStitchTileLabel, x, content_y, w, 20);
+        content_y += 22;
+        add(kIdStitchTileList, x, content_y, w, 128);
+        content_y += 128 + kControlGap;
         add(kIdDeleteStitchTile, x, content_y, half_width, kControlHeight);
         add(kIdClearStitchTiles, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap + 8;
+
+        add(kIdStitchSettingsSectionLabel, x, content_y, w, 20);
+        content_y += 24;
+        add(kIdStitchModeLabel, x, content_y + 5, 48, 20);
+        add(kIdStitchModeCombo, x + 56, content_y, w - 56, 90);
+        content_y += kControlHeight + kControlGap;
         add(kIdStitchRowsLabel, x, content_y + 5, 36, 20);
         add(kIdStitchRowsEdit, x + 42, content_y, 42, kControlHeight);
         add(kIdStitchColsLabel, x + 96, content_y + 5, 58, 20);
@@ -215,9 +231,17 @@ void AddSidePanel(
         add(kIdStitchOverlapSlider, x, content_y, w - 56, kControlHeight);
         add(kIdStitchOverlapValue, x + w - 50, content_y + 4, 50, 20);
         content_y += kControlHeight + kControlGap;
+        add(kIdStitchOrbRegistration, x, content_y, w, kControlHeight);
+        content_y += kControlHeight + kControlGap + 8;
+
+        add(kIdStitchOutputSectionLabel, x, content_y, w, 20);
+        content_y += 24;
         add(kIdBuildStitch, x, content_y, half_width, kControlHeight);
         add(kIdSaveStitchResult, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight + kControlGap + 8;
+
+        add(kIdEdfSectionLabel, x, content_y, w, 20);
+        content_y += 24;
         add(kIdEdfRadiusLabel, x, content_y + 5, 76, 20);
         add(kIdEdfRadiusEdit, x + 84, content_y, 54, kControlHeight);
         content_y += kControlHeight + kControlGap;
@@ -230,7 +254,8 @@ void AddSidePanel(
         add(kIdRetryProcessing, x, content_y, half_width, kControlHeight);
         add(kIdClearProcessing, second_column, content_y, half_width, kControlHeight);
         content_y += kControlHeight;
-        break;    case 4:
+        break;
+    case 4:
         add(kIdObjectiveLabel, x, content_y, w, 20);
         content_y += 24;
         add(kIdObjectiveCombo, x, content_y, w, 120);
@@ -566,6 +591,12 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdApplyChannel,
         kIdStitchModeLabel,
         kIdStitchModeCombo,
+        kIdStitchLiveSectionLabel,
+        kIdStitchImportSectionLabel,
+        kIdStitchGallerySectionLabel,
+        kIdStitchSettingsSectionLabel,
+        kIdStitchOutputSectionLabel,
+        kIdEdfSectionLabel,
         kIdStitchSourceLabel,
         kIdSelectStitchDirectory,
         kIdSelectStitchFiles,
@@ -586,6 +617,10 @@ const std::vector<int>& WindowControlLayout::SideControlIds()
         kIdStitchOverlapValue,
         kIdStitchOrbRegistration,
         kIdAddStitchTile,
+        kIdLiveStitchIntervalLabel,
+        kIdLiveStitchIntervalEdit,
+        kIdStartLiveStitch,
+        kIdStopLiveStitch,
         kIdBuildStitch,
         kIdSaveStitchResult,
         kIdStitchTileLabel,

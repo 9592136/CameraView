@@ -41,6 +41,21 @@ bool ProcessingResultFrames::Apply(ProcessingJobResult result)
     return show_processing_result_;
 }
 
+bool ProcessingResultFrames::ShowStitchPreview(ImageFrame frame, StitchResultMetadata metadata)
+{
+    if (!frame.IsValid()) {
+        return false;
+    }
+
+    edf_composite_frame_ = ImageFrame();
+    edf_focus_map_ = ImageFrame();
+    processing_result_ = std::move(frame);
+    stitch_metadata_ = std::move(metadata);
+    show_processing_result_ = true;
+    display_source_ = ProcessingResultDisplaySource::Stitch;
+    return true;
+}
+
 bool ProcessingResultFrames::ShowEdfCompositeFrame()
 {
     if (!edf_composite_frame_.IsValid()) {

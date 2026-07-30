@@ -25,6 +25,7 @@ public:
 
     bool Clear();
     bool Apply(ProcessingJobResult result);
+    bool ShowStitchPreview(ImageFrame frame, StitchResultMetadata metadata);
     bool ShowEdfCompositeFrame();
     bool ShowEdfFocusMap();
 
