@@ -46,4 +46,5 @@ Desktop.ini
 /third_party/*.exe
 
 # Build toolchain (large binaries, not part of source)
-/tools/
+/tools/*
+!/tools/build_qt.ps1

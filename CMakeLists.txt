@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CameraView LANGUAGES CXX)
 
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+qt_standard_project_setup()
+
 option(CAMERAVIEW_WITH_OPENCV "Enable the OpenCV microscopy stitching backend" ON)
 if(CAMERAVIEW_WITH_OPENCV)
     find_package(OpenCV QUIET COMPONENTS core imgproc features2d calib3d video)
@@ -13,7 +16,7 @@ if(CAMERAVIEW_WITH_OPENCV)
     endif()
 endif()
 
-# ── Shared source files used by both CameraView and CameraViewDomainTests ──
+# ── Complete domain source set used by the existing verification suite ──
 set(CAMERAVIEW_DOMAIN_SOURCES
     src/app/DiagnosticReportActions.cpp
     src/app/DiagnosticReportActions.h
@@ -183,24 +186,77 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/ui/WindowLayout.h
 )
 
-# ── CameraView executable (main application) ──
-add_executable(CameraView WIN32
-    src/main.cpp
+# Platform-neutral application services used by the Qt front end.  The legacy
+# Win32 view/layout sources intentionally stay out of the default executable.
+set(CAMERAVIEW_QT_CORE_SOURCES
+    src/domain/CalibrationProfile.cpp
+    src/domain/CalibrationProfile.h
+    src/domain/Geometry.h
+    src/domain/ImageFrame.h
+    src/domain/Measurement.cpp
+    src/domain/Measurement.h
+    src/domain/MeasurementCollection.cpp
+    src/domain/MeasurementCollection.h
+    src/domain/MeasurementFormatter.cpp
+    src/domain/MeasurementFormatter.h
+    src/domain/MeasurementNameFormatter.cpp
+    src/domain/MeasurementNameFormatter.h
+    src/imaging/ChannelFusionEngine.cpp
+    src/imaging/ChannelFusionEngine.h
+    src/imaging/DyeLibrary.cpp
+    src/imaging/DyeLibrary.h
+    src/imaging/EdfProcessor.cpp
+    src/imaging/EdfProcessor.h
+    src/imaging/EdfStackListActions.cpp
+    src/imaging/EdfStackListActions.h
+    src/imaging/Fluorescence.h
+    src/imaging/FluorescenceChannelFactory.cpp
+    src/imaging/FluorescenceChannelFactory.h
+    src/imaging/FluorescenceChannelListActions.cpp
+    src/imaging/FluorescenceChannelListActions.h
+    src/imaging/FluorescenceChannelSettings.cpp
+    src/imaging/FluorescenceChannelSettings.h
+    src/imaging/FluorescenceFormatter.cpp
+    src/imaging/FluorescenceFormatter.h
+    src/imaging/HistogramCalculator.cpp
+    src/imaging/HistogramCalculator.h
+    src/imaging/ImageRegistration.cpp
+    src/imaging/ImageRegistration.h
+    src/imaging/ImageStitcher.cpp
+    src/imaging/ImageStitcher.h
+    src/imaging/OpenCvStitchBackend.cpp
+    src/imaging/OpenCvStitchBackend.h
+    src/imaging/ProcessingParameterRules.cpp
+    src/imaging/ProcessingParameterRules.h
+    src/imaging/PseudoColorMapper.cpp
+    src/imaging/PseudoColorMapper.h
+    src/storage/MeasurementCsvExporter.cpp
+    src/storage/MeasurementCsvExporter.h
+    src/storage/ProjectDocument.h
+    src/storage/ProjectRepository.cpp
+    src/storage/ProjectRepository.h
+    src/storage/ProjectSessionMapper.cpp
+    src/storage/ProjectSessionMapper.h
+)
+
+# ── CameraView executable (Qt 6 application) ──
+qt_add_executable(CameraView WIN32
+    src/qt/main_qt.cpp
+    src/qt/CameraMainWindow.cpp
+    src/qt/CameraMainWindow.h
+    src/qt/CameraWorker.cpp
+    src/qt/CameraWorker.h
+    src/qt/HistogramWidget.cpp
+    src/qt/HistogramWidget.h
+    src/qt/ImageCanvas.cpp
+    src/qt/ImageCanvas.h
     src/MUCamApi.cpp
     src/MUCamApi.h
     src/camera/ICameraDriver.h
     src/camera/MUCamCameraDriver.cpp
     src/camera/MUCamCameraDriver.h
     src/domain/ImageFrame.h
-    src/platform/FileDialog.cpp
-    src/platform/FileDialog.h
-    src/ui/HistogramRenderer.cpp
-    src/ui/HistogramRenderer.h
-    src/ui/MainMenu.cpp
-    src/ui/LayoutControls.cpp
-    src/ui/CameraPreviewApp.cpp
-    src/ui/WindowProc.cpp
-    ${CAMERAVIEW_DOMAIN_SOURCES}
+    ${CAMERAVIEW_QT_CORE_SOURCES}
 )
 
 target_include_directories(CameraView PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -212,7 +268,19 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 msimg32 comdlg32 ole32 windowscodecs shell32 comctl32 pthread)
+target_link_libraries(CameraView PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Concurrent
+    user32
+    gdi32
+    msimg32
+    ole32
+    windowscodecs
+    shell32
+    comctl32
+)
 if(CAMERAVIEW_OPENCV_AVAILABLE)
     target_compile_definitions(CameraView PRIVATE CAMERAVIEW_WITH_OPENCV)
     target_include_directories(CameraView PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -238,10 +306,6 @@ if(CAMERAVIEW_OPENCV_AVAILABLE AND WIN32)
     endif()
 endif()
 
-if(MINGW)
-    target_link_options(CameraView PRIVATE -municode)
-endif()
-
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(MUCAM_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/MUCamSDK/bin/x64")
 else()
@@ -257,14 +321,16 @@ foreach(MUCAM_DLL MUCam32Ex.dll MUCam32.dll)
 endforeach()
 
 # ── MinGW-w64 runtime DLLs ──
-set(MINGW_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/tools/mingw64/bin")
-foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
-    add_custom_command(TARGET CameraView POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
-            "$<TARGET_FILE_DIR:CameraView>/${MINGW_DLL}"
-    )
-endforeach()
+get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${QT_BIN_DIR}" REQUIRED)
+add_custom_command(TARGET CameraView POST_BUILD
+    COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+        --no-translations
+        --no-system-d3d-compiler
+        "$<TARGET_FILE:CameraView>"
+    COMMENT "Deploying the Qt runtime next to CameraView"
+)
 
 # ── Tests ──
 option(CAMERAVIEW_BUILD_TESTS "Build CameraView verification tests" ON)
@@ -296,12 +362,7 @@ if(CAMERAVIEW_BUILD_TESTS)
             )
         endif()
     endif()
-    foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
-        add_custom_command(TARGET CameraViewDomainTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
-                "$<TARGET_FILE_DIR:CameraViewDomainTests>/${MINGW_DLL}"
-        )
-    endforeach()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
+    add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
+    set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
 endif()

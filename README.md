@@ -1,6 +1,18 @@
 # CameraView - MUCam 工业相机预览
 
-这是一个按 `MUCam API.pdf` 和 `MUCamSDK` 真实头文件实现的 Windows 工业相机预览程序。程序启动后会自动加载 Motic MUCam SDK DLL，查找第一台相机，打开相机并循环抓帧显示。
+这是一个按 `MUCam API.pdf` 和 `MUCamSDK` 真实头文件实现的工业相机预览、图像处理与显微测量程序。默认桌面应用已经迁移到 **Qt 6 Widgets**；程序使用 Qt 后台线程加载 Motic MUCam SDK、枚举/打开相机并持续显示采集帧。
+
+## Qt 版本构建
+
+Windows + Qt 6 MinGW 64 位环境可直接运行：
+
+```powershell
+.\tools\build_qt.ps1
+```
+
+构建结果位于 `build-qt-msvcrt\CameraView.exe`，Qt、MinGW 和 MUCam 运行库会自动部署到同一目录。原 Win32 界面源码仍保留作迁移参考，但不再进入默认构建目标。
+
+Qt 架构、功能映射、手动 CMake 参数和平台边界详见 [`docs/qt_migration.md`](docs/qt_migration.md)。
 
 ## 已实现
 
@@ -58,7 +70,7 @@
 - 已清理 main.cpp 中未编译使用的 `src/ai/*.h` include，AI 面板 16 个方法及 WM_COMMAND 分支从 main.cpp 完全隔离（约 950 行），不影响构建
 - 单元测试 `CameraViewDomainTests` 扩展覆盖：GeometryOps（坐标换算与 FitScale 边界）、StringOps（Trim 多场景）、TextInputParser（数值解析边界）、ProcessingParameterRules（拼接/EDF 参数验证）、Measurement 族（长度/角度/矩形/多边形面积属性与计算）
 - 已加入核心逻辑自动验证目标 `CameraViewDomainTests`
-- 不依赖 OpenCV、Qt 或厂家 `.lib` 文件
+- 核心领域测试不依赖 Qt、OpenCV 或厂家 `.lib` 文件；默认桌面前端依赖 Qt 6 Widgets
 
 ## 显微观察与测量软件实现阶段
 
@@ -87,30 +99,21 @@ UML 源码级检查：
 
 ## 运行前准备
 
-1. 安装 Visual Studio 2022，勾选“使用 C++ 的桌面开发”。
-2. 打开 `CameraView.vcxproj`。
-3. 选择与相机驱动一致的平台：32 位驱动选 `Win32`，64 位驱动选 `x64`。
-4. 生成工程会自动把 `MUCamSDK\bin\x86` 或 `MUCamSDK\bin\x64` 下的 `MUCam32Ex.dll`、`MUCam32.dll` 复制到输出目录。
-5. 连接相机，运行程序。
+1. 安装 Qt 6 的 MinGW 64 位套件，并准备 CMake、Ninja 与匹配 Qt ABI 的 MinGW/MSVCRT 编译器。
+2. 执行 `.\tools\build_qt.ps1`；脚本会自动探测本机工具链。
+3. 生成过程会把 Qt、MinGW 和 `MUCamSDK\bin\x64` 中的 MUCam DLL 部署到输出目录。
+4. 连接相机，运行 `build-qt-msvcrt\CameraView.exe`。没有相机时也可打开离线图像使用测量和处理功能。
 
 ## 构建方式
 
-Visual Studio:
-
-```text
-打开 CameraView.vcxproj -> 选择 Win32/Release -> 生成
-```
-
-CMake:
+推荐方式：
 
 ```powershell
-cmake -S . -B build -A Win32
-cmake --build build --config Release
-ctest --test-dir build --output-on-failure
+.\tools\build_qt.ps1
 ```
 
 ## 注意事项
 
 - 程序用动态加载方式调用 DLL，因此不需要链接 `MUCam32Ex.lib`。
-- 当前代码已用 Visual Studio C++ x64 工具链和 CMake Release 编译通过；连接真实相机时按 `docs/camera_field_verification.md` 记录预览稳定性、FPS 和交互结果。
+- 当前 Qt 版本已用 Qt 6.9、MinGW/MSVCRT x64 与 CMake Release 编译，并通过领域测试和 Qt 启动测试；连接真实相机时仍需按 `docs/camera_field_verification.md` 完成硬件现场验证。
 - 如果运行时提示未找到相机，请先运行厂家自带的 `MUCamSDK\bin\x86\MUCamExample.exe` 或 `MUCamSDK\bin\x64\MUCamExample.exe` 检查驱动和相机连接。
