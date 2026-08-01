@@ -3,6 +3,7 @@
 #include "CameraDevice.h"
 #include "../domain/ImageFrame.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -52,5 +53,5 @@ public:
     virtual bool HasWhiteBalanceControl() const = 0;
     virtual bool ApplyWhiteBalance() = 0;
 
-    virtual bool GrabFrame(unsigned long long sequence, ImageFrame& frame) = 0;
+    virtual bool GrabFrame(uint64_t sequence, ImageFrame& frame) = 0;
 };

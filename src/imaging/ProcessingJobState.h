@@ -3,6 +3,7 @@
 #include "../domain/ImageFrame.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -37,7 +38,7 @@ struct StitchResultMetadata {
 };
 
 struct ProcessingJobResult {
-    unsigned long long job_id = 0;
+    uint64_t job_id = 0;
     ProcessingJobKind kind = ProcessingJobKind::None;
     bool has_result = false;
     bool succeeded = false;
@@ -48,7 +49,7 @@ struct ProcessingJobResult {
 };
 
 struct ProcessingJobLaunch {
-    unsigned long long job_id = 0;
+    uint64_t job_id = 0;
     std::shared_ptr<std::atomic_bool> cancel_token;
 };
 
@@ -66,8 +67,8 @@ public:
 
 private:
     std::atomic_bool running_ = false;
-    std::atomic_ullong job_counter_ = 0;
-    std::atomic_ullong active_job_id_ = 0;
+    std::atomic_uint64_t job_counter_ = 0;
+    std::atomic_uint64_t active_job_id_ = 0;
     std::shared_ptr<std::atomic_bool> cancel_token_;
     mutable std::mutex mutex_;
     ProcessingJobResult pending_result_;

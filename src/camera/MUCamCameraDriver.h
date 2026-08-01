@@ -3,6 +3,7 @@
 #include "ICameraDriver.h"
 #include "../MUCamApi.h"
 
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
@@ -31,7 +32,7 @@ public:
     bool HasWhiteBalanceControl() const override;
     bool ApplyWhiteBalance() override;
 
-    bool GrabFrame(unsigned long long sequence, ImageFrame& frame) override;
+    bool GrabFrame(uint64_t sequence, ImageFrame& frame) override;
 
 private:
     static bool IsBayerFormat(int format);
@@ -42,8 +43,8 @@ private:
         int source_bytes_per_channel,
         int width,
         int height,
-        unsigned long timestamp,
-        unsigned long long sequence,
+        uint32_t timestamp,
+        uint64_t sequence,
         ImageFrame& output);
 
     void CloseLocked();

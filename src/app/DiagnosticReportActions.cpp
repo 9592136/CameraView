@@ -1,6 +1,7 @@
 #include "DiagnosticReportActions.h"
 
 #include "../domain/MeasurementFormatter.h"
+#include "../platform/StringOps.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -346,13 +347,7 @@ std::wstring ImageTagHtml(
 
 std::wstring TrimText(const std::wstring& text)
 {
-    const std::wstring whitespace = L" \t\r\n";
-    const std::size_t first = text.find_first_not_of(whitespace);
-    if (first == std::wstring::npos) {
-        return {};
-    }
-    const std::size_t last = text.find_last_not_of(whitespace);
-    return text.substr(first, last - first + 1U);
+    return platform::Trim(text);
 }
 
 std::wstring MetadataEscape(const std::wstring& value)

@@ -26,7 +26,7 @@ std::wstring CameraTelemetryFormatter::FormatFrameTelemetry(
     int device_index,
     const CameraOpenInfo& open_info,
     double fps,
-    unsigned long timestamp,
+    uint32_t timestamp,
     UILanguage lang)
 {
     std::wostringstream fps_str;

@@ -17,5 +17,13 @@ struct PreviewFrameComposition {
 
 class PreviewFrameComposer {
 public:
+    /// Composes a preview frame, returning a new ImageFrame.
+    /// Convenience wrapper that delegates to ComposeInto.
     static ImageFrame Compose(const PreviewFrameComposition& composition);
+
+    /// Composes the preview directly into @p out, reusing its buffer where possible.
+    /// When only the source frame is shown without modification the source content
+    /// is assigned to @p out (single copy); for pseudo-color / fusion / processing
+    /// result the frame is moved into @p out, avoiding an intermediate temporary.
+    static void ComposeInto(const PreviewFrameComposition& composition, ImageFrame& out);
 };

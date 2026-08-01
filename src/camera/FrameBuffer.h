@@ -15,5 +15,5 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::shared_ptr<const ImageFrame> latest_frame_;
+    std::shared_ptr<ImageFrame> latest_frame_;
 };

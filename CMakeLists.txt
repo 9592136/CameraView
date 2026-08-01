@@ -13,10 +13,8 @@ if(CAMERAVIEW_WITH_OPENCV)
     endif()
 endif()
 
-add_executable(CameraView WIN32
-    src/main.cpp
-    src/MUCamApi.cpp
-    src/MUCamApi.h
+# ── Shared source files used by both CameraView and CameraViewDomainTests ──
+set(CAMERAVIEW_DOMAIN_SOURCES
     src/app/DiagnosticReportActions.cpp
     src/app/DiagnosticReportActions.h
     src/app/ExportActions.cpp
@@ -25,22 +23,18 @@ add_executable(CameraView WIN32
     src/app/ProjectActions.h
     src/app/ProjectSessionRestorer.cpp
     src/app/ProjectSessionRestorer.h
-    src/camera/CameraDevice.h
     src/camera/CameraControlStatusFormatter.cpp
     src/camera/CameraControlStatusFormatter.h
+    src/camera/CameraDevice.h
     src/camera/CameraDeviceListFormatter.cpp
     src/camera/CameraDeviceListFormatter.h
     src/camera/CameraTelemetryFormatter.cpp
     src/camera/CameraTelemetryFormatter.h
     src/camera/FrameBuffer.cpp
     src/camera/FrameBuffer.h
-    src/camera/ICameraDriver.h
-    src/camera/MUCamCameraDriver.cpp
-    src/camera/MUCamCameraDriver.h
     src/domain/CalibrationProfile.cpp
     src/domain/CalibrationProfile.h
     src/domain/Geometry.h
-    src/domain/ImageFrame.h
     src/domain/Measurement.cpp
     src/domain/Measurement.h
     src/domain/MeasurementCollection.cpp
@@ -127,8 +121,6 @@ add_executable(CameraView WIN32
     src/imaging/ViewTransform.h
     src/imaging/ViewportInteractionActions.cpp
     src/imaging/ViewportInteractionActions.h
-    src/platform/FileDialog.cpp
-    src/platform/FileDialog.h
     src/platform/TextInputParser.cpp
     src/platform/TextInputParser.h
     src/storage/DiagnosticReportBuilder.cpp
@@ -189,8 +181,22 @@ add_executable(CameraView WIN32
     src/ui/WindowControlLayout.h
     src/ui/WindowLayout.cpp
     src/ui/WindowLayout.h
+)
+
+# ── CameraView executable (main application) ──
+add_executable(CameraView WIN32
+    src/main.cpp
+    src/MUCamApi.cpp
+    src/MUCamApi.h
+    src/camera/ICameraDriver.h
+    src/camera/MUCamCameraDriver.cpp
+    src/camera/MUCamCameraDriver.h
+    src/domain/ImageFrame.h
+    src/platform/FileDialog.cpp
+    src/platform/FileDialog.h
     src/ui/HistogramRenderer.cpp
     src/ui/HistogramRenderer.h
+    ${CAMERAVIEW_DOMAIN_SOURCES}
 )
 
 target_include_directories(CameraView PRIVATE "${CMAKE_SOURCE_DIR}/src")
@@ -202,7 +208,7 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 msimg32 comdlg32 ole32 windowscodecs shell32 comctl32)
+target_link_libraries(CameraView PRIVATE user32 gdi32 msimg32 comdlg32 ole32 windowscodecs shell32 comctl32 pthread)
 if(CAMERAVIEW_OPENCV_AVAILABLE)
     target_compile_definitions(CameraView PRIVATE CAMERAVIEW_WITH_OPENCV)
     target_include_directories(CameraView PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -246,178 +252,24 @@ foreach(MUCAM_DLL MUCam32Ex.dll MUCam32.dll)
     )
 endforeach()
 
+# ── MinGW-w64 runtime DLLs ──
+set(MINGW_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/tools/mingw64/bin")
+foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
+    add_custom_command(TARGET CameraView POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
+            "$<TARGET_FILE_DIR:CameraView>/${MINGW_DLL}"
+    )
+endforeach()
+
+# ── Tests ──
 option(CAMERAVIEW_BUILD_TESTS "Build CameraView verification tests" ON)
 
 if(CAMERAVIEW_BUILD_TESTS)
     enable_testing()
     add_executable(CameraViewDomainTests
         tests/domain_smoke.cpp
-        src/app/DiagnosticReportActions.cpp
-        src/app/DiagnosticReportActions.h
-        src/app/ExportActions.cpp
-        src/app/ExportActions.h
-        src/app/ProjectActions.cpp
-        src/app/ProjectActions.h
-        src/app/ProjectSessionRestorer.cpp
-        src/app/ProjectSessionRestorer.h
-        src/camera/CameraControlStatusFormatter.cpp
-        src/camera/CameraControlStatusFormatter.h
-        src/camera/CameraDevice.h
-        src/camera/CameraDeviceListFormatter.cpp
-        src/camera/CameraDeviceListFormatter.h
-        src/camera/CameraTelemetryFormatter.cpp
-        src/camera/CameraTelemetryFormatter.h
-        src/camera/FrameBuffer.cpp
-        src/camera/FrameBuffer.h
-        src/domain/CalibrationProfile.cpp
-        src/domain/CalibrationProfile.h
-        src/domain/Geometry.h
-        src/domain/Measurement.cpp
-        src/domain/Measurement.h
-        src/domain/MeasurementCollection.cpp
-        src/domain/MeasurementCollection.h
-        src/domain/MeasurementFormatter.cpp
-        src/domain/MeasurementFormatter.h
-        src/domain/MeasurementNameFormatter.cpp
-        src/domain/MeasurementNameFormatter.h
-        src/imaging/ChannelFusionEngine.cpp
-        src/imaging/ChannelFusionEngine.h
-        src/imaging/DyeLibrary.cpp
-        src/imaging/DyeLibrary.h
-        src/imaging/EdfProcessor.cpp
-        src/imaging/EdfProcessor.h
-        src/imaging/EdfStackListActions.cpp
-        src/imaging/EdfStackListActions.h
-        src/imaging/Fluorescence.h
-        src/imaging/FluorescenceChannelFactory.cpp
-        src/imaging/FluorescenceChannelFactory.h
-        src/imaging/FluorescenceChannelListActions.cpp
-        src/imaging/FluorescenceChannelListActions.h
-        src/imaging/FluorescenceChannelSettings.cpp
-        src/imaging/FluorescenceChannelSettings.h
-        src/imaging/FluorescenceChannelUpdater.cpp
-        src/imaging/FluorescenceChannelUpdater.h
-        src/imaging/FluorescenceFormatter.cpp
-        src/imaging/FluorescenceFormatter.h
-        src/imaging/ImageRegistration.cpp
-        src/imaging/ImageRegistration.h
-        src/imaging/LiveStitchCapturePlanner.cpp
-        src/imaging/LiveStitchCapturePlanner.h
-        src/imaging/ImageStitcher.cpp
-        src/imaging/ImageStitcher.h
-        src/imaging/LiveStitchPreviewBuilder.cpp
-        src/imaging/LiveStitchPreviewBuilder.h
-        src/imaging/OpenCvStitchBackend.cpp
-        src/imaging/OpenCvStitchBackend.h
-        src/imaging/ImageViewport.cpp
-        src/imaging/ImageViewport.h
-        src/imaging/OverlayRenderer.cpp
-        src/imaging/OverlayRenderer.h
-        src/imaging/PreviewDisplayActions.cpp
-        src/imaging/PreviewDisplayActions.h
-        src/imaging/PreviewFrameComposer.cpp
-        src/imaging/PreviewFrameComposer.h
-        src/imaging/ProcessingBuildActions.cpp
-        src/imaging/ProcessingBuildActions.h
-        src/imaging/ProcessingStartActions.cpp
-        src/imaging/ProcessingStartActions.h
-        src/imaging/ProcessingParameterRules.cpp
-        src/imaging/ProcessingParameterRules.h
-        src/imaging/ProcessingPanelActions.cpp
-        src/imaging/ProcessingPanelActions.h
-        src/imaging/ProcessingProgressActions.cpp
-        src/imaging/ProcessingProgressActions.h
-        src/imaging/ProcessingWorkerActions.cpp
-        src/imaging/ProcessingWorkerActions.h
-        src/imaging/ProcessingProgressThrottle.cpp
-        src/imaging/ProcessingProgressThrottle.h
-        src/imaging/ProcessingJobExecutor.cpp
-        src/imaging/ProcessingJobExecutor.h
-        src/imaging/ProcessingJobState.cpp
-        src/imaging/ProcessingJobState.h
-        src/imaging/ProcessingResultActions.cpp
-        src/imaging/ProcessingResultActions.h
-        src/imaging/ProcessingResultFrames.cpp
-        src/imaging/ProcessingResultFrames.h
-        src/imaging/ProcessingRetryActions.cpp
-        src/imaging/ProcessingRetryActions.h
-        src/imaging/ProcessingRetryState.cpp
-        src/imaging/ProcessingRetryState.h
-        src/imaging/ProcessingStatusFormatter.cpp
-        src/imaging/ProcessingStatusFormatter.h
-        src/imaging/PseudoColorMapper.cpp
-        src/imaging/PseudoColorMapper.h
-        src/imaging/HistogramCalculator.cpp
-        src/imaging/HistogramCalculator.h
-        src/imaging/ImageAdjuster.h
-        src/imaging/StitchTileListActions.cpp
-        src/imaging/StitchTileListActions.h
-        src/imaging/StitchTilePlacementPlanner.cpp
-        src/imaging/StitchTilePlacementPlanner.h
-        src/imaging/ViewTransform.cpp
-        src/imaging/ViewTransform.h
-        src/imaging/ViewportInteractionActions.cpp
-        src/imaging/ViewportInteractionActions.h
-        src/platform/TextInputParser.cpp
-        src/platform/TextInputParser.h
-        src/storage/DiagnosticReportBuilder.cpp
-        src/storage/DiagnosticReportBuilder.h
-        src/storage/ImageExporter.cpp
-        src/storage/ImageExporter.h
-        src/storage/MeasurementCsvExporter.cpp
-        src/storage/MeasurementCsvExporter.h
-        src/storage/ProjectDocument.h
-        src/storage/ProjectRepository.cpp
-        src/storage/ProjectRepository.h
-        src/storage/ProjectSessionMapper.cpp
-        src/storage/ProjectSessionMapper.h
-        src/ui/CameraPanelActions.cpp
-        src/ui/CameraPanelActions.h
-        src/ui/ControlIds.h
-        src/ui/DyeLibraryActions.cpp
-        src/ui/DyeLibraryActions.h
-        src/ui/DyeProfileFormPresenter.cpp
-        src/ui/DyeProfileFormPresenter.h
-        src/ui/DyeProfileFormParser.cpp
-        src/ui/DyeProfileFormParser.h
-        src/ui/FluorescenceDisplayActions.cpp
-        src/ui/FluorescenceDisplayActions.h
-        src/ui/FluorescenceChannelFormPresenter.cpp
-        src/ui/FluorescenceChannelFormPresenter.h
-        src/ui/MeasurementActionApplier.cpp
-        src/ui/MeasurementActionApplier.h
-        src/ui/MeasurementDisplayActions.cpp
-        src/ui/MeasurementDisplayActions.h
-        src/ui/MeasurementEditSession.cpp
-        src/ui/MeasurementEditSession.h
-        src/ui/MeasurementHitTester.cpp
-        src/ui/MeasurementHitTester.h
-        src/ui/MeasurementInteractionActions.cpp
-        src/ui/MeasurementInteractionActions.h
-        src/ui/MeasurementInteractionState.cpp
-        src/ui/MeasurementInteractionState.h
-        src/ui/MeasurementListActions.cpp
-        src/ui/MeasurementListActions.h
-        src/ui/MeasurementListSelection.cpp
-        src/ui/MeasurementListSelection.h
-        src/ui/MeasurementOverlayModelBuilder.cpp
-        src/ui/MeasurementOverlayModelBuilder.h
-        src/ui/MeasurementToolAvailability.cpp
-        src/ui/MeasurementToolAvailability.h
-        src/ui/MeasurementToolStartActions.cpp
-        src/ui/MeasurementToolStartActions.h
-        src/ui/ProcessingBuildInputActions.cpp
-        src/ui/ProcessingBuildInputActions.h
-        src/ui/ProcessingQueueActions.cpp
-        src/ui/ProcessingQueueActions.h
-        src/ui/StitchTileDisplayActions.cpp
-        src/ui/StitchTileDisplayActions.h
-        src/ui/WindowControlDefinitions.cpp
-        src/ui/WindowControlDefinitions.h
-        src/ui/WindowControlLayout.cpp
-        src/ui/WindowControlLayout.h
-        src/ui/WindowLayout.cpp
-        src/ui/WindowLayout.h
+        ${CAMERAVIEW_DOMAIN_SOURCES}
     )
     target_include_directories(CameraViewDomainTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewDomainTests PRIVATE cxx_std_17)
@@ -427,7 +279,7 @@ if(CAMERAVIEW_BUILD_TESTS)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
-    target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs gdi32 msimg32)
+    target_link_libraries(CameraViewDomainTests PRIVATE ole32 windowscodecs gdi32 msimg32 pthread)
     if(CAMERAVIEW_OPENCV_AVAILABLE)
         target_compile_definitions(CameraViewDomainTests PRIVATE CAMERAVIEW_WITH_OPENCV)
         target_include_directories(CameraViewDomainTests PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -440,5 +292,12 @@ if(CAMERAVIEW_BUILD_TESTS)
             )
         endif()
     endif()
+    foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
+        add_custom_command(TARGET CameraViewDomainTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
+                "$<TARGET_FILE_DIR:CameraViewDomainTests>/${MINGW_DLL}"
+        )
+    endforeach()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
 endif()

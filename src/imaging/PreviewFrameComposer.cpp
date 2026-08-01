@@ -2,12 +2,13 @@
 
 #include "ChannelFusionEngine.h"
 
-ImageFrame PreviewFrameComposer::Compose(const PreviewFrameComposition& composition)
+void PreviewFrameComposer::ComposeInto(const PreviewFrameComposition& composition, ImageFrame& out)
 {
     if (composition.show_processing_result &&
         composition.processing_result &&
         composition.processing_result->IsValid()) {
-        return *composition.processing_result;
+        out = *composition.processing_result;
+        return;
     }
 
     if (composition.show_fusion_preview &&
@@ -15,17 +16,28 @@ ImageFrame PreviewFrameComposer::Compose(const PreviewFrameComposition& composit
         !composition.fluorescence_channels->empty()) {
         ImageFrame fused = ChannelFusionEngine::Fuse(*composition.fluorescence_channels);
         if (fused.IsValid()) {
-            return fused;
+            out = std::move(fused);
+            return;
         }
     }
 
     if (!composition.source || !composition.source->IsValid()) {
-        return {};
+        out = {};
+        return;
     }
 
     if (composition.pseudo_color_palette == PseudoColorPalette::Original) {
-        return *composition.source;
+        out = *composition.source;
+        return;
     }
 
-    return PseudoColorMapper::Apply(*composition.source, composition.pseudo_color_palette);
+    ImageFrame colored = PseudoColorMapper::Apply(*composition.source, composition.pseudo_color_palette);
+    out = std::move(colored);
+}
+
+ImageFrame PreviewFrameComposer::Compose(const PreviewFrameComposition& composition)
+{
+    ImageFrame result;
+    ComposeInto(composition, result);
+    return result;
 }

@@ -1,5 +1,6 @@
 #include "TextInputParser.h"
 
+#include "../platform/StringOps.h"
 #include <cmath>
 #include <cstdlib>
 #include <cwctype>
@@ -7,17 +8,7 @@
 
 std::wstring TextInputParser::Trim(const std::wstring& text)
 {
-    std::size_t begin = 0;
-    while (begin < text.size() && std::iswspace(text[begin])) {
-        ++begin;
-    }
-
-    std::size_t end = text.size();
-    while (end > begin && std::iswspace(text[end - 1])) {
-        --end;
-    }
-
-    return text.substr(begin, end - begin);
+    return platform::Trim(text);
 }
 
 bool TextInputParser::TryParsePositiveDouble(const std::wstring& text, double& value)

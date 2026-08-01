@@ -29,9 +29,9 @@ struct HistogramStats
 struct HistogramData
 {
     static constexpr int kBinCount = 256;
-    std::array<unsigned long long, kBinCount> bins{};
-    unsigned long long total_pixels = 0;
-    unsigned long long max_count = 0;   ///< Peak bin count (for normalisation)
+    std::array<uint64_t, kBinCount> bins{};
+    uint64_t total_pixels = 0;
+    uint64_t max_count = 0;   ///< Peak bin count (for normalisation)
     HistogramStats stats;               ///< Derived summary statistics
 };
 
@@ -70,15 +70,15 @@ inline HistogramStats ComputeHistogramStats(const HistogramData& data)
     }
 
     // Mean
-    unsigned long long sum = 0;
+    uint64_t sum = 0;
     for (int i = 0; i < 256; ++i) {
-        sum += data.bins[i] * static_cast<unsigned long long>(i);
+        sum += data.bins[i] * static_cast<uint64_t>(i);
     }
     s.mean = static_cast<double>(sum) / static_cast<double>(data.total_pixels);
 
     // Median (bin where cumulative passes 50%)
-    unsigned long long half = data.total_pixels / 2;
-    unsigned long long cumulative = 0;
+    uint64_t half = data.total_pixels / 2;
+    uint64_t cumulative = 0;
     for (int i = 0; i < 256; ++i) {
         cumulative += data.bins[i];
         if (cumulative >= half) { s.median = i; break; }

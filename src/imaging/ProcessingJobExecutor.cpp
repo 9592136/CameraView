@@ -261,7 +261,7 @@ std::vector<StitchTile> ApplyStitchInitialLayout(
     return tiles;
 }
 ProcessingJobResult ProcessingJobExecutor::RunStitch(
-    unsigned long long job_id,
+    uint64_t job_id,
     std::vector<StitchTile> tiles,
     StitchProcessingOptions options,
     const std::atomic_bool* cancel_requested,
@@ -387,7 +387,7 @@ ProcessingJobResult ProcessingJobExecutor::RunStitch(
     return result;
 }
 ProcessingJobResult ProcessingJobExecutor::RunStitch(
-    unsigned long long job_id,
+    uint64_t job_id,
     std::vector<StitchTile> tiles,
     int search_percent,
     const std::atomic_bool* cancel_requested,

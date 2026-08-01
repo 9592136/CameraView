@@ -15,7 +15,7 @@ std::thread ProcessingWorkerActions::StartStitch(
     PublishCallback publish_callback,
     bool use_orb_registration)
 {
-    const unsigned long long job_id = launch.job_id;
+    const uint64_t job_id = launch.job_id;
     std::shared_ptr<std::atomic_bool> cancel_token = launch.cancel_token;
     return std::thread(
         [job_id,
@@ -52,7 +52,7 @@ std::thread ProcessingWorkerActions::StartStitch(
     StatusCallback status_callback,
     PublishCallback publish_callback)
 {
-    const unsigned long long job_id = launch.job_id;
+    const uint64_t job_id = launch.job_id;
     std::shared_ptr<std::atomic_bool> cancel_token = launch.cancel_token;
     return std::thread(
         [job_id,
@@ -86,7 +86,7 @@ std::thread ProcessingWorkerActions::StartEdf(
     StatusCallback status_callback,
     PublishCallback publish_callback)
 {
-    const unsigned long long job_id = launch.job_id;
+    const uint64_t job_id = launch.job_id;
     std::shared_ptr<std::atomic_bool> cancel_token = launch.cancel_token;
     return std::thread(
         [job_id,

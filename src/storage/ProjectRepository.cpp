@@ -1,11 +1,5 @@
 #include "ProjectRepository.h"
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
 #include <windows.h>
 
 #include <fstream>
@@ -148,7 +142,12 @@ bool TryParseDouble(const std::string& text, double& value)
         std::size_t parsed = 0;
         value = std::stod(text, &parsed);
         return parsed == text.size() && std::isfinite(value);
+    } catch (const std::exception& e) {
+        OutputDebugStringA(("TryParseDouble failed for input '" + text + "': " + e.what() + "\n").c_str());
+        value = 0.0;
+        return false;
     } catch (...) {
+        OutputDebugStringA(("TryParseDouble failed for input '" + text + "': unknown exception\n").c_str());
         value = 0.0;
         return false;
     }
@@ -165,7 +164,12 @@ bool TryParseByte(const std::string& text, unsigned char& value)
         }
         value = static_cast<unsigned char>(parsed_value);
         return true;
+    } catch (const std::exception& e) {
+        OutputDebugStringA(("TryParseByte failed for input '" + text + "': " + e.what() + "\n").c_str());
+        value = 0;
+        return false;
     } catch (...) {
+        OutputDebugStringA(("TryParseByte failed for input '" + text + "': unknown exception\n").c_str());
         value = 0;
         return false;
     }

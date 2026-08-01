@@ -20,6 +20,7 @@
 #include "../src/imaging/FluorescenceChannelSettings.h"
 #include "../src/imaging/FluorescenceChannelUpdater.h"
 #include "../src/imaging/FluorescenceFormatter.h"
+#include "../src/imaging/GeometryOps.h"
 #include "../src/imaging/HistogramCalculator.h"
 #include "../src/imaging/ImageAdjuster.h"
 #include "../src/imaging/ImageRegistration.h"
@@ -50,6 +51,7 @@
 #include "../src/imaging/StitchTilePlacementPlanner.h"
 #include "../src/imaging/ViewTransform.h"
 #include "../src/imaging/ViewportInteractionActions.h"
+#include "../src/platform/StringOps.h"
 #include "../src/platform/TextInputParser.h"
 #include "../src/storage/DiagnosticReportBuilder.h"
 #include "../src/storage/ImageExporter.h"
@@ -5460,6 +5462,422 @@ int main()
     const ImageFrame identity_adjusted = ApplyAdjustments(histogram_frame, ImageAdjustParams{});
     if (!identity_adjusted.IsValid() || identity_adjusted.bgr != histogram_frame.bgr) {
         return Fail("Identity image adjustment should preserve the source frame.");
+    }
+
+    // ── GeometryOps ──────────────────────────────────────────────────────────
+    {
+        const RECT rect{10, 20, 130, 70};
+        if (imaging::RectWidth(rect) != 120) {
+            return Fail("RectWidth returned wrong value for normal RECT.");
+        }
+        if (imaging::RectHeight(rect) != 50) {
+            return Fail("RectHeight returned wrong value for normal RECT.");
+        }
+
+        const RECT zero_rect{5, 5, 5, 10};
+        if (imaging::RectWidth(zero_rect) != 0) {
+            return Fail("RectWidth should be zero when left==right.");
+        }
+        if (imaging::RectHeight(zero_rect) != 5) {
+            return Fail("RectHeight returned wrong value for partial-zero RECT.");
+        }
+
+        if (!Near(imaging::FitScale(100.0, 100.0, 200.0, 200.0), 2.0)) {
+            return Fail("FitScale: image smaller than view should return scale > 1.");
+        }
+        if (!Near(imaging::FitScale(800.0, 600.0, 400.0, 300.0), 0.5)) {
+            return Fail("FitScale: image larger than view should return scale < 1.");
+        }
+        if (!Near(imaging::FitScale(800.0, 600.0, 200.0, 200.0), 0.25)) {
+            return Fail("FitScale: width-constrained fit returned wrong value.");
+        }
+        if (!Near(imaging::FitScale(200.0, 800.0, 400.0, 400.0), 0.5)) {
+            return Fail("FitScale: height-constrained fit returned wrong value.");
+        }
+        if (imaging::FitScale(0.0, 100.0, 200.0, 200.0) != 1.0) {
+            return Fail("FitScale: zero image width should return fallback 1.0.");
+        }
+        if (imaging::FitScale(-5.0, 100.0, 200.0, 200.0) != 1.0) {
+            return Fail("FitScale: negative image width should return fallback 1.0.");
+        }
+        if (imaging::FitScale(100.0, 100.0, 0.0, 0.0) != 1.0) {
+            return Fail("FitScale: zero viewport should return fallback 1.0.");
+        }
+    }
+
+    // ── StringOps ────────────────────────────────────────────────────────────
+    {
+        if (platform::Trim(L"") != L"") {
+            return Fail("Trim: empty string should remain empty.");
+        }
+        if (platform::Trim(L"hello") != L"hello") {
+            return Fail("Trim: no-whitespace string should remain unchanged.");
+        }
+        if (platform::Trim(L"  leading") != L"leading") {
+            return Fail("Trim: leading spaces were not removed.");
+        }
+        if (platform::Trim(L"trailing  ") != L"trailing") {
+            return Fail("Trim: trailing spaces were not removed.");
+        }
+        if (platform::Trim(L"\t spaced \n") != L"spaced") {
+            return Fail("Trim: mixed whitespace chars were not fully removed.");
+        }
+        if (platform::Trim(L"\r\n\f\v") != L"") {
+            return Fail("Trim: all-whitespace string should become empty.");
+        }
+        const std::wstring single_space(L" ", 1);
+        if (platform::Trim(single_space) != L"") {
+            return Fail("Trim: single space should become empty.");
+        }
+        if (platform::Trim(L"a") != L"a") {
+            return Fail("Trim: single char should remain unchanged.");
+        }
+    }
+
+    // ── LengthMeasurement ──────────────────────────────────────────────────
+    {
+        LengthMeasurement len(L"Len A", ImagePoint{10, 20}, ImagePoint{40, 60});
+        if (len.Name() != L"Len A") {
+            return Fail("LengthMeasurement: name mismatch.");
+        }
+        if (len.First().x != 10 || len.First().y != 20) {
+            return Fail("LengthMeasurement: first point mismatch.");
+        }
+        if (len.Second().x != 40 || len.Second().y != 60) {
+            return Fail("LengthMeasurement: second point mismatch.");
+        }
+
+        // 3-4-5 triangle:  dx=30, dy=40  →  distance=50
+        double dist = len.PixelLength();
+        if (dist < 49.9 || dist > 50.1) {
+            return Fail("LengthMeasurement: PixelLength 3-4-5 expected ~50, got " + std::to_string(dist));
+        }
+
+        // Zero length
+        LengthMeasurement len0(L"Zero", ImagePoint{5, 5}, ImagePoint{5, 5});
+        if (len0.PixelLength() != 0.0) {
+            return Fail("LengthMeasurement: zero-length should be 0.");
+        }
+
+        // Evaluate with calibration
+        auto cal = CalibrationProfile::FromMicronsPerPixel(2.0);
+        auto result = len.Evaluate(cal, MeasurementUnit::Micrometers);
+        if (result.pixel_value < 49.9 || result.pixel_value > 50.1) {
+            return Fail("LengthMeasurement: Evaluate pixel_value mismatch.");
+        }
+        if (result.calibrated_value < 99.9 || result.calibrated_value > 100.1) {
+            return Fail("LengthMeasurement: Evaluate calibrated mismatch (expected ~100 um).");
+        }
+
+        // Setters
+        len.SetName(L"Renamed");
+        len.SetFirst(ImagePoint{0, 0});
+        len.SetSecond(ImagePoint{1, 1});
+        if (len.Name() != L"Renamed") { return Fail("LengthMeasurement: SetName failed."); }
+        if (len.PixelLength() < 1.414 || len.PixelLength() > 1.415) {
+            return Fail("LengthMeasurement: setters PixelLength mismatch.");
+        }
+    }
+
+    // ── AngleMeasurement ───────────────────────────────────────────────────
+    {
+        // vertex at (0,0), arm1 along +X (100,0), arm2 along +Y (0,100) → 90°
+        AngleMeasurement a90(L"Right angle",
+                             ImagePoint{100, 0},
+                             ImagePoint{0, 0},
+                             ImagePoint{0, 100});
+        if (a90.Name() != L"Right angle") {
+            return Fail("AngleMeasurement: name mismatch.");
+        }
+        double deg = a90.Degrees();
+        if (deg < 89.9 || deg > 90.1) {
+            return Fail("AngleMeasurement: 90° expected, got " + std::to_string(deg));
+        }
+
+        // 45°: vertex (0,0), arm1 along +X (100,0), arm2 at (100,100)
+        AngleMeasurement a45(L"45 deg",
+                             ImagePoint{100, 0},
+                             ImagePoint{0, 0},
+                             ImagePoint{100, 100});
+        double deg45 = a45.Degrees();
+        if (deg45 < 44.9 || deg45 > 45.1) {
+            return Fail("AngleMeasurement: 45° expected, got " + std::to_string(deg45));
+        }
+
+        // 180°: vertex (0,0), arm1 along +X, arm2 along -X
+        AngleMeasurement a180(L"Flat",
+                              ImagePoint{100, 0},
+                              ImagePoint{0, 0},
+                              ImagePoint{-100, 0});
+        double deg180 = a180.Degrees();
+        if (deg180 < 179.9 || deg180 > 180.1) {
+            return Fail("AngleMeasurement: 180° expected, got " + std::to_string(deg180));
+        }
+
+        // 0°: both arms same direction
+        AngleMeasurement a0(L"Collinear",
+                            ImagePoint{50, 0},
+                            ImagePoint{0, 0},
+                            ImagePoint{100, 0});
+        double deg0 = a0.Degrees();
+        if (deg0 < -0.1 || deg0 > 0.1) {
+            return Fail("AngleMeasurement: 0° expected, got " + std::to_string(deg0));
+        }
+
+        // Evaluate()
+        auto res = a90.Evaluate();
+        if (res.kind != L"Angle") {
+            return Fail("AngleMeasurement: Evaluate kind mismatch.");
+        }
+        if (res.calibrated_value < 89.9 || res.calibrated_value > 90.1) {
+            return Fail("AngleMeasurement: Evaluate degrees mismatch.");
+        }
+
+        // Setters
+        a90.SetName(L"Renamed");
+        a90.SetFirst(ImagePoint{1, 0});
+        a90.SetVertex(ImagePoint{0, 0});
+        a90.SetSecond(ImagePoint{0, 1});
+        if (a90.First().x != 1)  { return Fail("AngleMeasurement: SetFirst failed."); }
+        if (a90.Vertex().x != 0) { return Fail("AngleMeasurement: SetVertex failed."); }
+        if (a90.Second().y != 1) { return Fail("AngleMeasurement: SetSecond failed."); }
+    }
+
+    // ── RectangleAreaMeasurement ───────────────────────────────────────────
+    {
+        // 10 px wide × 20 px tall → area = 200 px²
+        RectangleAreaMeasurement rect(L"Rect A",
+                                      ImagePoint{0, 0},
+                                      ImagePoint{10, 20});
+        if (rect.Name() != L"Rect A") {
+            return Fail("RectangleAreaMeasurement: name mismatch.");
+        }
+        if (rect.First().x != 0 || rect.First().y != 0) {
+            return Fail("RectangleAreaMeasurement: corner1 mismatch.");
+        }
+        if (rect.Second().x != 10 || rect.Second().y != 20) {
+            return Fail("RectangleAreaMeasurement: corner2 mismatch.");
+        }
+
+        double area_px = rect.PixelArea();
+        if (area_px != 200.0) {
+            return Fail("RectangleAreaMeasurement: PixelArea expected 200, got " + std::to_string(area_px));
+        }
+
+        // Swapped corners should give same absolute area
+        RectangleAreaMeasurement rect_swapped(L"Swapped",
+                                              ImagePoint{10, 20},
+                                              ImagePoint{0, 0});
+        if (rect_swapped.PixelArea() != 200.0) {
+            return Fail("RectangleAreaMeasurement: swapped corners area should still be 200.");
+        }
+
+        // Evaluate with calibration
+        auto cal = CalibrationProfile::FromMicronsPerPixel(2.0);
+        auto result = rect.Evaluate(cal, MeasurementUnit::Micrometers);
+        if (result.pixel_value != 200.0) {
+            return Fail("RectangleAreaMeasurement: Evaluate pixel_value mismatch.");
+        }
+        if (result.calibrated_value < 799.0 || result.calibrated_value > 801.0) {
+            return Fail("RectangleAreaMeasurement: Evaluate calibrated mismatch (expected ~800 um²).");
+        }
+
+        // Setters
+        rect.SetName(L"Sq");
+        rect.SetFirst(ImagePoint{0, 0});
+        rect.SetSecond(ImagePoint{5, 5});
+        if (rect.PixelArea() != 25.0) {
+            return Fail("RectangleAreaMeasurement: setters area mismatch.");
+        }
+    }
+
+    // ── PolygonAreaMeasurement ─────────────────────────────────────────────
+    {
+        // Square (0,0)-(10,0)-(10,10)-(0,10) → shoelace area = 100 px²
+        std::vector<ImagePoint> square = {
+            {0, 0}, {10, 0}, {10, 10}, {0, 10}
+        };
+        PolygonAreaMeasurement poly(L"Square", square);
+        if (poly.Name() != L"Square") {
+            return Fail("PolygonAreaMeasurement: name mismatch.");
+        }
+        if (poly.Points().size() != 4) {
+            return Fail("PolygonAreaMeasurement: vertex count mismatch.");
+        }
+        double sq_area = poly.PixelArea();
+        if (sq_area < 99.9 || sq_area > 100.1) {
+            return Fail("PolygonAreaMeasurement: square area expected 100, got " + std::to_string(sq_area));
+        }
+
+        // Triangle (0,0)-(10,0)-(0,10) → shoelace area = 50 px²
+        std::vector<ImagePoint> tri = {
+            {0, 0}, {10, 0}, {0, 10}
+        };
+        PolygonAreaMeasurement poly_tri(L"Triangle", tri);
+        double tri_area = poly_tri.PixelArea();
+        if (tri_area < 49.9 || tri_area > 50.1) {
+            return Fail("PolygonAreaMeasurement: triangle area expected 50, got " + std::to_string(tri_area));
+        }
+
+        // Evaluate with calibration
+        auto cal = CalibrationProfile::FromMicronsPerPixel(2.0);
+        auto result = poly.Evaluate(cal, MeasurementUnit::Micrometers);
+        if (result.calibrated_value < 399.0 || result.calibrated_value > 401.0) {
+            return Fail("PolygonAreaMeasurement: Evaluate calibrated mismatch.");
+        }
+
+        // SetPoint partial update
+        poly_tri.SetPoint(0, ImagePoint{0, 10});
+        poly_tri.SetPoint(1, ImagePoint{10, 10});
+        poly_tri.SetPoint(2, ImagePoint{10, 0});
+        // Same triangle shape, same area
+        if (poly_tri.PixelArea() < 49.9 || poly_tri.PixelArea() > 50.1) {
+            return Fail("PolygonAreaMeasurement: SetPoint area mismatch.");
+        }
+
+        // Setters
+        poly.SetName(L"Renamed");
+        poly.SetPoints({ImagePoint{0, 0}, ImagePoint{5, 0}, ImagePoint{5, 5}, ImagePoint{0, 5}});
+        if (poly.PixelArea() != 25.0) {
+            return Fail("PolygonAreaMeasurement: SetPoints area mismatch.");
+        }
+    }
+
+    // ── TextInputParser ────────────────────────────────────────────────────
+    {
+        using namespace platform;
+
+        // ParsePositiveInteger
+        if (ParsePositiveInteger(L"42") != 42) {
+            return Fail("TextInputParser: ParsePositiveInteger '42' expected 42.");
+        }
+        if (ParsePositiveInteger(L"0") != 0) {
+            return Fail("TextInputParser: ParsePositiveInteger '0' expected 0.");
+        }
+        if (ParsePositiveInteger(L"-5") != 0) {
+            return Fail("TextInputParser: ParsePositiveInteger negative should return 0.");
+        }
+        if (ParsePositiveInteger(L"") != 0) {
+            return Fail("TextInputParser: ParsePositiveInteger empty should return 0.");
+        }
+        if (ParsePositiveInteger(L"abc") != 0) {
+            return Fail("TextInputParser: ParsePositiveInteger non-numeric should return 0.");
+        }
+        if (ParsePositiveInteger(L"123abc") != 0) {
+            return Fail("TextInputParser: ParsePositiveInteger trailing garbage should return 0.");
+        }
+
+        // ParsePositiveDouble
+        if (ParsePositiveDouble(L"3.14") != 3.14) {
+            return Fail("TextInputParser: ParsePositiveDouble '3.14' mismatch.");
+        }
+        if (ParsePositiveDouble(L"0") != 0.0) {
+            return Fail("TextInputParser: ParsePositiveDouble '0' expected 0.");
+        }
+        if (ParsePositiveDouble(L"-1.5") != 0.0) {
+            return Fail("TextInputParser: ParsePositiveDouble negative should return 0.");
+        }
+        if (ParsePositiveDouble(L"") != 0.0) {
+            return Fail("TextInputParser: ParsePositiveDouble empty should return 0.");
+        }
+        if (ParsePositiveDouble(L"xyz") != 0.0) {
+            return Fail("TextInputParser: ParsePositiveDouble non-numeric should return 0.");
+        }
+
+        // ParseExposureTime
+        if (ParseExposureTime(L"125ms") != 125.0) {
+            return Fail("TextInputParser: ParseExposureTime '125ms' expected 125.");
+        }
+        if (ParseExposureTime(L"1.5s") != 1500.0) {
+            return Fail("TextInputParser: ParseExposureTime '1.5s' expected 1500.");
+        }
+        if (ParseExposureTime(L"") != 0.0) {
+            return Fail("TextInputParser: ParseExposureTime empty should return 0.");
+        }
+        if (ParseExposureTime(L"bogus") != 0.0) {
+            return Fail("TextInputParser: ParseExposureTime invalid should return 0.");
+        }
+    }
+
+    // ── ProcessingParameterRules ───────────────────────────────────────────
+    {
+        // --- Stitch search-percent range / validation / clamp ---
+        if (ProcessingParameterRules::MinStitchSearchPercent() < 0) {
+            return Fail("ProcessingParameterRules: MinStitchSearchPercent negative.");
+        }
+        if (ProcessingParameterRules::MaxStitchSearchPercent() <= ProcessingParameterRules::MinStitchSearchPercent()) {
+            return Fail("ProcessingParameterRules: Max <= Min for stitch search percent.");
+        }
+        if (ProcessingParameterRules::DefaultStitchSearchPercent() < ProcessingParameterRules::MinStitchSearchPercent()
+            || ProcessingParameterRules::DefaultStitchSearchPercent() > ProcessingParameterRules::MaxStitchSearchPercent()) {
+            return Fail("ProcessingParameterRules: default stitch search percent out of range.");
+        }
+        if (!ProcessingParameterRules::IsValidStitchSearchPercent(
+                ProcessingParameterRules::DefaultStitchSearchPercent())) {
+            return Fail("ProcessingParameterRules: default should be valid.");
+        }
+        if (ProcessingParameterRules::IsValidStitchSearchPercent(-1)) {
+            return Fail("ProcessingParameterRules: negative search percent should be invalid.");
+        }
+        {
+            int clamped_lo = ProcessingParameterRules::ClampStitchSearchPercent(-999);
+            int clamped_hi = ProcessingParameterRules::ClampStitchSearchPercent(9999);
+            if (clamped_lo < ProcessingParameterRules::MinStitchSearchPercent()
+                || clamped_hi > ProcessingParameterRules::MaxStitchSearchPercent()) {
+                return Fail("ProcessingParameterRules: ClampStitchSearchPercent out of range.");
+            }
+        }
+
+        // --- Stitch overlap-percent ---
+        if (!ProcessingParameterRules::IsValidStitchOverlapPercent(
+                ProcessingParameterRules::DefaultStitchOverlapPercent())) {
+            return Fail("ProcessingParameterRules: default overlap should be valid.");
+        }
+
+        // --- Search ↔ overlap conversion is reversible ---
+        {
+            const int original = ProcessingParameterRules::DefaultStitchSearchPercent();
+            int overlap = ProcessingParameterRules::OverlapPercentFromSearch(original);
+            int roundtrip = ProcessingParameterRules::SearchPercentFromOverlap(overlap);
+            if (roundtrip < 0) {
+                return Fail("ProcessingParameterRules: SearchFromOverlap returned negative.");
+            }
+        }
+
+        // --- EDF focus radius ---
+        if (ProcessingParameterRules::MinEdfFocusRadius() < 1) {
+            return Fail("ProcessingParameterRules: MinEdfFocusRadius should be >= 1.");
+        }
+        if (!ProcessingParameterRules::IsValidEdfFocusRadius(3)) {
+            return Fail("ProcessingParameterRules: focus radius 3 should be valid.");
+        }
+        int clamped_r = ProcessingParameterRules::ClampEdfFocusRadius(9999);
+        if (clamped_r > ProcessingParameterRules::MaxEdfFocusRadius()) {
+            return Fail("ProcessingParameterRules: ClampEdfFocusRadius exceeded max.");
+        }
+
+        // --- DefaultEdfOptions / NormalizeEdfOptions ---
+        {
+            EdfOptions def = ProcessingParameterRules::DefaultEdfOptions();
+            if (def.focus_radius < ProcessingParameterRules::MinEdfFocusRadius()) {
+                return Fail("ProcessingParameterRules: default EDF focus radius out of range.");
+            }
+            EdfOptions bad;
+            bad.focus_radius = -5;
+            EdfOptions normalized = ProcessingParameterRules::NormalizeEdfOptions(bad);
+            if (normalized.focus_radius < ProcessingParameterRules::MinEdfFocusRadius()) {
+                return Fail("ProcessingParameterRules: NormalizeEdfOptions did not fix focus radius.");
+            }
+        }
+
+        // --- RegistrationSearchRadius ---
+        {
+            StitchSearchRadius sr = ProcessingParameterRules::RegistrationSearchRadius(
+                640, 480, ProcessingParameterRules::DefaultStitchSearchPercent());
+            if (sr.x <= 0 || sr.y <= 0) {
+                return Fail("ProcessingParameterRules: RegistrationSearchRadius returned zero radius.");
+            }
+        }
     }
 
     std::cout << "domain smoke tests passed\n";

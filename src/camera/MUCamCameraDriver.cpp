@@ -262,14 +262,15 @@ bool MUCamCameraDriver::ApplyWhiteBalance()
     return camera_ && sdk_.ApplyWhiteBalance(camera_);
 }
 
-bool MUCamCameraDriver::GrabFrame(unsigned long long sequence, ImageFrame& frame)
+bool MUCamCameraDriver::GrabFrame(uint64_t sequence, ImageFrame& frame)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!camera_ || raw_.empty() || open_info_.width <= 0 || open_info_.height <= 0) {
         return false;
     }
 
-    unsigned long timestamp = 0;
+    unsigned long sdk_timestamp = 0;
+    uint32_t timestamp = 0;
     bool got_frame = false;
     int display_format = frame_format_;
     int display_bytes_per_channel = input_bytes_per_channel_;
@@ -278,10 +279,11 @@ bool MUCamCameraDriver::GrabFrame(unsigned long long sequence, ImageFrame& frame
     int bayer_format = frame_format_;
     if (IsBayerFormat(frame_format_) && sdk_.HasBayerReadout()) {
         bayer_format = sdk_.GetBayerFormat(camera_);
-        got_frame = sdk_.GetBayer(camera_, raw_.data(), &timestamp);
+        got_frame = sdk_.GetBayer(camera_, raw_.data(), &sdk_timestamp);
     } else {
-        got_frame = sdk_.GetFrame(camera_, raw_.data(), open_info_.width, open_info_.height, &timestamp);
+        got_frame = sdk_.GetFrame(camera_, raw_.data(), open_info_.width, open_info_.height, &sdk_timestamp);
     }
+    timestamp = static_cast<uint32_t>(sdk_timestamp);
 
     if (got_frame && IsBayerFormat(frame_format_) && sdk_.HasBayerToRgb()) {
         rgb_.assign(
@@ -324,8 +326,8 @@ bool MUCamCameraDriver::BuildDisplayFrame(
     int source_bytes_per_channel,
     int width,
     int height,
-    unsigned long timestamp,
-    unsigned long long sequence,
+    uint32_t timestamp,
+    uint64_t sequence,
     ImageFrame& output)
 {
     if (!source || width <= 0 || height <= 0) {

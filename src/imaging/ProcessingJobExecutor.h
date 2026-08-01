@@ -5,6 +5,7 @@
 #include "ProcessingJobState.h"
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -13,7 +14,7 @@ public:
     using ProgressCallback = std::function<void(int)>;
 
     static ProcessingJobResult RunStitch(
-        unsigned long long job_id,
+        uint64_t job_id,
         std::vector<StitchTile> tiles,
         int search_percent,
         const std::atomic_bool* cancel_requested = nullptr,
@@ -21,14 +22,14 @@ public:
         bool use_orb_registration = true);
 
     static ProcessingJobResult RunStitch(
-        unsigned long long job_id,
+        uint64_t job_id,
         std::vector<StitchTile> tiles,
         StitchProcessingOptions options,
         const std::atomic_bool* cancel_requested = nullptr,
         const ProgressCallback& progress_callback = {});
 
     static ProcessingJobResult RunEdf(
-        unsigned long long job_id,
+        uint64_t job_id,
         std::vector<ImageFrame> stack,
         EdfOptions options,
         const std::atomic_bool* cancel_requested = nullptr,

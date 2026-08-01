@@ -3,7 +3,13 @@
 void FrameBuffer::Publish(ImageFrame frame)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    latest_frame_ = std::make_shared<ImageFrame>(std::move(frame));
+    // Reuse existing allocation when no reader holds a snapshot,
+    // avoiding per-frame shared_ptr heap allocation and deallocation.
+    if (latest_frame_ && latest_frame_.use_count() == 1) {
+        *latest_frame_ = std::move(frame);
+    } else {
+        latest_frame_ = std::make_shared<ImageFrame>(std::move(frame));
+    }
 }
 
 ImageFrame FrameBuffer::Snapshot() const

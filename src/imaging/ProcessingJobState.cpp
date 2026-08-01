@@ -1,5 +1,6 @@
 #include "ProcessingJobState.h"
 
+#include <cstdint>
 #include <utility>
 
 bool ProcessingJobState::IsRunning() const
@@ -9,7 +10,7 @@ bool ProcessingJobState::IsRunning() const
 
 ProcessingJobLaunch ProcessingJobState::Begin()
 {
-    const unsigned long long job_id = ++job_counter_;
+    const uint64_t job_id = ++job_counter_;
     active_job_id_ = job_id;
     auto cancel_token = std::make_shared<std::atomic_bool>(false);
     {

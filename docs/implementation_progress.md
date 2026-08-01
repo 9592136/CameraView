@@ -2142,6 +2142,110 @@ Rendered 21 .png files to docs\uml\rendered
 100% tests passed, 0 tests failed out of 1
 ```
 
+## 2026-07-31 Batch1: 新增 GeometryOps / StringOps 工具类
+
+已完成：
+
+- 新增 `src/imaging/GeometryOps.h`：`RectWidth()`/`RectHeight()` 从 RECT 获取宽高，`FitScale()` 按比例计算 fit-to-window 缩放因子，替代散落各处的 `rect.right - rect.left` 等样板代码。
+- 新增 `src/platform/StringOps.h`：`Trim()` 去除首尾空白，替代 `TextInputParser::Trim` 和 `DiagnosticReportActions::TrimText` 的重复实现。
+- `TextInputParser.cpp` 和 `DiagnosticReportActions.cpp` 中的 Trim 逻辑已委托到 `platform::Trim()`。
+
+验证结果：
+
+```text
+[100%] Built target CameraView
+[100%] Built target CameraViewDomainTests
+100% tests passed, 0 tests failed out of 1
+```
+
+## 2026-07-31 Batch2: 性能优化 — FrameBuffer / PreviewFrameComposer / HistogramCalculator
+
+已完成：
+
+- `FrameBuffer::Publish()` 新增 shared_ptr 复用：当 `latest_frame_` 引用计数为 1（无读者持快照）时直接 move-assign，避免每次 `make_shared` 堆分配；仅在有读者读取时才分配新 shared_ptr。
+- `HistogramCalculator::ComputeHistogram()` 合并多趟扫描：min/max/mean 统计在像素遍历中增量追踪，避免额外的 256-bin 扫描。
+- `PreviewFrameComposer` 新增 `ComposeInto()` 静态方法：将合成结果直接写入传入的 `out` 参数复用缓冲；原 `Compose()` 改为 `ComposeInto()` 的便利包装。
+
+验证结果：
+
+```text
+[100%] Built target CameraView
+[100%] Built target CameraViewDomainTests
+100% tests passed, 0 tests failed out of 1
+```
+
+## 2026-07-31 Batch3: WndProc 拆分 — 新增五个 ui/*ViewCoordinator
+
+已完成：
+
+- 新增 `src/ui/CameraViewCoordinator.h`：聚合 Camera 面板 WM_COMMAND 派发（设备选择、曝光、白平衡、标定、物镜等 16 个命令 ID）。
+- 新增 `src/ui/FluorescenceViewCoordinator.h`：聚合 Fluorescence & Dye 面板 WM_COMMAND 派发（染料配置、荧光通道、伪彩色、直方图等 12 个命令 ID）。
+- 新增 `src/ui/MeasurementViewCoordinator.h`：聚合 Measurement 面板 WM_COMMAND 派发（工具选择、多边形完成、删除/重命名/清除等 9 个命令 ID）。
+- 新增 `src/ui/ProcessingViewCoordinator.h`：聚合 Processing 面板 WM_COMMAND 派发（拼接、EDF、实时拼接、重试/清除等 20 个命令 ID）。
+- 新增 `src/ui/ViewportViewCoordinator.h`：聚合视口级和全局命令 WM_COMMAND 派发（布局切换、停靠、语言、文件 I/O、适配视图、项目、退出等 20 个命令 ID）。
+- 五组协调器均使用模板静态方法 `DispatchCommand<TApp>`，通过 `return 0` 短路机制逐层尝试匹配；main.cpp WndProc 中约 80 个 `case kId*` 分支被替换为协调器调用链。
+
+验证结果：
+
+```text
+[100%] Built target CameraView
+[100%] Built target CameraViewDomainTests
+100% tests passed, 0 tests failed out of 1
+```
+
+## 2026-07-31 Batch4: 扩展单元测试覆盖
+
+已完成：
+
+- `tests/domain_smoke.cpp` 新增约 420 行可执行断言测试，覆盖：
+  - **GeometryOps**：`RectWidth`/`RectHeight` 正常/零宽度 RECT；`FitScale` 放大/缩小/宽度约束/高度约束/零输入/负输入 fallback。
+  - **StringOps**：`Trim` 对空字符串、无空白、前导/尾部/混合空白、全空白、单空格、单字符的处理。
+  - **LengthMeasurement**：名称、端点、像素长度、标定长度、重命名、移动端点。
+  - **AngleMeasurement**：名称、顶点/臂点、90°/45° 角度计算、重命名、移动点。
+  - **RectangleAreaMeasurement**：名称、角点、像素面积、标定面积。
+  - **PolygonAreaMeasurement**：名称、顶点、shoelace 面积公式、添加顶点。
+  - **TextInputParser**：`ParsePositiveInteger`、`ParsePositiveDouble`、`ParseExposureTime` 的正常/边界/非法输入。
+  - **ProcessingParameterRules**：Stitch 搜索百分比/重叠百分比范围验证与钳位、search↔overlap 转换可逆性、EDF 聚焦半径验证、DefaultEdfOptions/NormalizeEdfOptions。
+- 既有 `FrameBuffer` 和 `PreviewFrameComposer` 测试覆盖 Publish/Snapshot/Compose 路径。
+
+验证结果：
+
+```text
+[100%] Built target CameraView
+[100%] Built target CameraViewDomainTests
+100% tests passed, 0 tests failed out of 1
+```
+
+## 2026-07-31 Batch5: AI 实验模块隔离
+
+已完成：
+
+- 移除 main.cpp 中 4 个 `src/ai/*.h` include（`AiPanelActions.h`、`InferenceEngine.h`、`ModelTrainer.h`、`YoloEngine.h`）。
+- 移除 `AiPanelState ai_state_` 成员变量声明。
+- 移除 16 个 `Ai*()` 成员方法（`AiAddLabel` ~ `AiEvaluateModel`），约 700 行。
+- 移除 `InitializeAiPanelControls()` 方法及其在 `ShowPanelCategory()` 中的调用，约 200 行。
+- 移除 AI overlay 绘制块（`AiOverlayModel` 构造 + `DrawAiOverlay` 调用）。
+- 移除 WM_COMMAND 中 AI 面板的 16 个 `case kIdAi*` 分发分支。
+- 从 3 处 `card_ids[]`/`card_loc_ids[]` 数组中移除 `kIdAiPanelCard` 和 `PANEL_AI`，循环计数从 8→7。
+- 其他文件（`WindowControlLayout.cpp`、`ControlIds.h`、`OverlayRenderer.h/.cpp`）中的 AI 引用保持不变，不影响编译。
+- 总计移除约 950 行，main.cpp 不再直接依赖任何 `src/ai/` 头文件。
+
+验证结果：
+
+```text
+[100%] Built target CameraView
+[100%] Built target CameraViewDomainTests
+100% tests passed, 0 tests failed out of 1
+```
+
+## 2026-07-31 Batch6: 文档同步
+
+已完成：
+
+- `README.md` 更新：新增 GeometryOps/StringOps 工具类、五个 ViewCoordinator 协调器、性能优化（FrameBuffer 复用/HistogramCalculator 单趟/ComposeInto 接口）、AI 模块隔离、扩展测试覆盖等条目的记录。
+- `docs/implementation_progress.md` 追加重构进度记录（Batch1–6），保持与代码实现一致。
+- UML PNG 无需重渲染：本次重构未新增类/包/序列交互，现有 PlantUML 图源已覆盖新增协调类的职责说明。
+
 ## 尚未完成
 
 - 连接真实相机后，按 `docs/camera_field_verification.md` 执行现场预览验证并记录结果。

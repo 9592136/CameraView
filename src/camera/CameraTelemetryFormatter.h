@@ -3,6 +3,7 @@
 #include "ICameraDriver.h"
 #include "i18n/Localization.h"
 
+#include <cstdint>
 #include <string>
 
 class CameraTelemetryFormatter {
@@ -13,7 +14,7 @@ public:
                                                UILanguage lang = UILanguage::English);
     static std::wstring FormatFrameTelemetry(
         int device_index, const CameraOpenInfo& open_info,
-        double fps, unsigned long timestamp,
+        double fps, uint32_t timestamp,
         UILanguage lang = UILanguage::English);
 
 private:

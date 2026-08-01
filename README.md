@@ -52,6 +52,11 @@
 - 已新增 `ProcessingResultFrames`，统一管理拼接结果、EDF 合成图、EDF 焦点图、当前处理结果显示状态和显示来源标签，并可在 `EDF Image` 与 `Focus Map` 之间切换
 - 已新增 `ProcessingRetryState`，统一管理拼接/EDF 后台任务的重试快照和有效性判断
 - 支持通过状态栏查看拼接/EDF 后台处理进度，可用 `Retry` 重试上一后台作业，并可用 `Clear Processing` 清空队列、请求取消正在运行的后台作业；拼接/EDF 作业启动准备由 `ProcessingStartActions` 统一封装，后台 worker 线程创建由 `ProcessingWorkerActions` 统一封装，作业执行由 `ProcessingJobExecutor` 统一封装，后台完成结果的旧作业忽略、失败状态和成功发布由 `ProcessingResultActions` 统一维护，显示 EDF 合成图、焦点图和清空处理队列动作由 `ProcessingPanelActions` 统一维护，重试请求判定和重试提示由 `ProcessingRetryActions` 统一维护，后台处理状态文本由 `ProcessingStatusFormatter` 统一生成，取消检查和进度上报判定由 `ProcessingProgressActions` 统一维护，进度刷新节流由 `ProcessingProgressThrottle` 统一维护
+- 已新增 `GeometryOps` 和 `StringOps` 无状态工具类，集中坐标换算（RectWidth/RectHeight/FitScale）与字符串 Trim 等重复逻辑，`TextInputParser` 和 `DiagnosticReportActions` 已委托到统一的 `platform::Trim()`
+- 已新增 `CameraViewCoordinator`、`FluorescenceViewCoordinator`、`MeasurementViewCoordinator`、`ProcessingViewCoordinator`、`ViewportViewCoordinator` 五个面板协调类，将 main.cpp WndProc 中各功能面板（相机/荧光/测量/处理/视口）的 WM_COMMAND 消息派发下沉到独立协调类；main.cpp 退化为窗口创建、消息路由与全局装配
+- 性能优化：`FrameBuffer::Publish()` 复用 shared_ptr 减少高帧率堆分配；`HistogramCalculator` 合并多趟扫描为像素遍历中追踪 min/max/mean；`PreviewFrameComposer` 新增 `ComposeInto()` 接口复用输出缓冲避免中间临时对象
+- 已清理 main.cpp 中未编译使用的 `src/ai/*.h` include，AI 面板 16 个方法及 WM_COMMAND 分支从 main.cpp 完全隔离（约 950 行），不影响构建
+- 单元测试 `CameraViewDomainTests` 扩展覆盖：GeometryOps（坐标换算与 FitScale 边界）、StringOps（Trim 多场景）、TextInputParser（数值解析边界）、ProcessingParameterRules（拼接/EDF 参数验证）、Measurement 族（长度/角度/矩形/多边形面积属性与计算）
 - 已加入核心逻辑自动验证目标 `CameraViewDomainTests`
 - 不依赖 OpenCV、Qt 或厂家 `.lib` 文件
 

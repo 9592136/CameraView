@@ -33,6 +33,12 @@ HistogramData ComputeHistogram(const ImageFrame& frame, HistogramChannel channel
 
     auto& bins = result.bins;
 
+    // Track min/max bin index and pixel sum during the main pixel pass,
+    // avoiding separate 256-bin sweeps for stats.min_value / max_value / mean.
+    int min_bin = 255;
+    int max_bin = 0;
+    uint64_t pixel_sum = 0;
+
     if (channel == HistogramChannel::Luminance) {
         for (int y = 0; y < height; ++y) {
             const unsigned char* row = data + static_cast<std::size_t>(y) * stride;
@@ -43,56 +49,42 @@ HistogramData ComputeHistogram(const ImageFrame& frame, HistogramChannel channel
                 const unsigned char r = row[idx + 2];
                 const int lum = (static_cast<int>(r) * 77 + static_cast<int>(g) * 150 + static_cast<int>(b) * 29) >> 8;
                 ++bins[lum];
+                pixel_sum += static_cast<uint64_t>(lum);
+                if (lum < min_bin) min_bin = lum;
+                if (lum > max_bin) max_bin = lum;
             }
         }
-    } else if (channel == HistogramChannel::Red) {
+    } else {
+        const int channel_offset = (channel == HistogramChannel::Red)   ? 2
+                                  : (channel == HistogramChannel::Green) ? 1
+                                  :                                       0;
         for (int y = 0; y < height; ++y) {
             const unsigned char* row = data + static_cast<std::size_t>(y) * stride;
             for (int x = 0; x < width; ++x) {
-                ++bins[row[x * 3 + 2]];
-            }
-        }
-    } else if (channel == HistogramChannel::Green) {
-        for (int y = 0; y < height; ++y) {
-            const unsigned char* row = data + static_cast<std::size_t>(y) * stride;
-            for (int x = 0; x < width; ++x) {
-                ++bins[row[x * 3 + 1]];
-            }
-        }
-    } else if (channel == HistogramChannel::Blue) {
-        for (int y = 0; y < height; ++y) {
-            const unsigned char* row = data + static_cast<std::size_t>(y) * stride;
-            for (int x = 0; x < width; ++x) {
-                ++bins[row[x * 3]];
+                const int val = row[x * 3 + channel_offset];
+                ++bins[val];
+                pixel_sum += static_cast<uint64_t>(val);
+                if (val < min_bin) min_bin = val;
+                if (val > max_bin) max_bin = val;
             }
         }
     }
+
+    result.total_pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
 
     result.max_count = *std::max_element(bins.begin(), bins.end());
-    result.total_pixels = static_cast<unsigned long long>(width) * static_cast<unsigned long long>(height);
 
+    // Populate stats from values already tracked during the pixel pass.
     HistogramStats& stats = result.stats;
-    for (int i = 0; i < 256; ++i) {
-        if (bins[i] > 0) {
-            stats.min_value = i;
-            break;
-        }
-    }
-    for (int i = 255; i >= 0; --i) {
-        if (bins[i] > 0) {
-            stats.max_value = i;
-            break;
-        }
+    if (result.total_pixels > 0) {
+        stats.min_value = min_bin;
+        stats.max_value = max_bin;
+        stats.mean = static_cast<double>(pixel_sum) / static_cast<double>(result.total_pixels);
     }
 
-    unsigned long long sum = 0;
-    for (int i = 0; i < 256; ++i) {
-        sum += bins[i] * static_cast<unsigned long long>(i);
-    }
-    stats.mean = static_cast<double>(sum) / static_cast<double>(result.total_pixels);
-
-    const unsigned long long median_target = (result.total_pixels + 1ULL) / 2ULL;
-    unsigned long long cumulative = 0;
+    // Median still requires one cumulative pass over bins.
+    const uint64_t median_target = (result.total_pixels + 1ULL) / 2ULL;
+    uint64_t cumulative = 0;
     for (int i = 0; i < 256; ++i) {
         cumulative += bins[i];
         if (cumulative >= median_target) {
