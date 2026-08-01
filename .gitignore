@@ -48,3 +48,12 @@ Desktop.ini
 # Build toolchain (large binaries, not part of source)
 /tools/*
 !/tools/build_qt.ps1
+!/tools/setup_yolo.ps1
+!/tools/yolo_backend.py
+
+# Local YOLO runtimes, datasets, weights, and training outputs
+/.venv-yolo/
+/runs/
+/models/
+*.pt
+*.onnx

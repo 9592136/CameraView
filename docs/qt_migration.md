@@ -10,6 +10,9 @@ Qt 前端位于 `src/qt/`：
 - `CameraWorker`：在独立 Qt 线程中枚举设备、打开相机和采集帧，避免阻塞界面线程。
 - `ImageCanvas`：Qt 绘制的图像视口，支持适合窗口、光标中心缩放、平移和测量交互。
 - `HistogramWidget`：Qt 绘制的多通道直方图与统计信息。
+- `ai/YoloWorkspaceWidget`：YOLO 检测、分类、分割、训练和模型管理工作台。
+- `ai/YoloProcessController`：异步 Python 后端进程与 JSON 事件协议。
+- `ai/YoloModelRegistry`：用户级模型权重和元数据持久化。
 
 默认 Qt 版已经接入：
 
@@ -21,6 +24,7 @@ Qt 前端位于 `src/qt/`：
 - 当前帧或批量文件加入多帧拼接与 EDF 景深扩展，耗时任务通过 QtConcurrent 后台执行；
 - CameraView 项目保存与恢复、现场诊断报告导出；
 - Qt 与 MUCam 运行时自动部署到可执行文件目录。
+- YOLO 模型导入/管理、检测/分类/实例分割、训练进度与日志、训练产物自动入库和 ONNX 导出。
 
 ## 构建
 
@@ -48,6 +52,7 @@ Qt 前端位于 `src/qt/`：
 
 - `CameraView`：默认 Qt 6 应用。
 - `CameraViewDomainTests`：原有核心领域测试。
+- `CameraViewYoloRegistryTests`：YOLO 模型库导入、元数据、活动模型和托管文件生命周期测试。
 
 旧 Win32 源码继续保留在 `src/ui/` 与 `src/main.cpp`，用于迁移差异追踪，但不再作为产品构建目标。
 

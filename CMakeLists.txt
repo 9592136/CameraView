@@ -250,6 +250,12 @@ qt_add_executable(CameraView WIN32
     src/qt/HistogramWidget.h
     src/qt/ImageCanvas.cpp
     src/qt/ImageCanvas.h
+    src/qt/ai/YoloModelRegistry.cpp
+    src/qt/ai/YoloModelRegistry.h
+    src/qt/ai/YoloProcessController.cpp
+    src/qt/ai/YoloProcessController.h
+    src/qt/ai/YoloWorkspaceWidget.cpp
+    src/qt/ai/YoloWorkspaceWidget.h
     src/MUCamApi.cpp
     src/MUCamApi.h
     src/camera/ICameraDriver.h
@@ -320,6 +326,14 @@ foreach(MUCAM_DLL MUCam32Ex.dll MUCam32.dll)
     )
 endforeach()
 
+add_custom_command(TARGET CameraView POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CameraView>/yolo"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/yolo_backend.py"
+        "$<TARGET_FILE_DIR:CameraView>/yolo/yolo_backend.py"
+    COMMENT "Deploying the CameraView YOLO backend"
+)
+
 # ── MinGW-w64 runtime DLLs ──
 get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
@@ -365,4 +379,14 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
+
+    add_executable(CameraViewYoloRegistryTests
+        tests/yolo_model_registry_tests.cpp
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+    )
+    target_include_directories(CameraViewYoloRegistryTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewYoloRegistryTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewYoloRegistryTests PRIVATE Qt6::Core)
+    add_test(NAME CameraViewYoloRegistryTests COMMAND CameraViewYoloRegistryTests)
 endif()

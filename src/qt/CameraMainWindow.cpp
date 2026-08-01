@@ -2,6 +2,7 @@
 
 #include "CameraWorker.h"
 #include "HistogramWidget.h"
+#include "ai/YoloWorkspaceWidget.h"
 #include "domain/MeasurementFormatter.h"
 #include "domain/MeasurementNameFormatter.h"
 #include "imaging/ChannelFusionEngine.h"
@@ -150,7 +151,16 @@ void CameraMainWindow::setupUi()
     function_tabs_->addTab(buildFluorescencePage(), tr("荧光"));
     function_tabs_->addTab(buildProcessingPage(), tr("处理"));
     function_tabs_->addTab(buildMeasurementPage(), tr("测量"));
+    yolo_workspace_ = new YoloWorkspaceWidget;
+    function_tabs_->addTab(yolo_workspace_, tr("AI"));
     function_tabs_->addTab(buildProjectPage(), tr("项目"));
+    connect(yolo_workspace_, &YoloWorkspaceWidget::overlaysChanged, this,
+        [this](QVector<CanvasOverlay> overlays) {
+            ai_overlays_ = std::move(overlays);
+            rebuildOverlays();
+        });
+    connect(yolo_workspace_, &YoloWorkspaceWidget::statusMessage, this,
+        [this](const QString& message) { statusBar()->showMessage(message, 7000); });
     dock->setWidget(function_tabs_);
     addDockWidget(Qt::RightDockWidgetArea, dock);
 
@@ -643,7 +653,9 @@ void CameraMainWindow::exportImage()
     label_font.setPixelSize(std::max(12, output.width() / 90));
     painter.setFont(label_font);
     const double pen_width = std::max(2.0, output.width() / 800.0);
-    for (const CanvasOverlay& overlay : measurementOverlays()) {
+    QVector<CanvasOverlay> export_overlays = measurementOverlays();
+    export_overlays += ai_overlays_;
+    for (const CanvasOverlay& overlay : export_overlays) {
         if (overlay.points.isEmpty()) {
             continue;
         }
@@ -804,6 +816,9 @@ void CameraMainWindow::updateImagePresentation()
         display_frame_ = {};
     }
     canvas_->setImage(qImageFromFrame(display_frame_));
+    if (yolo_workspace_) {
+        yolo_workspace_->setCurrentImage(qImageFromFrame(display_frame_), current_source_);
+    }
     rebuildOverlays();
     if (histogram_) {
         const HistogramData data = ComputeHistogram(display_frame_, histogram_channel_);
@@ -917,7 +932,9 @@ QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
 
 void CameraMainWindow::rebuildOverlays()
 {
-    canvas_->setOverlays(measurementOverlays());
+    QVector<CanvasOverlay> overlays = measurementOverlays();
+    overlays += ai_overlays_;
+    canvas_->setOverlays(std::move(overlays));
 }
 
 void CameraMainWindow::clearMeasurements()

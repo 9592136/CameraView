@@ -14,6 +14,18 @@ Windows + Qt 6 MinGW 64 位环境可直接运行：
 
 Qt 架构、功能映射、手动 CMake 参数和平台边界详见 [`docs/qt_migration.md`](docs/qt_migration.md)。
 
+## YOLO AI 模块
+
+Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像分类、实例分割、模型导入/切换/删除/ONNX 导出，以及带进度、日志、停止控制和最佳权重自动入库的模型训练。
+
+无需管理员权限安装已验证的 CPU 运行环境：
+
+```powershell
+.\tools\setup_yolo.ps1 -CpuOnly
+```
+
+随后正常构建并启动应用，打开图片，在 AI 页签导入对应的 `.pt` 或 `.onnx` 模型即可。数据集结构、GPU 环境、训练参数和诊断命令详见 [`docs/yolo_ai_module.md`](docs/yolo_ai_module.md)。
+
 ## 已实现
 
 - 优先动态加载 `MUCam32Ex.dll`，兼容旧版 `MUCam32.dll`
@@ -71,6 +83,7 @@ Qt 架构、功能映射、手动 CMake 参数和平台边界详见 [`docs/qt_mi
 - 单元测试 `CameraViewDomainTests` 扩展覆盖：GeometryOps（坐标换算与 FitScale 边界）、StringOps（Trim 多场景）、TextInputParser（数值解析边界）、ProcessingParameterRules（拼接/EDF 参数验证）、Measurement 族（长度/角度/矩形/多边形面积属性与计算）
 - 已加入核心逻辑自动验证目标 `CameraViewDomainTests`
 - 核心领域测试不依赖 Qt、OpenCV 或厂家 `.lib` 文件；默认桌面前端依赖 Qt 6 Widgets
+- Qt AI 工作台通过独立 Python 进程接入标准 Ultralytics YOLO，支持检测、分类、分割、训练、模型注册表和 ONNX 导出；推理结果可叠加显示并随图像导出
 
 ## 显微观察与测量软件实现阶段
 

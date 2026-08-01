@@ -17,6 +17,7 @@
 
 class CameraWorker;
 class HistogramWidget;
+class YoloWorkspaceWidget;
 class QAction;
 class QCheckBox;
 class QComboBox;
@@ -90,6 +91,7 @@ private:
     ImageCanvas* canvas_ = nullptr;
     HistogramWidget* histogram_ = nullptr;
     QTabWidget* function_tabs_ = nullptr;
+    YoloWorkspaceWidget* yolo_workspace_ = nullptr;
     QLabel* source_label_ = nullptr;
     QLabel* coordinate_label_ = nullptr;
     QLabel* zoom_label_ = nullptr;
@@ -135,6 +137,7 @@ private:
     CalibrationProfile calibration_ = CalibrationProfile::Uncalibrated();
     MeasurementUnit display_unit_ = MeasurementUnit::Micrometers;
     MeasurementCollection measurements_;
+    QVector<CanvasOverlay> ai_overlays_;
     std::vector<DyeProfile> dyes_;
     std::vector<FluorescenceChannel> channels_;
     std::vector<StitchTile> stitch_tiles_;
