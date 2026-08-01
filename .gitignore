@@ -44,3 +44,6 @@ Desktop.ini
 # Local third-party binary dependencies
 /third_party/opencv/
 /third_party/*.exe
+
+# Build toolchain (large binaries, not part of source)
+/tools/

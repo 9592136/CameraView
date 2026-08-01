@@ -196,6 +196,10 @@ add_executable(CameraView WIN32
     src/platform/FileDialog.h
     src/ui/HistogramRenderer.cpp
     src/ui/HistogramRenderer.h
+    src/ui/MainMenu.cpp
+    src/ui/LayoutControls.cpp
+    src/ui/CameraPreviewApp.cpp
+    src/ui/WindowProc.cpp
     ${CAMERAVIEW_DOMAIN_SOURCES}
 )
 
