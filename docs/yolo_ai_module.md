@@ -90,3 +90,5 @@ Qt 应用不直接链接 Python。`YoloProcessController` 以独立进程调用�
 ```
 
 本地端到端验收使用 YOLO11n 系列真实权重，已验证检测、分类、实例分割的 JSON 结果，以及一轮检测训练的进度事件、`best.pt` 和 `last.pt` 产物。
+
+完整 PanNuke 细胞数据训练、独立测试结果、许可限制与复现步骤见 [`pannuke_training.md`](pannuke_training.md)。

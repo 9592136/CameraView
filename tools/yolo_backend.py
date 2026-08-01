@@ -232,6 +232,8 @@ def command_train(args: argparse.Namespace) -> int:
             name=args.name,
             exist_ok=args.exist_ok,
             patience=args.patience,
+            seed=args.seed,
+            deterministic=True,
             pretrained=True,
             verbose=True,
         )
@@ -253,6 +255,107 @@ def command_train(args: argparse.Namespace) -> int:
         return fail("Training cancelled by user.", code=130)
     except Exception as exc:
         return fail("YOLO training failed.", detail=str(exc))
+
+
+def command_validate(args: argparse.Namespace) -> int:
+    try:
+        _, YOLO = load_runtime()
+        model = YOLO(args.model, task=args.task or None)
+        emit(
+            "validation_start",
+            task=str(args.task or model.task),
+            model=args.model,
+            data=args.data,
+            split=args.split,
+        )
+        result = model.val(
+            data=args.data,
+            split=args.split,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            device=args.device,
+            workers=args.workers,
+            project=str(Path(args.project).resolve()),
+            name=args.name,
+            exist_ok=args.exist_ok,
+            plots=True,
+            verbose=True,
+        )
+        metrics = dict(getattr(result, "results_dict", {}) or {})
+        save_dir = Path(str(getattr(result, "save_dir", "")))
+        names = getattr(result, "names", {}) or getattr(model, "names", {}) or {}
+        if isinstance(names, list):
+            names = {index: name for index, name in enumerate(names)}
+        per_class: dict[str, Any] = {}
+        for metric_name, attribute in (("boxes", "box"), ("masks", "seg")):
+            metric = getattr(result, attribute, None)
+            if metric is None or not hasattr(metric, "class_result"):
+                continue
+            values: dict[str, Any] = {}
+            for class_id in range(len(names)):
+                try:
+                    precision, recall, map50, map50_95 = metric.class_result(class_id)
+                except (IndexError, TypeError, ValueError):
+                    continue
+                values[str(names.get(class_id, class_id))] = {
+                    "precision": float(precision),
+                    "recall": float(recall),
+                    "mAP50": float(map50),
+                    "mAP50_95": float(map50_95),
+                }
+            if values:
+                per_class[metric_name] = values
+
+        confusion_payload: dict[str, Any] = {}
+        confusion = getattr(result, "confusion_matrix", None)
+        matrix = getattr(confusion, "matrix", None)
+        if matrix is not None:
+            matrix_values = matrix.tolist()
+            confusion_payload["matrix_rows_predicted_columns_actual"] = matrix_values
+            if str(args.task or model.task) == "classify":
+                class_metrics: dict[str, Any] = {}
+                for class_id in range(len(names)):
+                    true_positive = float(matrix[class_id, class_id])
+                    predicted = float(matrix[class_id, :].sum())
+                    actual = float(matrix[:, class_id].sum())
+                    precision = true_positive / predicted if predicted else 0.0
+                    recall = true_positive / actual if actual else 0.0
+                    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+                    class_metrics[str(names.get(class_id, class_id))] = {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1": f1,
+                        "support": int(actual),
+                    }
+                per_class["classification"] = class_metrics
+
+        payload = {
+            "task": str(args.task or model.task),
+            "split": args.split,
+            "save_dir": str(save_dir.resolve()) if save_dir else "",
+            "metrics": {
+                key: float(value)
+                for key, value in metrics.items()
+                if isinstance(value, (int, float))
+            },
+            "speed": {
+                key: float(value)
+                for key, value in dict(getattr(result, "speed", {}) or {}).items()
+                if isinstance(value, (int, float))
+            },
+            "per_class": per_class,
+            "confusion_matrix": confusion_payload,
+        }
+        if args.report:
+            report_path = Path(args.report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        emit("validation_complete", **payload)
+        return 0
+    except KeyboardInterrupt:
+        return fail("Validation cancelled by user.", code=130)
+    except Exception as exc:
+        return fail("YOLO validation failed.", detail=str(exc))
 
 
 def command_export(args: argparse.Namespace) -> int:
@@ -306,8 +409,24 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--project", required=True)
     train.add_argument("--name", default="train")
     train.add_argument("--patience", type=int, default=20)
+    train.add_argument("--seed", type=int, default=42)
     train.add_argument("--exist-ok", action="store_true")
     train.set_defaults(func=command_train)
+
+    validate = subparsers.add_parser("validate", help="evaluate a model on a dataset split")
+    validate.add_argument("--model", required=True)
+    validate.add_argument("--data", required=True)
+    validate.add_argument("--task", choices=["detect", "classify", "segment"])
+    validate.add_argument("--split", choices=["train", "val", "test"], default="test")
+    validate.add_argument("--imgsz", type=int, default=640)
+    validate.add_argument("--batch", type=int, default=8)
+    validate.add_argument("--workers", type=int, default=4)
+    validate.add_argument("--device", default="cpu")
+    validate.add_argument("--project", required=True)
+    validate.add_argument("--name", default="validation")
+    validate.add_argument("--report")
+    validate.add_argument("--exist-ok", action="store_true")
+    validate.set_defaults(func=command_validate)
 
     export = subparsers.add_parser("export", help="export a trained model")
     export.add_argument("--model", required=True)
