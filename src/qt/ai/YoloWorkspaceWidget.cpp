@@ -17,6 +17,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
@@ -145,7 +146,12 @@ void YoloWorkspaceWidget::buildUi()
     options_layout->addRow(tr("结果"), result_list_);
     inference_layout->addWidget(options_group);
     inference_layout->addStretch();
-    tabs->addTab(inference_page, tr("推理与模型"));
+    auto* inference_scroll = new QScrollArea;
+    inference_scroll->setWidgetResizable(true);
+    inference_scroll->setFrameShape(QFrame::NoFrame);
+    inference_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    inference_scroll->setWidget(inference_page);
+    tabs->addTab(inference_scroll, tr("推理与模型"));
 
     auto* training_page = new QWidget;
     auto* training_layout = new QVBoxLayout(training_page);
@@ -192,7 +198,12 @@ void YoloWorkspaceWidget::buildUi()
     log_->setReadOnly(true);
     log_->setMaximumBlockCount(2000);
     training_layout->addWidget(log_, 1);
-    tabs->addTab(training_page, tr("训练"));
+    auto* training_scroll = new QScrollArea;
+    training_scroll->setWidgetResizable(true);
+    training_scroll->setFrameShape(QFrame::NoFrame);
+    training_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    training_scroll->setWidget(training_page);
+    tabs->addTab(training_scroll, tr("训练"));
 
     connect(choose_python, &QPushButton::clicked, this, &YoloWorkspaceWidget::choosePython);
     connect(probe, &QPushButton::clicked, this, [this] {
