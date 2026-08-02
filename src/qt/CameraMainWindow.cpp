@@ -159,6 +159,8 @@ void CameraMainWindow::setupUi()
             ai_overlays_ = std::move(overlays);
             rebuildOverlays();
         });
+    connect(yolo_workspace_, &YoloWorkspaceWidget::focusRequested, this,
+        [this](const QRectF& image_bounds) { canvas_->focusOnImageRect(image_bounds); });
     connect(yolo_workspace_, &YoloWorkspaceWidget::statusMessage, this,
         [this](const QString& message) { statusBar()->showMessage(message, 7000); });
     dock->setWidget(function_tabs_);

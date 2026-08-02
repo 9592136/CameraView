@@ -28,7 +28,11 @@ public:
 
 signals:
     void overlaysChanged(QVector<CanvasOverlay> overlays);
+    void focusRequested(QRectF imageBounds);
     void statusMessage(QString message);
+
+private slots:
+    void renderInference(const QJsonObject& result);
 
 private:
     void buildUi();
@@ -46,7 +50,6 @@ private:
     void chooseTrainingModel();
     void chooseTrainingOutput();
     void startTraining();
-    void renderInference(const QJsonObject& result);
     void setControlsBusy(bool busy, const QString& operation);
     static QColor classColor(int classId);
 

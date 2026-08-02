@@ -32,6 +32,9 @@ public:
     void setTool(CanvasTool tool);
     CanvasTool tool() const { return tool_; }
     void fitToView();
+    bool focusOnImageRect(const QRectF& imageRegion);
+    double zoom() const { return zoom_; }
+    QPointF viewportCenterInImage() const;
 
 signals:
     void pointsCommitted(CanvasTool tool, QVector<QPointF> points);

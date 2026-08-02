@@ -389,4 +389,20 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_compile_features(CameraViewYoloRegistryTests PRIVATE cxx_std_17)
     target_link_libraries(CameraViewYoloRegistryTests PRIVATE Qt6::Core)
     add_test(NAME CameraViewYoloRegistryTests COMMAND CameraViewYoloRegistryTests)
+
+    add_executable(CameraViewQtInteractionTests
+        tests/qt_interaction_tests.cpp
+        src/qt/ImageCanvas.cpp
+        src/qt/ImageCanvas.h
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+        src/qt/ai/YoloProcessController.cpp
+        src/qt/ai/YoloProcessController.h
+        src/qt/ai/YoloWorkspaceWidget.cpp
+        src/qt/ai/YoloWorkspaceWidget.h
+    )
+    target_include_directories(CameraViewQtInteractionTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewQtInteractionTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewQtInteractionTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME CameraViewQtInteractionTests COMMAND CameraViewQtInteractionTests)
 endif()

@@ -142,7 +142,9 @@ void YoloWorkspaceWidget::buildUi()
     infer_button_ = new QPushButton(tr("识别当前图像"));
     options_layout->addRow(infer_button_);
     result_list_ = new QListWidget;
+    result_list_->setObjectName(QStringLiteral("YoloResultList"));
     result_list_->setMinimumHeight(120);
+    result_list_->setToolTip(tr("双击检测或分割结果可定位到图像目标"));
     options_layout->addRow(tr("结果"), result_list_);
     inference_layout->addWidget(options_group);
     inference_layout->addStretch();
@@ -242,6 +244,13 @@ void YoloWorkspaceWidget::buildUi()
         task_combo_->setCurrentIndex(static_cast<int>(model->task));
     });
     connect(infer_button_, &QPushButton::clicked, this, &YoloWorkspaceWidget::runInference);
+    connect(result_list_, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem* item) {
+            const QRectF bounds = item ? item->data(Qt::UserRole).toRectF() : QRectF();
+            if (bounds.isEmpty()) return;
+            emit focusRequested(bounds);
+            emit statusMessage(tr("已定位：%1").arg(item->text()));
+        });
     connect(choose_dataset, &QPushButton::clicked, this, &YoloWorkspaceWidget::chooseDataset);
     connect(choose_training_model, &QPushButton::clicked, this, &YoloWorkspaceWidget::chooseTrainingModel);
     connect(choose_output, &QPushButton::clicked, this, &YoloWorkspaceWidget::chooseTrainingOutput);
@@ -505,7 +514,6 @@ void YoloWorkspaceWidget::renderInference(const QJsonObject& result)
         const QString label = prediction.value(QStringLiteral("label")).toString();
         const double confidence = prediction.value(QStringLiteral("confidence")).toDouble();
         const QString text = QStringLiteral("%1  %2%").arg(label).arg(confidence * 100.0, 0, 'f', 1);
-        result_list_->addItem(text);
         QVector<QPointF> points;
         const QJsonArray polygon = prediction.value(QStringLiteral("polygon")).toArray();
         for (const QJsonValue& point_value : polygon) {
@@ -522,7 +530,23 @@ void YoloWorkspaceWidget::renderInference(const QJsonObject& result)
                 kind = CanvasTool::Rectangle;
             }
         }
-        if (!points.isEmpty()) overlays.push_back({kind, points, text, classColor(class_id)});
+        auto* item = new QListWidgetItem(text, result_list_);
+        if (!points.isEmpty()) {
+            double left = points.first().x();
+            double right = left;
+            double top = points.first().y();
+            double bottom = top;
+            for (const QPointF& point : points) {
+                left = std::min(left, point.x());
+                right = std::max(right, point.x());
+                top = std::min(top, point.y());
+                bottom = std::max(bottom, point.y());
+            }
+            const QRectF bounds(QPointF(left, top), QPointF(right, bottom));
+            item->setData(Qt::UserRole, bounds);
+            item->setToolTip(tr("双击定位到图像中的此目标"));
+            overlays.push_back({kind, points, text, classColor(class_id)});
+        }
     }
     if (predictions.isEmpty()) result_list_->addItem(tr("未发现符合阈值的结果"));
     result_list_->addItem(tr("耗时 %1 ms").arg(result.value(QStringLiteral("elapsed_ms")).toDouble(), 0, 'f', 1));

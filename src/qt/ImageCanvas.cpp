@@ -65,6 +65,48 @@ void ImageCanvas::fitToView()
     update();
 }
 
+bool ImageCanvas::focusOnImageRect(const QRectF& imageRegion)
+{
+    if (image_.isNull() || width() <= 0 || height() <= 0) {
+        return false;
+    }
+
+    QRectF bounds = imageRegion.normalized().intersected(
+        QRectF(QPointF(0.0, 0.0), QSizeF(image_.size())));
+    if (bounds.isEmpty()) {
+        return false;
+    }
+
+    constexpr double focus_padding = 2.0;
+    const double fit = std::min(
+        width() / static_cast<double>(image_.width()),
+        height() / static_cast<double>(image_.height()));
+    const double padded_width = std::max(1.0, bounds.width() * focus_padding);
+    const double padded_height = std::max(1.0, bounds.height() * focus_padding);
+    zoom_ = std::clamp(std::min(
+        width() / (padded_width * fit),
+        height() / (padded_height * fit)), 1.0, 20.0);
+
+    const double scale = fit * zoom_;
+    const QSizeF draw_size(image_.width() * scale, image_.height() * scale);
+    const QPointF unpanned_top_left(
+        (width() - draw_size.width()) / 2.0,
+        (height() - draw_size.height()) / 2.0);
+    const QPointF target_widget_position(
+        unpanned_top_left.x() + bounds.center().x() * scale,
+        unpanned_top_left.y() + bounds.center().y() * scale);
+    pan_ = rect().center() - target_widget_position;
+
+    emit zoomChanged(zoom_);
+    update();
+    return true;
+}
+
+QPointF ImageCanvas::viewportCenterInImage() const
+{
+    return image_.isNull() ? QPointF() : widgetToImage(rect().center());
+}
+
 QRectF ImageCanvas::imageRect() const
 {
     if (image_.isNull()) {
