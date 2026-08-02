@@ -62,6 +62,7 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 已开始按显微观察与测量软件设计拆分基础模块：`ImageFrame`、`CameraDevice`、`CameraPanelActions`、`CameraDeviceListFormatter`、`CameraControlStatusFormatter`、`CameraTelemetryFormatter`、`FrameBuffer`、`DiagnosticReportActions`、`ExportActions`、`ProjectActions`、`MeasurementActionApplier`、`MeasurementDisplayActions`、`MeasurementInteractionActions`、`MeasurementInteractionState`、`MeasurementHitTester`、`MeasurementEditSession`、`MeasurementListActions`、`MeasurementListSelection`、`MeasurementOverlayModelBuilder`、`MeasurementToolAvailability`、`MeasurementToolStartActions`、`MeasurementCollection`、`MeasurementFormatter`、`MeasurementNameFormatter`、`MeasurementCsvExporter`、`DiagnosticReportBuilder`、`ProjectSessionMapper`、`ProjectSessionRestorer`、`FileDialog`、`TextInputParser`、`DyeProfileFormParser`、`DyeProfileFormPresenter`、`DyeLibraryActions`、`DyeLibrary`、`FluorescenceDisplayActions`、`FluorescenceChannelFactory`、`FluorescenceChannelFormPresenter`、`FluorescenceChannelListActions`、`FluorescenceChannelSettings`、`FluorescenceChannelUpdater`、`FluorescenceFormatter`、`ProcessingParameterRules`、`ProcessingBuildActions`、`ProcessingBuildInputActions`、`ProcessingQueueActions`、`ProcessingStartActions`、`ProcessingProgressActions`、`ProcessingWorkerActions`、`ProcessingJobExecutor`、`ProcessingProgressThrottle`、`ProcessingPanelActions`、`ProcessingRetryActions`、`ProcessingResultActions`、`ProcessingStatusFormatter`、`PreviewDisplayActions`、`PreviewFrameComposer`、`ProcessingJobState`、`ProcessingResultFrames`、`ProcessingRetryState`、`StitchTileListActions`、`StitchTilePlacementPlanner`、`EdfStackListActions`、`ViewportInteractionActions`、`ControlIds`、`WindowLayout`、`WindowControlLayout`、`WindowControlDefinitions`、`ImageViewport`、`OverlayRenderer`、`ViewTransform`
 - 已加入图像坐标转换、两点标定，以及点坐标、长度、折线长度、角度、矩形、多边形、圆和椭圆测量；矩形/椭圆显示宽高、周长和面积，圆显示半径、直径、周长和面积
 - 右侧测量面板支持自动寻边吸附和搜索半径调节；绘制时可预览待完成形状，结果列表可单击高亮、双击定位，并支持 F2 重命名和 Delete 删除
+- 已新增少样本智能目标计数：用户连续框选一个或多个典型目标后，OpenCV 后台引擎会使用矩形样本内的完整灰度与边缘特征进行多样本、多尺度匹配，支持圆形、方形、细长形和不规则目标，并通过重复抑制去重
 - 已新增 `MeasurementFormatter`，统一测量结果列表、状态栏和叠加绘制中的测量文本格式
 - 已新增 `MeasurementNameFormatter`，统一长度、角度、矩形面积和多边形面积测量对象的默认命名规则
 - 已新增 `MeasurementListActions` 和 `MeasurementListSelection`，统一测量结果列表删除、重命名、选中索引和删除后的下一项选择规则
@@ -88,6 +89,14 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 已加入核心逻辑自动验证目标 `CameraViewDomainTests`
 - 核心领域测试不依赖 Qt、OpenCV 或厂家 `.lib` 文件；默认桌面前端依赖 Qt 6 Widgets
 - Qt AI 工作台通过独立 Python 进程接入标准 Ultralytics YOLO，支持检测、分类、分割、训练、模型注册表和 ONNX 导出；推理结果可叠加显示并随图像导出
+
+## 智能目标计数
+
+1. 打开静态图像，或连接相机后进入“测量”页。
+2. 在“智能目标计数”中点击“开始框选样本”，选择目标外接矩形的两个对角点；可连续框选多个外观略有差异的典型目标。
+3. 根据目标差异调节“相似度阈值”和“尺寸变化范围”，然后点击“自动查找并计数”。
+4. 绿色编号框表示自动识别结果；列表显示置信度，双击任一结果可自动放大并定位。阈值越低召回越多，阈值越高误检越少。
+5. 实时相机画面会在框选期间冻结为当前帧，点击“清除”后恢复实时预览。
 
 ## 显微观察与测量软件实现阶段
 

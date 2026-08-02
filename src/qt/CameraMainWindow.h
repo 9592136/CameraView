@@ -11,6 +11,7 @@
 #include "imaging/ImageAdjuster.h"
 #include "imaging/ImageStitcher.h"
 #include "imaging/PseudoColorMapper.h"
+#include "imaging/SmartTargetCounter.h"
 
 #include <QMainWindow>
 #include <QStringList>
@@ -71,6 +72,8 @@ private slots:
     void clearMeasurements();
     void deleteSelectedMeasurement();
     void exportMeasurements();
+    void runSmartTargetCounting();
+    void clearSmartTargetCounting();
     void show3DView();
     void startProfileMeasurement();
     void updateImagePresentation();
@@ -89,8 +92,10 @@ private:
     bool loadImageFile(const QString& fileName);
     ImageFrame currentVisibleFrame() const;
     QVector<CanvasOverlay> measurementOverlays() const;
+    QVector<CanvasOverlay> smartTargetOverlays() const;
     QRectF measurementBounds(MeasurementReference reference) const;
     void focusSelectedMeasurement();
+    void updateSmartTargetUi();
     void rebuildOverlays();
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
@@ -163,6 +168,14 @@ private:
     QCheckBox* edge_snap_check_ = nullptr;
     QSpinBox* edge_snap_radius_spin_ = nullptr;
     QLabel* calibration_label_ = nullptr;
+    QLabel* smart_sample_label_ = nullptr;
+    QLabel* smart_result_label_ = nullptr;
+    QDoubleSpinBox* smart_similarity_spin_ = nullptr;
+    QSpinBox* smart_scale_tolerance_spin_ = nullptr;
+    QPushButton* smart_select_button_ = nullptr;
+    QPushButton* smart_count_button_ = nullptr;
+    QProgressBar* smart_count_progress_ = nullptr;
+    QListWidget* smart_result_list_ = nullptr;
     QAction* export_action_ = nullptr;
 
     QThread camera_thread_;
@@ -185,6 +198,12 @@ private:
     MeasurementCollection measurements_;
     QVector<CanvasOverlay> ai_overlays_;
     QVector<QPointF> profile_line_points_;
+    std::vector<SmartTargetRegion> smart_target_samples_;
+    SmartTargetCountResult smart_target_result_;
+    std::shared_ptr<std::atomic_bool> smart_count_cancel_token_;
+    bool smart_count_running_ = false;
+    bool smart_count_session_active_ = false;
+    quint64 image_generation_ = 0;
     std::vector<DyeProfile> dyes_;
     std::vector<FluorescenceChannel> channels_;
     std::vector<StitchTile> stitch_tiles_;

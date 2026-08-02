@@ -123,6 +123,20 @@ int main(int argc, char* argv[])
 
     committed_tool = CanvasTool::None;
     committed_points.clear();
+    canvas.setTool(CanvasTool::SmartCountSample);
+    QMouseEvent sample_first(QEvent::MouseButtonPress, QPointF(125.0, 125.0), QPointF(125.0, 125.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent sample_second(QEvent::MouseButtonPress, QPointF(225.0, 225.0), QPointF(225.0, 225.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &sample_first);
+    QApplication::sendEvent(&canvas, &sample_second);
+    if (committed_tool != CanvasTool::SmartCountSample || committed_points.size() != 2 ||
+        !near(committed_points[0].x(), 25.0) || !near(committed_points[1].x(), 45.0)) {
+        return fail("Smart-count sample canvas interaction did not commit its rectangular bounds.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
     canvas.setTool(CanvasTool::Polyline);
     QMouseEvent line_first(QEvent::MouseButtonPress, QPointF(100.0, 100.0), QPointF(100.0, 100.0),
         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);

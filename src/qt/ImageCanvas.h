@@ -16,7 +16,9 @@ enum class CanvasTool {
     Point,
     Polyline,
     Circle,
-    Ellipse
+    Ellipse,
+    SmartCountSample,
+    SmartCountResult
 };
 
 struct CanvasOverlay {

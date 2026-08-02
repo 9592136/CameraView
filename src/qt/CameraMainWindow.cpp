@@ -849,6 +849,54 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     edge_form->addRow(tr("搜索半径"), edge_snap_radius_spin_);
     layout->addWidget(edge_group);
 
+    auto* smart_group = new QGroupBox(tr("智能目标计数"));
+    auto* smart_layout = new QVBoxLayout(smart_group);
+    auto* smart_hint = new QLabel(tr("连续框选几个典型目标，支持圆形、方形、细长形和不规则目标。"));
+    smart_hint->setWordWrap(true);
+    smart_layout->addWidget(smart_hint);
+    smart_select_button_ = new QPushButton(tr("开始框选样本"));
+    smart_select_button_->setObjectName(QStringLiteral("SmartCountSelectButton"));
+    auto* remove_smart_sample = new QPushButton(tr("撤销一个"));
+    auto* clear_smart = new QPushButton(tr("清除"));
+    smart_layout->addWidget(buttonRow({smart_select_button_, remove_smart_sample, clear_smart}));
+    auto* smart_form = new QFormLayout;
+    smart_similarity_spin_ = new QDoubleSpinBox;
+    smart_similarity_spin_->setObjectName(QStringLiteral("SmartCountSimilaritySpin"));
+    smart_similarity_spin_->setRange(0.40, 0.99);
+    smart_similarity_spin_->setSingleStep(0.01);
+    smart_similarity_spin_->setDecimals(2);
+    smart_similarity_spin_->setValue(0.78);
+    smart_scale_tolerance_spin_ = new QSpinBox;
+    smart_scale_tolerance_spin_->setRange(0, 40);
+    smart_scale_tolerance_spin_->setValue(15);
+    smart_scale_tolerance_spin_->setSuffix(tr(" %"));
+    smart_form->addRow(tr("相似度阈值"), smart_similarity_spin_);
+    smart_form->addRow(tr("尺寸变化范围"), smart_scale_tolerance_spin_);
+    smart_layout->addLayout(smart_form);
+    smart_sample_label_ = new QLabel(tr("已框选 0 个样本"));
+    smart_layout->addWidget(smart_sample_label_);
+    smart_count_progress_ = new QProgressBar;
+    smart_count_progress_->setRange(0, 100);
+    smart_count_progress_->setValue(0);
+    smart_count_progress_->setTextVisible(true);
+    smart_count_progress_->hide();
+    smart_layout->addWidget(smart_count_progress_);
+    smart_count_button_ = new QPushButton(tr("自动查找并计数"));
+    smart_count_button_->setObjectName(QStringLiteral("SmartCountRunButton"));
+    setButtonRole(smart_count_button_, "primary");
+    smart_layout->addWidget(smart_count_button_);
+    smart_result_label_ = new QLabel(tr("识别结果：尚未运行"));
+    smart_result_label_->setObjectName(QStringLiteral("SmartCountResultLabel"));
+    smart_result_label_->setProperty("role", QStringLiteral("summary"));
+    smart_layout->addWidget(smart_result_label_);
+    smart_result_list_ = new QListWidget;
+    smart_result_list_->setObjectName(QStringLiteral("SmartCountResultList"));
+    smart_result_list_->setAlternatingRowColors(true);
+    smart_result_list_->setMaximumHeight(130);
+    smart_result_list_->setToolTip(tr("双击结果可在图像中定位"));
+    smart_layout->addWidget(smart_result_list_);
+    layout->addWidget(smart_group);
+
     measurement_count_label_ = new QLabel(tr("测量结果（0）"));
     layout->addWidget(measurement_count_label_);
     measurement_list_ = new QListWidget;
@@ -886,6 +934,33 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     });
     connect(edge_snap_radius_spin_, qOverload<int>(&QSpinBox::valueChanged),
         canvas_, &ImageCanvas::setEdgeSnapRadius);
+    connect(smart_select_button_, &QPushButton::clicked, this, [this] {
+        smart_count_session_active_ = true;
+        setMeasurementTool(CanvasTool::SmartCountSample,
+            tr("请选择目标外接矩形的两个对角点；可连续框选多个，按 Esc 结束"));
+    });
+    connect(remove_smart_sample, &QPushButton::clicked, this, [this] {
+        if (smart_count_running_) {
+            statusBar()->showMessage(tr("请先取消当前智能计数，再修改样本"), 3000);
+            return;
+        }
+        if (!smart_target_samples_.empty()) {
+            smart_target_samples_.pop_back();
+            smart_target_result_ = {};
+            updateSmartTargetUi();
+            rebuildOverlays();
+        }
+    });
+    connect(clear_smart, &QPushButton::clicked, this, &CameraMainWindow::clearSmartTargetCounting);
+    connect(smart_count_button_, &QPushButton::clicked, this, &CameraMainWindow::runSmartTargetCounting);
+    connect(smart_result_list_, &QListWidget::currentRowChanged, this, [this](int) { rebuildOverlays(); });
+    connect(smart_result_list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
+        const int row = smart_result_list_->currentRow();
+        if (row < 0 || row >= static_cast<int>(smart_target_result_.matches.size())) return;
+        const SmartTargetRegion& region = smart_target_result_.matches[static_cast<std::size_t>(row)].region;
+        canvas_->focusOnImageRect(QRectF(region.x, region.y, region.width, region.height));
+        statusBar()->showMessage(tr("已定位到智能计数目标 %1").arg(row + 1), 2500);
+    });
     connect(display_unit_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         display_unit_ = index == 0 ? MeasurementUnit::Pixels :
             (index == 1 ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters);
@@ -918,6 +993,7 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(delete_selected, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearMeasurements);
     connect(export_csv, &QPushButton::clicked, this, &CameraMainWindow::exportMeasurements);
+    updateSmartTargetUi();
     return page;
 }
 
@@ -989,6 +1065,7 @@ void CameraMainWindow::exportImage()
     painter.setFont(label_font);
     const double pen_width = std::max(2.0, output.width() / 800.0);
     QVector<CanvasOverlay> export_overlays = measurementOverlays();
+    export_overlays += smartTargetOverlays();
     export_overlays += ai_overlays_;
     for (const CanvasOverlay& overlay : export_overlays) {
         if (overlay.points.isEmpty()) {
@@ -996,7 +1073,8 @@ void CameraMainWindow::exportImage()
         }
         painter.setPen(QPen(overlay.color, pen_width));
         painter.setBrush(Qt::NoBrush);
-        if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse) &&
+        if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse ||
+            overlay.kind == CanvasTool::SmartCountSample || overlay.kind == CanvasTool::SmartCountResult) &&
             overlay.points.size() >= 2) {
             const QRectF bounds = QRectF(overlay.points[0], overlay.points[1]).normalized();
             if (overlay.kind == CanvasTool::Ellipse) painter.drawEllipse(bounds);
@@ -1123,7 +1201,7 @@ void CameraMainWindow::onDevicesReady(QStringList labels, QVector<int> indices, 
 void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 timestamp)
 {
     latest_camera_frame_ = imageFrameFromQImage(image, sequence, timestamp);
-    if (!busy_ && !live_stitch_active_) {
+    if (!busy_ && !live_stitch_active_ && !smart_count_session_active_) {
         setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
     }
 }
@@ -1136,7 +1214,13 @@ void CameraMainWindow::setCurrentFrame(
     const QString new_identity = sourceIdentity.isEmpty() ? source : sourceIdentity;
     if (!current_source_identity_.isEmpty() && current_source_identity_ != new_identity) {
         profile_line_points_.clear();
+        if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+        smart_target_samples_.clear();
+        smart_target_result_ = {};
+        smart_count_session_active_ = false;
+        updateSmartTargetUi();
     }
+    ++image_generation_;
     current_frame_ = std::move(frame);
     current_source_ = source;
     current_source_identity_ = new_identity;
@@ -1199,6 +1283,27 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
         canvas_->setTool(CanvasTool::None);
         canvas_->setEdgeSnappingEnabled(edge_snap_check_ && edge_snap_check_->isChecked());
         yolo_workspace_->acceptCanvasAnnotation(tool, std::move(points));
+        return;
+    }
+    if (tool == CanvasTool::SmartCountSample && points.size() == 2) {
+        QRectF bounds(points[0], points[1]);
+        bounds = bounds.normalized().intersected(
+            QRectF(0.0, 0.0, currentVisibleFrame().width, currentVisibleFrame().height));
+        if (bounds.width() < 6.0 || bounds.height() < 6.0) {
+            statusBar()->showMessage(tr("框选区域太小，请完整框住一个目标"), 3500);
+        } else {
+            smart_target_samples_.push_back({
+                static_cast<int>(std::floor(bounds.left())),
+                static_cast<int>(std::floor(bounds.top())),
+                std::max(6, static_cast<int>(std::ceil(bounds.width()))),
+                std::max(6, static_cast<int>(std::ceil(bounds.height())))});
+            smart_target_result_ = {};
+            updateSmartTargetUi();
+            rebuildOverlays();
+            statusBar()->showMessage(tr("已框选 %1 个样本，可继续框选或开始自动计数")
+                .arg(static_cast<int>(smart_target_samples_.size())), 4000);
+        }
+        canvas_->setTool(CanvasTool::SmartCountSample);
         return;
     }
     if (tool == CanvasTool::Calibration && points.size() == 2) {
@@ -1473,9 +1578,36 @@ void CameraMainWindow::focusSelectedMeasurement()
     }
 }
 
+QVector<CanvasOverlay> CameraMainWindow::smartTargetOverlays() const
+{
+    QVector<CanvasOverlay> overlays;
+    overlays.reserve(static_cast<int>(smart_target_samples_.size() + smart_target_result_.matches.size()));
+    for (std::size_t index = 0; index < smart_target_samples_.size(); ++index) {
+        const SmartTargetRegion& region = smart_target_samples_[index];
+        overlays.push_back({CanvasTool::SmartCountSample,
+            {{static_cast<double>(region.x), static_cast<double>(region.y)},
+             {static_cast<double>(region.x + region.width), static_cast<double>(region.y + region.height)}},
+            tr("样本 %1").arg(static_cast<int>(index + 1)), QColor(250, 176, 5)});
+    }
+    const int selected = smart_result_list_ ? smart_result_list_->currentRow() : -1;
+    for (std::size_t index = 0; index < smart_target_result_.matches.size(); ++index) {
+        const SmartTargetMatch& match = smart_target_result_.matches[index];
+        const SmartTargetRegion& region = match.region;
+        CanvasOverlay overlay{CanvasTool::SmartCountResult,
+            {{static_cast<double>(region.x), static_cast<double>(region.y)},
+             {static_cast<double>(region.x + region.width), static_cast<double>(region.y + region.height)}},
+            tr("#%1 · %2%").arg(static_cast<int>(index + 1)).arg(match.confidence * 100.0, 0, 'f', 1),
+            QColor(34, 211, 153)};
+        overlay.highlighted = static_cast<int>(index) == selected;
+        overlays.push_back(std::move(overlay));
+    }
+    return overlays;
+}
+
 void CameraMainWindow::rebuildOverlays()
 {
     QVector<CanvasOverlay> overlays = measurementOverlays();
+    overlays += smartTargetOverlays();
     overlays += ai_overlays_;
     canvas_->setOverlays(std::move(overlays));
 }
@@ -1486,6 +1618,145 @@ void CameraMainWindow::clearMeasurements()
     profile_line_points_.clear();
     updateMeasurementList();
     statusBar()->showMessage(tr("测量结果已清空"), 3000);
+}
+
+void CameraMainWindow::updateSmartTargetUi()
+{
+    if (!smart_sample_label_) return;
+    smart_sample_label_->setText(tr("已框选 %1 个样本")
+        .arg(static_cast<int>(smart_target_samples_.size())));
+
+    const int previous_row = smart_result_list_ ? smart_result_list_->currentRow() : -1;
+    if (smart_result_list_) {
+        smart_result_list_->clear();
+        for (std::size_t index = 0; index < smart_target_result_.matches.size(); ++index) {
+            const SmartTargetMatch& match = smart_target_result_.matches[index];
+            smart_result_list_->addItem(tr("目标 %1 · 相似度 %2% · 位置 (%3, %4)")
+                .arg(static_cast<int>(index + 1))
+                .arg(match.confidence * 100.0, 0, 'f', 1)
+                .arg(match.region.x)
+                .arg(match.region.y));
+        }
+        if (smart_result_list_->count() > 0) {
+            smart_result_list_->setCurrentRow(std::clamp(previous_row, 0, smart_result_list_->count() - 1));
+        }
+    }
+
+    if (smart_result_label_) {
+        if (smart_count_running_) {
+            smart_result_label_->setText(tr("正在分析整幅图像…"));
+        } else if (smart_target_result_.succeeded) {
+            smart_result_label_->setText(tr("识别结果：%1 个目标 · 用时 %2 ms")
+                .arg(static_cast<int>(smart_target_result_.matches.size()))
+                .arg(smart_target_result_.elapsed_milliseconds, 0, 'f', 0));
+        } else if (smart_target_result_.canceled) {
+            smart_result_label_->setText(tr("识别已取消"));
+        } else if (!SmartTargetCounter::IsAvailable()) {
+            smart_result_label_->setText(tr("当前构建未启用 OpenCV，智能计数不可用"));
+        } else {
+            smart_result_label_->setText(tr("识别结果：尚未运行"));
+        }
+    }
+
+    if (smart_count_button_) {
+        smart_count_button_->setText(smart_count_running_ ? tr("取消查找") : tr("自动查找并计数"));
+        smart_count_button_->setEnabled(smart_count_running_ ||
+            (SmartTargetCounter::IsAvailable() && !smart_target_samples_.empty() && currentVisibleFrame().IsValid()));
+    }
+    if (smart_select_button_) smart_select_button_->setEnabled(!smart_count_running_);
+    if (smart_similarity_spin_) smart_similarity_spin_->setEnabled(!smart_count_running_);
+    if (smart_scale_tolerance_spin_) smart_scale_tolerance_spin_->setEnabled(!smart_count_running_);
+    if (smart_count_progress_) smart_count_progress_->setVisible(smart_count_running_);
+}
+
+void CameraMainWindow::runSmartTargetCounting()
+{
+    if (smart_count_running_) {
+        if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+        smart_count_button_->setText(tr("正在取消…"));
+        smart_count_button_->setEnabled(false);
+        statusBar()->showMessage(tr("正在取消智能计数…"));
+        return;
+    }
+    if (!SmartTargetCounter::IsAvailable()) {
+        QMessageBox::information(this, tr("智能目标计数"), tr("请使用启用了 OpenCV 的版本。"));
+        return;
+    }
+    const ImageFrame frame = currentVisibleFrame();
+    if (!frame.IsValid()) {
+        QMessageBox::information(this, tr("智能目标计数"), tr("请先打开图像或连接相机。"));
+        return;
+    }
+    if (smart_target_samples_.empty()) {
+        QMessageBox::information(this, tr("智能目标计数"), tr("请先框选至少一个典型目标。"));
+        return;
+    }
+
+    canvas_->setTool(CanvasTool::None);
+    SmartTargetCountOptions options;
+    options.similarity_threshold = smart_similarity_spin_->value();
+    options.scale_tolerance = smart_scale_tolerance_spin_->value() / 100.0;
+    options.scale_steps = options.scale_tolerance > 0.0 ? 5 : 1;
+    const std::vector<SmartTargetRegion> samples = smart_target_samples_;
+    const quint64 generation = image_generation_;
+    smart_count_cancel_token_ = std::make_shared<std::atomic_bool>(false);
+    const auto cancel_token = smart_count_cancel_token_;
+    smart_target_result_ = {};
+    smart_count_running_ = true;
+    smart_count_progress_->setValue(0);
+    updateSmartTargetUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("正在后台查找相似目标…"));
+
+    auto* watcher = new QFutureWatcher<SmartTargetCountResult>(this);
+    connect(watcher, &QFutureWatcher<SmartTargetCountResult>::finished, this,
+        [this, watcher, cancel_token, generation] {
+            SmartTargetCountResult result = watcher->result();
+            watcher->deleteLater();
+            smart_count_running_ = false;
+            smart_count_cancel_token_.reset();
+            if (generation != image_generation_) {
+                smart_target_result_ = {};
+                updateSmartTargetUi();
+                rebuildOverlays();
+                statusBar()->showMessage(tr("图像已变化，已丢弃旧的智能计数结果"), 4000);
+                return;
+            }
+            smart_target_result_ = std::move(result);
+            updateSmartTargetUi();
+            rebuildOverlays();
+            if (smart_target_result_.succeeded) {
+                statusBar()->showMessage(tr("智能计数完成：共找到 %1 个目标")
+                    .arg(static_cast<int>(smart_target_result_.matches.size())), 6000);
+            } else if (smart_target_result_.canceled) {
+                statusBar()->showMessage(tr("智能计数已取消"), 3000);
+            } else {
+                QMessageBox::warning(this, tr("智能目标计数"),
+                    QString::fromStdWString(smart_target_result_.message));
+            }
+        });
+    QPointer<QProgressBar> progress = smart_count_progress_;
+    watcher->setFuture(QtConcurrent::run([frame, samples, options, cancel_token, progress] {
+        const auto report_progress = [progress](int value) {
+            if (!progress) return;
+            QMetaObject::invokeMethod(progress, [progress, value] {
+                if (progress) progress->setValue(std::clamp(value, 0, 100));
+            }, Qt::QueuedConnection);
+        };
+        return SmartTargetCounter::Count(frame, samples, options, cancel_token.get(), report_progress);
+    }));
+}
+
+void CameraMainWindow::clearSmartTargetCounting()
+{
+    if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+    smart_count_session_active_ = false;
+    smart_target_samples_.clear();
+    smart_target_result_ = {};
+    if (canvas_->tool() == CanvasTool::SmartCountSample) canvas_->setTool(CanvasTool::None);
+    updateSmartTargetUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("智能计数样本和结果已清除；实时预览已恢复"), 3500);
 }
 
 void CameraMainWindow::deleteSelectedMeasurement()

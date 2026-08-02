@@ -79,6 +79,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/LiveStitchPreviewBuilder.h
     src/imaging/OpenCvStitchBackend.cpp
     src/imaging/OpenCvStitchBackend.h
+    src/imaging/SmartTargetCounter.cpp
+    src/imaging/SmartTargetCounter.h
     src/imaging/ImageViewport.cpp
     src/imaging/ImageViewport.h
     src/imaging/OverlayRenderer.cpp
@@ -236,6 +238,8 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/LiveStitchPreviewBuilder.h
     src/imaging/OpenCvStitchBackend.cpp
     src/imaging/OpenCvStitchBackend.h
+    src/imaging/SmartTargetCounter.cpp
+    src/imaging/SmartTargetCounter.h
     src/imaging/ProcessingJobExecutor.cpp
     src/imaging/ProcessingJobExecutor.h
     src/imaging/ProcessingParameterRules.cpp
@@ -420,6 +424,24 @@ if(CAMERAVIEW_BUILD_TESTS)
                     "$<TARGET_FILE_DIR:CameraViewDomainTests>"
             )
         endif()
+
+        add_executable(CameraViewSmartTargetCounterTests
+            tests/smart_target_counter_tests.cpp
+            src/imaging/SmartTargetCounter.cpp
+            src/imaging/SmartTargetCounter.h
+        )
+        target_include_directories(CameraViewSmartTargetCounterTests PRIVATE
+            "${CMAKE_SOURCE_DIR}/src" ${OpenCV_INCLUDE_DIRS})
+        target_compile_features(CameraViewSmartTargetCounterTests PRIVATE cxx_std_17)
+        target_compile_definitions(CameraViewSmartTargetCounterTests PRIVATE CAMERAVIEW_WITH_OPENCV)
+        target_link_libraries(CameraViewSmartTargetCounterTests PRIVATE ${OpenCV_LIBS})
+        if(WIN32 AND CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraViewSmartTargetCounterTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraViewSmartTargetCounterTests>")
+        endif()
+        add_test(NAME CameraViewSmartTargetCounterTests COMMAND CameraViewSmartTargetCounterTests)
     endif()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
 
@@ -451,6 +473,12 @@ if(CAMERAVIEW_BUILD_TESTS)
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-measurement-ui.png"
             --workspace-tab 4)
     set_tests_properties(CameraViewQtMeasurementUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtSmartCountUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-smart-count-ui.png"
+            --workspace-tab 4
+            --focus-widget SmartCountResultList)
+    set_tests_properties(CameraViewQtSmartCountUiSnapshot PROPERTIES TIMEOUT 20)
 
     add_executable(CameraViewYoloRegistryTests
         tests/yolo_model_registry_tests.cpp

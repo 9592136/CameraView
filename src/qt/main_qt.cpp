@@ -14,6 +14,7 @@
 #include <QDebug>
 #include <QIcon>
 #include <QPixmap>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -124,10 +125,15 @@ int main(int argc, char* argv[])
         QStringLiteral("workspace-tab"),
         QStringLiteral("Select the workspace tab by zero-based index."),
         QStringLiteral("index"));
+    const QCommandLineOption focus_widget(
+        QStringLiteral("focus-widget"),
+        QStringLiteral("Scroll a named widget into view before rendering a UI snapshot."),
+        QStringLiteral("object-name"));
     parser.addOption(smoke_test);
     parser.addOption(import_yolo_manifest);
     parser.addOption(ui_snapshot);
     parser.addOption(workspace_tab);
+    parser.addOption(focus_widget);
     parser.process(application);
 
     if (parser.isSet(import_yolo_manifest)) {
@@ -145,6 +151,18 @@ int main(int argc, char* argv[])
     }
     if (parser.isSet(ui_snapshot)) {
         window.show();
+        if (parser.isSet(focus_widget)) {
+            if (QWidget* target = window.findChild<QWidget*>(parser.value(focus_widget))) {
+                QWidget* ancestor = target->parentWidget();
+                while (ancestor) {
+                    if (auto* scroll = qobject_cast<QScrollArea*>(ancestor)) {
+                        scroll->ensureWidgetVisible(target, 12, 12);
+                        break;
+                    }
+                    ancestor = ancestor->parentWidget();
+                }
+            }
+        }
         const QString snapshot_path = parser.value(ui_snapshot);
         QTimer::singleShot(1000, &application, [&application, &window, snapshot_path] {
             const bool saved = window.grab().save(snapshot_path);

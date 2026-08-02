@@ -22,6 +22,7 @@ int requiredPointCount(CanvasTool tool)
     case CanvasTool::Rectangle:
     case CanvasTool::Circle:
     case CanvasTool::Ellipse:
+    case CanvasTool::SmartCountSample:
         return 2;
     case CanvasTool::Angle:
         return 3;
@@ -249,7 +250,9 @@ void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) c
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
 
-    if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse) && points.size() >= 2) {
+    if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse ||
+        overlay.kind == CanvasTool::SmartCountSample || overlay.kind == CanvasTool::SmartCountResult) &&
+        points.size() >= 2) {
         if (overlay.kind == CanvasTool::Ellipse) {
             painter.drawEllipse(QRectF(points[0], points[1]).normalized());
         } else {
