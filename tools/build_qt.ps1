@@ -1,5 +1,6 @@
 param(
     [string]$QtRoot = "",
+    [string]$OpenCVRoot = "",
     [string]$BuildDirectory = "build-qt-msvcrt",
     [switch]$WithOpenCV,
     [switch]$SkipTests
@@ -62,14 +63,38 @@ if (-not $ninja) {
 }
 
 $buildPath = Join-Path $projectRoot $BuildDirectory
-$opencvFlag = if ($WithOpenCV) { "ON" } else { "OFF" }
+$opencvArguments = @("-DCAMERAVIEW_WITH_OPENCV=OFF")
+if ($WithOpenCV) {
+    $opencvCandidates = @()
+    $opencvCandidates += $OpenCVRoot
+    $opencvCandidates += $env:OpenCV_DIR
+    $opencvCandidates += $env:OpenCV_ROOT
+    $opencvCandidates += @(Get-ChildItem (Join-Path $userTools "opencv_mingw") -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Select-Object -ExpandProperty FullName)
+    $OpenCVRoot = $opencvCandidates |
+        Where-Object { $_ -and (Test-Path (Join-Path $_ "OpenCVConfig.cmake")) } |
+        Select-Object -First 1
+    if (-not $OpenCVRoot) {
+        throw "OpenCV with OpenCVConfig.cmake was not found. Pass its root directory with -OpenCVRoot."
+    }
+    $opencvArguments = @(
+        "-DCAMERAVIEW_WITH_OPENCV=ON",
+        "-DOpenCV_DIR=$OpenCVRoot"
+    )
+    Write-Host "OpenCV: $OpenCVRoot"
+}
 
-& $cmake -S $projectRoot -B $buildPath -G Ninja `
-    "-DCMAKE_BUILD_TYPE=Release" `
-    "-DCMAKE_PREFIX_PATH=$QtRoot" `
-    "-DCMAKE_CXX_COMPILER=$compiler" `
-    "-DCMAKE_MAKE_PROGRAM=$ninja" `
-    "-DCAMERAVIEW_WITH_OPENCV=$opencvFlag"
+$configureArguments = @(
+    "-S", $projectRoot,
+    "-B", $buildPath,
+    "-G", "Ninja",
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_PREFIX_PATH=$QtRoot",
+    "-DCMAKE_CXX_COMPILER=$compiler",
+    "-DCMAKE_MAKE_PROGRAM=$ninja"
+) + $opencvArguments
+& $cmake @configureArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $cmake --build $buildPath --parallel

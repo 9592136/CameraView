@@ -834,7 +834,7 @@ constexpr LocEntry kTranslationTable[] = {
     // ── About dialog ──
     { LocId::ABOUT_TITLE,                    L"About CameraView",                   L"关于 CameraView" },
     { LocId::ABOUT_VERSION,                  L"Version: 1.0.0",                     L"版本：1.0.0" },
-    { LocId::ABOUT_AUTHOR,                   L"Author: liyuan.cn@gmail.com",        L"作者：liyuan.cn@gmail.com" },
+    { LocId::ABOUT_AUTHOR,                   L"Author: Li Yuan · liyuan.cn@gmail.com", L"作者：栗远 · liyuan.cn@gmail.com" },
     { LocId::ABOUT_DESCRIPTION,              L"A professional microscopy camera control and image processing application.", L"专业的显微相机控制与图像处理应用。" },
     { LocId::ABOUT_OK,                       L"OK",                                 L"确定" },
 

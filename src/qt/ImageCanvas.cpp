@@ -148,18 +148,54 @@ bool ImageCanvas::containsImagePoint(const QPointF& point) const
 void ImageCanvas::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(21, 25, 30));
+    QLinearGradient background(rect().topLeft(), rect().bottomRight());
+    background.setColorAt(0.0, QColor(14, 19, 26));
+    background.setColorAt(1.0, QColor(20, 27, 36));
+    painter.fillRect(rect(), background);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, zoom_ < 4.0);
 
+    painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
+    constexpr int grid_size = 32;
+    for (int x = 0; x < width(); x += grid_size) painter.drawLine(x, 0, x, height());
+    for (int y = 0; y < height(); y += grid_size) painter.drawLine(0, y, width(), y);
+
     if (image_.isNull()) {
-        painter.setPen(QColor(145, 154, 166));
-        painter.drawText(rect(), Qt::AlignCenter, tr("打开图像或连接相机以开始"));
+        const QPointF center = rect().center();
+        const QRectF camera_body(center.x() - 31.0, center.y() - 58.0, 62.0, 42.0);
+        painter.setPen(QPen(QColor(91, 112, 139), 2.0));
+        painter.setBrush(QColor(28, 39, 52));
+        painter.drawRoundedRect(camera_body, 9.0, 9.0);
+        painter.drawRoundedRect(QRectF(center.x() - 15.0, center.y() - 66.0, 30.0, 10.0), 4.0, 4.0);
+        painter.setBrush(QColor(18, 26, 36));
+        painter.drawEllipse(center + QPointF(0.0, -37.0), 12.0, 12.0);
+        painter.setPen(QColor(218, 226, 237));
+        QFont title_font = painter.font();
+        title_font.setPointSize(title_font.pointSize() + 2);
+        title_font.setWeight(QFont::DemiBold);
+        painter.setFont(title_font);
+        painter.drawText(
+            QRectF(0.0, center.y() + 4.0, width(), 28.0),
+            Qt::AlignHCenter | Qt::AlignVCenter,
+            tr("尚未载入图像"));
+        QFont detail_font = painter.font();
+        detail_font.setPointSize(std::max(8, detail_font.pointSize() - 2));
+        detail_font.setWeight(QFont::Normal);
+        painter.setFont(detail_font);
+        painter.setPen(QColor(126, 141, 160));
+        painter.drawText(
+            QRectF(20.0, center.y() + 35.0, width() - 40.0, 24.0),
+            Qt::AlignHCenter | Qt::AlignVCenter,
+            tr("拖放图像到此处，或按 Ctrl+O 打开图像"));
         return;
     }
 
     const QRectF target = imageRect();
+    painter.fillRect(target.translated(0.0, 7.0), QColor(0, 0, 0, 80));
     painter.drawImage(target, image_);
+    painter.setPen(QPen(QColor(105, 122, 145, 110), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(target);
     painter.setClipRect(target);
     for (const CanvasOverlay& overlay : overlays_) {
         drawOverlay(painter, overlay);

@@ -10,6 +10,11 @@
 #include "imaging/EdfStackListActions.h"
 #include "imaging/FluorescenceChannelListActions.h"
 #include "imaging/HistogramCalculator.h"
+#include "imaging/LiveStitchCapturePlanner.h"
+#include "imaging/LiveStitchPreviewBuilder.h"
+#include "imaging/ProcessingJobExecutor.h"
+#include "imaging/ProcessingParameterRules.h"
+#include "imaging/StitchTileListActions.h"
 #include "storage/MeasurementCsvExporter.h"
 #include "storage/ProjectRepository.h"
 #include "storage/ProjectSessionMapper.h"
@@ -24,6 +29,7 @@
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QDateTime>
 #include <QFormLayout>
 #include <QFutureWatcher>
@@ -38,18 +44,24 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QPainter>
 #include <QSaveFile>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QStringConverter>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QStyle>
+#include <QTimer>
 #include <QTransform>
 #include <QTextStream>
+#include <QTime>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
@@ -67,6 +79,37 @@ QPushButton* addButton(QBoxLayout* layout, const QString& text)
     layout->addWidget(button);
     return button;
 }
+
+QVBoxLayout* panelLayout(QWidget* page)
+{
+    page->setProperty("panelPage", true);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(14, 14, 14, 18);
+    layout->setSpacing(10);
+    return layout;
+}
+
+QScrollArea* scrollablePanel(QWidget* page)
+{
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(page);
+    return scroll;
+}
+
+void setButtonRole(QPushButton* button, const char* role)
+{
+    button->setProperty("role", QString::fromLatin1(role));
+}
+
+struct LiveStitchEvaluation {
+    LiveStitchCaptureDecision decision;
+    ImageFrame frame;
+    std::size_t baseTileCount = 0;
+    quint64 generation = 0;
+};
 
 QWidget* buttonRow(std::initializer_list<QPushButton*> buttons)
 {
@@ -91,6 +134,11 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
 {
     setupUi();
     setupMenusAndToolbar();
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("MainWindow"));
+    restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
+    restoreState(settings.value(QStringLiteral("state")).toByteArray());
+    settings.endGroup();
     setAcceptDrops(true);
 
     camera_worker_ = new CameraWorker;
@@ -102,6 +150,7 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     connect(camera_worker_, &CameraWorker::cameraStateChanged, this,
         [this](bool opened, const QString& message) {
             camera_open_ = opened;
+            if (!opened && live_stitch_active_) stopLiveStitch(false);
             camera_state_label_->setText(message);
             statusBar()->showMessage(message, 5000);
         });
@@ -131,6 +180,7 @@ void CameraMainWindow::setupUi()
     setMinimumSize(980, 640);
 
     canvas_ = new ImageCanvas;
+    canvas_->setObjectName(QStringLiteral("ImageViewport"));
     setCentralWidget(canvas_);
     connect(canvas_, &ImageCanvas::pointsCommitted, this, &CameraMainWindow::onCanvasPoints);
     connect(canvas_, &ImageCanvas::imagePositionChanged, this, [this](const QPointF& point) {
@@ -140,20 +190,24 @@ void CameraMainWindow::setupUi()
         zoom_label_->setText(tr("缩放 %1%").arg(qRound(zoom * 100.0)));
     });
 
-    auto* dock = new QDockWidget(tr("功能"), this);
-    dock->setObjectName(QStringLiteral("FunctionDock"));
-    dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-    dock->setMinimumWidth(320);
+    function_dock_ = new QDockWidget(tr("工作区"), this);
+    function_dock_->setObjectName(QStringLiteral("FunctionDock"));
+    function_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    function_dock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+    function_dock_->setMinimumWidth(370);
     function_tabs_ = new QTabWidget;
+    function_tabs_->setObjectName(QStringLiteral("FunctionTabs"));
     function_tabs_->setDocumentMode(true);
-    function_tabs_->addTab(buildCameraPage(), tr("相机"));
-    function_tabs_->addTab(buildImagePage(), tr("图像"));
-    function_tabs_->addTab(buildFluorescencePage(), tr("荧光"));
-    function_tabs_->addTab(buildProcessingPage(), tr("处理"));
-    function_tabs_->addTab(buildMeasurementPage(), tr("测量"));
+    function_tabs_->setUsesScrollButtons(true);
+    function_tabs_->setElideMode(Qt::ElideRight);
+    function_tabs_->addTab(scrollablePanel(buildCameraPage()), tr("相机"));
+    function_tabs_->addTab(scrollablePanel(buildImagePage()), tr("图像"));
+    function_tabs_->addTab(scrollablePanel(buildFluorescencePage()), tr("荧光"));
+    function_tabs_->addTab(scrollablePanel(buildProcessingPage()), tr("处理"));
+    function_tabs_->addTab(scrollablePanel(buildMeasurementPage()), tr("测量"));
     yolo_workspace_ = new YoloWorkspaceWidget;
     function_tabs_->addTab(yolo_workspace_, tr("AI"));
-    function_tabs_->addTab(buildProjectPage(), tr("项目"));
+    function_tabs_->addTab(scrollablePanel(buildProjectPage()), tr("项目"));
     connect(yolo_workspace_, &YoloWorkspaceWidget::overlaysChanged, this,
         [this](QVector<CanvasOverlay> overlays) {
             ai_overlays_ = std::move(overlays);
@@ -185,10 +239,19 @@ void CameraMainWindow::setupUi()
         });
     connect(yolo_workspace_, &YoloWorkspaceWidget::statusMessage, this,
         [this](const QString& message) { statusBar()->showMessage(message, 7000); });
-    dock->setWidget(function_tabs_);
-    addDockWidget(Qt::RightDockWidgetArea, dock);
+    function_dock_->setWidget(function_tabs_);
+    addDockWidget(Qt::RightDockWidgetArea, function_dock_);
+    resizeDocks({function_dock_}, {410}, Qt::Horizontal);
+
+    for (QFormLayout* form : findChildren<QFormLayout*>()) {
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        form->setHorizontalSpacing(10);
+        form->setVerticalSpacing(9);
+    }
 
     source_label_ = new QLabel(tr("无图像"));
+    source_label_->setObjectName(QStringLiteral("SourceStatus"));
     coordinate_label_ = new QLabel(tr("X —  Y —"));
     zoom_label_ = new QLabel(tr("缩放 100%"));
     statusBar()->addWidget(source_label_, 1);
@@ -196,23 +259,6 @@ void CameraMainWindow::setupUi()
     statusBar()->addPermanentWidget(zoom_label_);
     statusBar()->showMessage(tr("就绪"));
 
-    setStyleSheet(QStringLiteral(R"(
-        QMainWindow, QWidget { background: #20252c; color: #e5e9ef; }
-        QMenuBar, QMenu, QToolBar, QStatusBar { background: #292f38; }
-        QTabWidget::pane { border: 1px solid #3b4450; }
-        QTabBar::tab { background: #2d343e; padding: 8px 10px; }
-        QTabBar::tab:selected { background: #3b82f6; }
-        QPushButton { background: #36404c; border: 1px solid #4b5867; border-radius: 4px; padding: 6px; }
-        QPushButton:hover { background: #425064; }
-        QPushButton:pressed { background: #2563eb; }
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QListWidget {
-            background: #171b20; border: 1px solid #46515f; border-radius: 3px; padding: 4px;
-        }
-        QGroupBox { border: 1px solid #3b4450; border-radius: 5px; margin-top: 10px; padding-top: 8px; }
-        QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-        QSlider::groove:horizontal { height: 5px; background: #3b4450; }
-        QSlider::handle:horizontal { width: 14px; margin: -5px 0; border-radius: 7px; background: #60a5fa; }
-    )"));
 }
 
 void CameraMainWindow::setupMenusAndToolbar()
@@ -291,28 +337,44 @@ void CameraMainWindow::setupMenusAndToolbar()
 
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
     view_menu->addAction(tr("适合窗口"), QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
+    view_menu->addSeparator();
+    view_menu->addAction(function_dock_->toggleViewAction());
 
     QMenu* help_menu = menuBar()->addMenu(tr("帮助(&H)"));
     help_menu->addAction(tr("关于"), this, [this] {
         QMessageBox::about(this, tr("关于 CameraView"),
-            tr("CameraView Qt\n\n基于 Qt 6 的 MUCam 工业相机预览、图像处理与显微测量应用。"));
+            tr("<h2>CameraView</h2>"
+               "<p>基于 Qt 6、OpenCV 与 Ultralytics 的工业相机预览、显微图像处理、测量和 AI 分析软件。</p>"
+               "<p><b>作者：</b>栗远<br>"
+               "<b>邮箱：</b><a href=\"mailto:liyuan.cn@gmail.com\">liyuan.cn@gmail.com</a></p>"
+               "<p>Copyright © 2026 栗远</p>"));
     });
 
     QToolBar* toolbar = addToolBar(tr("主工具栏"));
     toolbar->setObjectName(QStringLiteral("MainToolbar"));
     toolbar->setMovable(false);
+    toolbar->setIconSize(QSize(18, 18));
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    open_action->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    export_action_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    export_action_->setEnabled(false);
     toolbar->addAction(open_action);
     toolbar->addAction(export_action_);
     toolbar->addSeparator();
-    toolbar->addAction(tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
-    toolbar->addAction(tr("长度"), this, [this] { setMeasurementTool(CanvasTool::Length, tr("请在图像上选择两个点")); });
-    toolbar->addAction(tr("角度"), this, [this] { setMeasurementTool(CanvasTool::Angle, tr("请依次选择端点、顶点、端点")); });
+    QAction* fit_action = toolbar->addAction(
+        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
+    fit_action->setShortcut(QKeySequence(Qt::Key_F));
+    QAction* length_action = toolbar->addAction(tr("长度"), this,
+        [this] { setMeasurementTool(CanvasTool::Length, tr("请在图像上选择两个点")); });
+    length_action->setShortcut(QKeySequence(Qt::Key_L));
+    toolbar->addAction(tr("角度"), this,
+        [this] { setMeasurementTool(CanvasTool::Angle, tr("请依次选择端点、顶点、端点")); });
 }
 
 QWidget* CameraMainWindow::buildCameraPage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     auto* form = new QFormLayout;
     device_combo_ = new QComboBox;
     form->addRow(tr("设备"), device_combo_);
@@ -330,6 +392,8 @@ QWidget* CameraMainWindow::buildCameraPage()
     auto* refresh = new QPushButton(tr("刷新"));
     auto* open = new QPushButton(tr("打开"));
     auto* stop = new QPushButton(tr("停止"));
+    setButtonRole(open, "primary");
+    setButtonRole(stop, "danger");
     layout->addWidget(buttonRow({refresh, open, stop}));
     connect(refresh, &QPushButton::clicked, this, &CameraMainWindow::refreshDevices);
     connect(open, &QPushButton::clicked, this, &CameraMainWindow::openSelectedCamera);
@@ -363,7 +427,7 @@ QWidget* CameraMainWindow::buildCameraPage()
 QWidget* CameraMainWindow::buildImagePage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     auto* form = new QFormLayout;
     palette_combo_ = new QComboBox;
     for (PseudoColorPalette palette : PseudoColorMapper::PaletteOptions()) {
@@ -409,7 +473,7 @@ QWidget* CameraMainWindow::buildImagePage()
 QWidget* CameraMainWindow::buildFluorescencePage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     dye_combo_ = new QComboBox;
     for (const DyeProfile& dye : dyes_) {
         dye_combo_->addItem(QString::fromStdWString(dye.name));
@@ -468,14 +532,120 @@ QWidget* CameraMainWindow::buildFluorescencePage()
 QWidget* CameraMainWindow::buildProcessingPage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     auto* stitch_group = new QGroupBox(tr("图像拼接"));
     auto* stitch_layout = new QVBoxLayout(stitch_group);
     stitch_count_label_ = new QLabel;
+    stitch_count_label_->setObjectName(QStringLiteral("StitchCountLabel"));
     stitch_layout->addWidget(stitch_count_label_);
+
+    auto* live_group = new QGroupBox(tr("相机实时拼接"));
+    auto* live_layout = new QVBoxLayout(live_group);
+    auto* live_form = new QFormLayout;
+    live_stitch_interval_spin_ = new QSpinBox;
+    live_stitch_interval_spin_->setRange(250, 10000);
+    live_stitch_interval_spin_->setValue(750);
+    live_stitch_interval_spin_->setSuffix(tr(" ms"));
+    live_form->addRow(tr("检测间隔"), live_stitch_interval_spin_);
+    live_layout->addLayout(live_form);
+    live_stitch_start_button_ = new QPushButton(tr("开始实时拼接"));
+    live_stitch_stop_button_ = new QPushButton(tr("停止"));
+    live_stitch_stop_button_->setEnabled(false);
+    setButtonRole(live_stitch_start_button_, "primary");
+    setButtonRole(live_stitch_stop_button_, "danger");
+    live_layout->addWidget(buttonRow({live_stitch_start_button_, live_stitch_stop_button_}));
+    live_stitch_status_label_ = new QLabel(tr("打开相机后可自动判断移动距离与重叠区域并采集。"));
+    live_stitch_status_label_->setWordWrap(true);
+    live_layout->addWidget(live_stitch_status_label_);
+    stitch_layout->addWidget(live_group);
+
+    live_stitch_timer_ = new QTimer(this);
+
+    auto* settings_form = new QFormLayout;
+    stitch_layout_combo_ = new QComboBox;
+    stitch_layout_combo_->setObjectName(QStringLiteral("StitchLayoutCombo"));
+    stitch_layout_combo_->addItem(tr("网格（按行排列）"), static_cast<int>(StitchLayoutMode::Grid));
+    stitch_layout_combo_->addItem(tr("线性序列"), static_cast<int>(StitchLayoutMode::Linear));
+    stitch_rows_spin_ = new QSpinBox;
+    stitch_rows_spin_->setRange(1, 50);
+    stitch_rows_spin_->setValue(3);
+    stitch_cols_spin_ = new QSpinBox;
+    stitch_cols_spin_->setRange(1, 50);
+    stitch_cols_spin_->setValue(4);
+    auto* grid_size = new QWidget;
+    auto* grid_size_layout = new QHBoxLayout(grid_size);
+    grid_size_layout->setContentsMargins(0, 0, 0, 0);
+    grid_size_layout->setSpacing(7);
+    grid_size_layout->addWidget(stitch_rows_spin_);
+    grid_size_layout->addWidget(new QLabel(QStringLiteral("×")));
+    grid_size_layout->addWidget(stitch_cols_spin_);
+    stitch_overlap_spin_ = new QSpinBox;
+    stitch_overlap_spin_->setObjectName(QStringLiteral("StitchOverlapSpin"));
+    stitch_overlap_spin_->setRange(
+        ProcessingParameterRules::MinStitchOverlapPercent(),
+        ProcessingParameterRules::MaxStitchOverlapPercent());
+    stitch_overlap_spin_->setValue(ProcessingParameterRules::DefaultStitchOverlapPercent());
+    stitch_overlap_spin_->setSuffix(QStringLiteral(" %"));
+    stitch_registration_combo_ = new QComboBox;
+    stitch_registration_combo_->setObjectName(QStringLiteral("StitchRegistrationCombo"));
+    stitch_registration_combo_->addItem(tr("显微图像（推荐）"), static_cast<int>(StitchRegistrationMethod::Micro));
+    stitch_registration_combo_->addItem(tr("自动选择"), static_cast<int>(StitchRegistrationMethod::Auto));
+    stitch_registration_combo_->addItem(tr("相位相关"), static_cast<int>(StitchRegistrationMethod::Phase));
+    stitch_registration_combo_->addItem(tr("ORB 特征"), static_cast<int>(StitchRegistrationMethod::Feature));
+    stitch_registration_combo_->addItem(tr("SIFT 特征"), static_cast<int>(StitchRegistrationMethod::Sift));
+    stitch_transform_combo_ = new QComboBox;
+    stitch_transform_combo_->setObjectName(QStringLiteral("StitchTransformCombo"));
+    stitch_transform_combo_->addItem(tr("平移"), static_cast<int>(StitchTransformModel::Translation));
+    stitch_transform_combo_->addItem(tr("仿射（推荐）"), static_cast<int>(StitchTransformModel::Affine));
+    stitch_transform_combo_->addItem(tr("透视"), static_cast<int>(StitchTransformModel::Homography));
+    stitch_transform_combo_->setCurrentIndex(1);
+    stitch_blend_combo_ = new QComboBox;
+    stitch_blend_combo_->setObjectName(QStringLiteral("StitchBlendCombo"));
+    stitch_blend_combo_->addItem(tr("线性羽化"), static_cast<int>(StitchBlendMode::Linear));
+    stitch_blend_combo_->addItem(tr("不融合"), static_cast<int>(StitchBlendMode::None));
+    settings_form->addRow(tr("排列方式"), stitch_layout_combo_);
+    settings_form->addRow(tr("网格行 × 列"), grid_size);
+    settings_form->addRow(tr("预计重叠"), stitch_overlap_spin_);
+    settings_form->addRow(tr("配准方法"), stitch_registration_combo_);
+    settings_form->addRow(tr("变换模型"), stitch_transform_combo_);
+    settings_form->addRow(tr("接缝融合"), stitch_blend_combo_);
+    stitch_layout->addLayout(settings_form);
+
+    stitch_tile_list_ = new QListWidget;
+    stitch_tile_list_->setObjectName(QStringLiteral("StitchTileList"));
+    stitch_tile_list_->setMinimumHeight(120);
+    stitch_tile_list_->setToolTip(tr("双击可在主画布查看该原始图像"));
+    stitch_layout->addWidget(stitch_tile_list_);
     auto* add_tile = addButton(stitch_layout, tr("添加当前帧"));
     auto* import_tiles = addButton(stitch_layout, tr("导入多张图像…"));
-    auto* stitch = addButton(stitch_layout, tr("生成拼接图"));
+    auto* import_directory = addButton(stitch_layout, tr("导入目录…"));
+    auto* tile_actions = new QHBoxLayout;
+    auto* move_up = new QPushButton(tr("上移"));
+    auto* move_down = new QPushButton(tr("下移"));
+    auto* delete_tile = new QPushButton(tr("删除"));
+    auto* clear_tiles = new QPushButton(tr("清空"));
+    setButtonRole(delete_tile, "danger");
+    setButtonRole(clear_tiles, "danger");
+    tile_actions->addWidget(move_up);
+    tile_actions->addWidget(move_down);
+    tile_actions->addWidget(delete_tile);
+    tile_actions->addWidget(clear_tiles);
+    stitch_layout->addLayout(tile_actions);
+    stitch_start_button_ = addButton(stitch_layout, tr("生成拼接图"));
+    setButtonRole(stitch_start_button_, "primary");
+    stitch_progress_ = new QProgressBar;
+    stitch_progress_->setObjectName(QStringLiteral("StitchProgress"));
+    stitch_progress_->setRange(0, 100);
+    stitch_progress_->setValue(0);
+    stitch_layout->addWidget(stitch_progress_);
+    stitch_cancel_button_ = addButton(stitch_layout, tr("取消拼接"));
+    stitch_cancel_button_->setEnabled(false);
+    setButtonRole(stitch_cancel_button_, "danger");
+    stitch_backend_label_ = new QLabel(tr("后端：OpenCV 优先，缺失时使用内置算法"));
+    stitch_backend_label_->setWordWrap(true);
+    stitch_layout->addWidget(stitch_backend_label_);
+    stitch_save_button_ = addButton(stitch_layout, tr("导出拼接结果…"));
+    stitch_save_button_->setEnabled(false);
     layout->addWidget(stitch_group);
 
     auto* edf_group = new QGroupBox(tr("景深扩展 EDF"));
@@ -485,30 +655,80 @@ QWidget* CameraMainWindow::buildProcessingPage()
     auto* add_edf = addButton(edf_layout, tr("添加当前帧"));
     auto* import_edf = addButton(edf_layout, tr("导入焦平面图像…"));
     auto* build_edf = addButton(edf_layout, tr("生成 EDF 图"));
+    setButtonRole(build_edf, "primary");
     focus_map_button_ = addButton(edf_layout, tr("显示焦点图"));
     focus_map_button_->setEnabled(false);
     layout->addWidget(edf_group);
     auto* clear = addButton(layout, tr("清空处理队列"));
+    setButtonRole(clear, "danger");
     layout->addStretch();
 
+    connect(stitch_layout_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        const bool grid = stitch_layout_combo_->currentData().toInt() == static_cast<int>(StitchLayoutMode::Grid);
+        stitch_rows_spin_->setEnabled(grid);
+        stitch_cols_spin_->setEnabled(grid);
+    });
+    connect(live_stitch_start_button_, &QPushButton::clicked, this, &CameraMainWindow::startLiveStitch);
+    connect(live_stitch_stop_button_, &QPushButton::clicked, this, [this] { stopLiveStitch(); });
+    connect(live_stitch_timer_, &QTimer::timeout, this, &CameraMainWindow::evaluateLiveStitch);
     connect(add_tile, &QPushButton::clicked, this, &CameraMainWindow::addStitchTile);
     connect(import_tiles, &QPushButton::clicked, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
             this, tr("导入拼接图像"), {}, tr("图像 (*.bmp *.png *.jpg *.jpeg *.tif *.tiff)"));
-        for (const QString& file : files) {
-            QImageReader reader(file);
-            const QImage image = reader.read();
-            if (image.isNull()) {
-                continue;
-            }
-            const ImageFrame previous = current_frame_;
-            current_frame_ = imageFrameFromQImage(image);
-            addStitchTile();
-            current_frame_ = previous;
-        }
-        updateProcessingLabels();
+        importStitchFiles(files, tr("所选文件"));
     });
-    connect(stitch, &QPushButton::clicked, this, &CameraMainWindow::buildStitch);
+    connect(import_directory, &QPushButton::clicked, this, [this] {
+        const QString directory = QFileDialog::getExistingDirectory(this, tr("选择拼接图像目录"));
+        if (directory.isEmpty()) return;
+        QDir dir(directory);
+        const QStringList names = dir.entryList(
+            {QStringLiteral("*.bmp"), QStringLiteral("*.png"), QStringLiteral("*.jpg"),
+             QStringLiteral("*.jpeg"), QStringLiteral("*.tif"), QStringLiteral("*.tiff")},
+            QDir::Files, QDir::Name);
+        QStringList files;
+        for (const QString& name : names) files.push_back(dir.filePath(name));
+        importStitchFiles(files, QDir::toNativeSeparators(directory));
+    });
+    connect(move_up, &QPushButton::clicked, this, [this] {
+        if (busy_ || live_stitch_active_) return;
+        const int row = stitch_tile_list_->currentRow();
+        if (row <= 0 || row >= static_cast<int>(stitch_tiles_.size())) return;
+        std::swap(stitch_tiles_[static_cast<std::size_t>(row)], stitch_tiles_[static_cast<std::size_t>(row - 1)]);
+        stitch_tile_sources_.swapItemsAt(row, row - 1);
+        invalidateStitchResult();
+        refreshStitchTileList(row - 1);
+    });
+    connect(move_down, &QPushButton::clicked, this, [this] {
+        if (busy_ || live_stitch_active_) return;
+        const int row = stitch_tile_list_->currentRow();
+        if (row < 0 || row + 1 >= static_cast<int>(stitch_tiles_.size())) return;
+        std::swap(stitch_tiles_[static_cast<std::size_t>(row)], stitch_tiles_[static_cast<std::size_t>(row + 1)]);
+        stitch_tile_sources_.swapItemsAt(row, row + 1);
+        invalidateStitchResult();
+        refreshStitchTileList(row + 1);
+    });
+    connect(delete_tile, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedStitchTile);
+    connect(clear_tiles, &QPushButton::clicked, this, [this] {
+        if (busy_ || live_stitch_active_) return;
+        StitchTileListActions::Clear(stitch_tiles_);
+        stitch_tile_sources_.clear();
+        invalidateStitchResult();
+        refreshStitchTileList();
+    });
+    connect(stitch_tile_list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
+        const int row = stitch_tile_list_->currentRow();
+        if (row >= 0 && row < static_cast<int>(stitch_tiles_.size())) {
+            setCurrentFrame(stitch_tiles_[static_cast<std::size_t>(row)].frame,
+                tr("拼接源图 %1").arg(row + 1));
+        }
+    });
+    connect(stitch_start_button_, &QPushButton::clicked, this, &CameraMainWindow::buildStitch);
+    connect(stitch_cancel_button_, &QPushButton::clicked, this, [this] {
+        if (stitch_cancel_token_) stitch_cancel_token_->store(true);
+        stitch_cancel_button_->setEnabled(false);
+        statusBar()->showMessage(tr("正在取消拼接…"));
+    });
+    connect(stitch_save_button_, &QPushButton::clicked, this, &CameraMainWindow::saveStitchResult);
     connect(add_edf, &QPushButton::clicked, this, &CameraMainWindow::addEdfFrame);
     connect(import_edf, &QPushButton::clicked, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(
@@ -532,7 +752,7 @@ QWidget* CameraMainWindow::buildProcessingPage()
 QWidget* CameraMainWindow::buildMeasurementPage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     auto* calibration_group = new QGroupBox(tr("标定"));
     auto* calibration_form = new QFormLayout(calibration_group);
     calibration_length_spin_ = new QDoubleSpinBox;
@@ -570,6 +790,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* clear = new QPushButton(tr("清空"));
     layout->addWidget(buttonRow({rename_selected, delete_selected, clear}));
     auto* export_csv = addButton(layout, tr("导出测量 CSV"));
+    setButtonRole(clear, "danger");
+    setButtonRole(export_csv, "primary");
 
     connect(calibrate, &QPushButton::clicked, this, [this] {
         setMeasurementTool(CanvasTool::Calibration, tr("请在图像上选择标定线的两个端点"));
@@ -615,9 +837,10 @@ QWidget* CameraMainWindow::buildMeasurementPage()
 QWidget* CameraMainWindow::buildProjectPage()
 {
     auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
+    auto* layout = panelLayout(page);
     auto* open = addButton(layout, tr("打开项目…"));
     auto* save = addButton(layout, tr("保存项目…"));
+    setButtonRole(save, "primary");
     layout->addWidget(new QLabel(tr("项目文件保存标定、测量、染料、荧光通道配置以及处理参数。图像数据请单独导出。")));
     layout->itemAt(2)->widget()->setProperty("wordWrap", true);
     layout->addStretch();
@@ -786,6 +1009,7 @@ void CameraMainWindow::openSelectedCamera()
 
 void CameraMainWindow::stopCamera()
 {
+    if (live_stitch_active_) stopLiveStitch(false);
     QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::QueuedConnection);
 }
 
@@ -800,10 +1024,10 @@ void CameraMainWindow::onDevicesReady(QStringList labels, QVector<int> indices, 
 
 void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 timestamp)
 {
-    if (busy_) {
-        return;
+    latest_camera_frame_ = imageFrameFromQImage(image, sequence, timestamp);
+    if (!busy_ && !live_stitch_active_) {
+        setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
     }
-    setCurrentFrame(imageFrameFromQImage(image, sequence, timestamp), tr("MUCam 实时预览"));
 }
 
 void CameraMainWindow::setCurrentFrame(
@@ -814,6 +1038,7 @@ void CameraMainWindow::setCurrentFrame(
     current_frame_ = std::move(frame);
     current_source_ = source;
     current_source_identity_ = sourceIdentity.isEmpty() ? source : sourceIdentity;
+    if (export_action_) export_action_->setEnabled(current_frame_.IsValid());
     source_label_->setText(tr("%1 · %2 × %3")
         .arg(source)
         .arg(current_frame_.width)
@@ -1050,46 +1275,319 @@ void CameraMainWindow::toggleFusion(bool enabled)
 
 void CameraMainWindow::addStitchTile()
 {
+    if (busy_ || live_stitch_active_) return;
     if (!current_frame_.IsValid()) {
         QMessageBox::information(this, tr("图像拼接"), tr("当前没有可添加的图像帧。"));
         return;
     }
-    StitchTile tile;
-    tile.frame = current_frame_;
-    if (!stitch_tiles_.empty()) {
-        const int columns = 4;
-        const int index = static_cast<int>(stitch_tiles_.size());
-        tile.offset_x = (index % columns) * std::max(1, current_frame_.width * 3 / 4);
-        tile.offset_y = (index / columns) * std::max(1, current_frame_.height * 3 / 4);
-        tile.estimated_position = true;
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    const StitchTileListActionResult result = StitchTileListActions::AddCurrentFrame(
+        stitch_tiles_, current_frame_, search_percent);
+    if (result.changed) {
+        stitch_tile_sources_.push_back(current_source_.isEmpty()
+            ? tr("当前图像") : current_source_);
+        invalidateStitchResult();
+        refreshStitchTileList(static_cast<int>(stitch_tiles_.size()) - 1);
     }
-    stitch_tiles_.push_back(std::move(tile));
-    updateProcessingLabels();
-    statusBar()->showMessage(tr("已添加拼接帧，共 %1 帧").arg(stitch_tiles_.size()), 3000);
+    statusBar()->showMessage(QString::fromStdWString(result.message), 4000);
 }
 
 void CameraMainWindow::buildStitch()
 {
+    if (busy_) return;
     if (stitch_tiles_.size() < 2) {
         QMessageBox::information(this, tr("图像拼接"), tr("至少需要两帧图像。"));
         return;
     }
+    if (stitch_layout_combo_->currentData().toInt() == static_cast<int>(StitchLayoutMode::Grid) &&
+        stitch_rows_spin_->value() * stitch_cols_spin_->value() < static_cast<int>(stitch_tiles_.size())) {
+        stitch_rows_spin_->setValue(
+            (static_cast<int>(stitch_tiles_.size()) + stitch_cols_spin_->value() - 1) /
+            stitch_cols_spin_->value());
+        statusBar()->showMessage(tr("网格行数已按源图数量自动扩展"), 3000);
+    }
+    if (live_stitch_active_) stopLiveStitch(false);
     const std::vector<StitchTile> tiles = stitch_tiles_;
+    const StitchProcessingOptions options = stitchOptionsFromUi();
+    stitch_cancel_token_ = std::make_shared<std::atomic_bool>(false);
+    const std::shared_ptr<std::atomic_bool> cancel_token = stitch_cancel_token_;
+    stitch_progress_->setValue(0);
+    stitch_start_button_->setEnabled(false);
+    stitch_cancel_button_->setEnabled(true);
+    stitch_backend_label_->setText(tr("正在配准与融合，请稍候…"));
     setBusy(true, tr("正在后台生成拼接图…"));
-    auto* watcher = new QFutureWatcher<ImageFrame>(this);
-    connect(watcher, &QFutureWatcher<ImageFrame>::finished, this, [this, watcher] {
-        const ImageFrame result = watcher->result();
+    auto* watcher = new QFutureWatcher<ProcessingJobResult>(this);
+    connect(watcher, &QFutureWatcher<ProcessingJobResult>::finished, this, [this, watcher, cancel_token] {
+        const ProcessingJobResult result = watcher->result();
         watcher->deleteLater();
-        setBusy(false, result.IsValid() ? tr("拼接完成") : tr("拼接失败"));
-        if (result.IsValid()) {
-            setCurrentFrame(result, tr("拼接结果"));
+        const bool canceled = cancel_token->load();
+        stitch_cancel_token_.reset();
+        stitch_start_button_->setEnabled(true);
+        stitch_cancel_button_->setEnabled(false);
+        stitch_progress_->setValue(result.succeeded ? 100 : 0);
+        setBusy(false, QString::fromStdWString(result.status));
+        if (result.succeeded) {
+            stitch_result_ = result.image;
+            stitch_save_button_->setEnabled(true);
+            if (result.stitch_metadata.tiles.size() == stitch_tiles_.size()) {
+                for (std::size_t index = 0; index < stitch_tiles_.size(); ++index) {
+                    const StitchResultTileMetadata& metadata = result.stitch_metadata.tiles[index];
+                    stitch_tiles_[index].offset_x = metadata.offset_x;
+                    stitch_tiles_[index].offset_y = metadata.offset_y;
+                    stitch_tiles_[index].estimated_position = metadata.estimated_position;
+                }
+                refreshStitchTileList(stitch_tile_list_->currentRow());
+            }
+            stitch_backend_label_->setText(tr("完成 · %1 · %2 个配准关系 · 输出 %3 × %4")
+                .arg(QString::fromStdWString(result.stitch_metadata.backend))
+                .arg(result.stitch_metadata.relation_count)
+                .arg(result.image.width)
+                .arg(result.image.height));
+            setCurrentFrame(result.image, tr("拼接结果"));
+        } else if (canceled) {
+            stitch_backend_label_->setText(tr("拼接已取消，可调整参数后重新生成。"));
         } else {
+            stitch_backend_label_->setText(tr("拼接失败，请检查图像重叠区域或尝试其他配准方法。"));
             QMessageBox::warning(this, tr("图像拼接"), tr("未能生成有效的拼接图。"));
         }
     });
-    watcher->setFuture(QtConcurrent::run([tiles] {
-        return ImageStitcher::StitchAverage(tiles, StitchBlendMode::Linear);
+    QPointer<QProgressBar> progress = stitch_progress_;
+    watcher->setFuture(QtConcurrent::run([tiles, options, cancel_token, progress] {
+        auto report_progress = [progress](int value) {
+            if (!progress) return;
+            QMetaObject::invokeMethod(progress, [progress, value] {
+                if (progress) progress->setValue(std::clamp(value, 0, 100));
+            }, Qt::QueuedConnection);
+        };
+        return ProcessingJobExecutor::RunStitch(
+            1, tiles, options, cancel_token.get(), report_progress);
     }));
+}
+
+StitchProcessingOptions CameraMainWindow::stitchOptionsFromUi() const
+{
+    StitchProcessingOptions options;
+    options.layout_mode = static_cast<StitchLayoutMode>(stitch_layout_combo_->currentData().toInt());
+    options.grid_rows = stitch_rows_spin_->value();
+    options.grid_cols = stitch_cols_spin_->value();
+    options.overlap_percent = stitch_overlap_spin_->value();
+    options.registration_method = static_cast<StitchRegistrationMethod>(
+        stitch_registration_combo_->currentData().toInt());
+    options.transform_model = static_cast<StitchTransformModel>(
+        stitch_transform_combo_->currentData().toInt());
+    options.blend_mode = static_cast<StitchBlendMode>(stitch_blend_combo_->currentData().toInt());
+    return options;
+}
+
+void CameraMainWindow::refreshStitchTileList(int selectedRow)
+{
+    while (stitch_tile_sources_.size() < static_cast<qsizetype>(stitch_tiles_.size())) {
+        stitch_tile_sources_.push_back(tr("图像 %1").arg(stitch_tile_sources_.size() + 1));
+    }
+    while (stitch_tile_sources_.size() > static_cast<qsizetype>(stitch_tiles_.size())) {
+        stitch_tile_sources_.removeLast();
+    }
+    stitch_tile_list_->clear();
+    for (std::size_t index = 0; index < stitch_tiles_.size(); ++index) {
+        const StitchTile& tile = stitch_tiles_[index];
+        const QString placement = index == 0
+            ? tr("基准")
+            : tile.estimated_position ? tr("待精配准") : tr("已配准");
+        stitch_tile_list_->addItem(tr("%1. %2  ·  %3 × %4  ·  (%5, %6)  ·  %7")
+            .arg(index + 1)
+            .arg(stitch_tile_sources_.at(static_cast<qsizetype>(index)))
+            .arg(tile.frame.width)
+            .arg(tile.frame.height)
+            .arg(tile.offset_x)
+            .arg(tile.offset_y)
+            .arg(placement));
+    }
+    if (selectedRow >= 0 && selectedRow < stitch_tile_list_->count()) {
+        stitch_tile_list_->setCurrentRow(selectedRow);
+    }
+    updateProcessingLabels();
+}
+
+void CameraMainWindow::deleteSelectedStitchTile()
+{
+    if (busy_ || live_stitch_active_) return;
+    const int row = stitch_tile_list_->currentRow();
+    const StitchTileListActionResult result = StitchTileListActions::DeleteSelected(stitch_tiles_, row);
+    if (result.changed && row >= 0 && row < stitch_tile_sources_.size()) {
+        stitch_tile_sources_.removeAt(row);
+        invalidateStitchResult();
+    }
+    refreshStitchTileList(result.next_selection.value_or(-1));
+    statusBar()->showMessage(QString::fromStdWString(result.message), 4000);
+}
+
+void CameraMainWindow::importStitchFiles(const QStringList& files, const QString& sourceDescription)
+{
+    if (busy_ || live_stitch_active_ || files.isEmpty()) return;
+    const int previous_count = static_cast<int>(stitch_tiles_.size());
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    int failed = 0;
+    for (const QString& file : files) {
+        QImageReader reader(file);
+        reader.setAutoTransform(true);
+        const QImage image = reader.read();
+        if (image.isNull()) {
+            ++failed;
+            continue;
+        }
+        const StitchTileListActionResult result = StitchTileListActions::AddCurrentFrame(
+            stitch_tiles_, imageFrameFromQImage(image), search_percent);
+        if (result.changed) stitch_tile_sources_.push_back(QFileInfo(file).fileName());
+    }
+    const int added = static_cast<int>(stitch_tiles_.size()) - previous_count;
+    if (added > 0) invalidateStitchResult();
+    refreshStitchTileList(added > 0 ? static_cast<int>(stitch_tiles_.size()) - 1 : -1);
+    statusBar()->showMessage(tr("从 %1 导入 %2 张图像%3")
+        .arg(sourceDescription)
+        .arg(added)
+        .arg(failed > 0 ? tr("，%1 张读取失败").arg(failed) : QString()), 5000);
+}
+
+void CameraMainWindow::startLiveStitch()
+{
+    if (live_stitch_active_ || busy_) return;
+    if (!camera_open_ || !latest_camera_frame_.IsValid()) {
+        QMessageBox::information(this, tr("实时拼接"), tr("请先打开相机并等待图像出现。"));
+        return;
+    }
+    live_stitch_active_ = true;
+    ++live_stitch_generation_;
+    live_stitch_evaluating_ = false;
+    live_stitch_preview_pending_ = false;
+    live_stitch_start_button_->setEnabled(false);
+    live_stitch_stop_button_->setEnabled(true);
+    live_stitch_interval_spin_->setEnabled(false);
+    live_stitch_status_label_->setText(tr("实时拼接已启动，请缓慢移动载物台并保持视野重叠。"));
+    live_stitch_timer_->start(live_stitch_interval_spin_->value());
+    evaluateLiveStitch();
+}
+
+void CameraMainWindow::stopLiveStitch(bool showStatus)
+{
+    if (!live_stitch_active_) return;
+    live_stitch_active_ = false;
+    ++live_stitch_generation_;
+    live_stitch_timer_->stop();
+    live_stitch_start_button_->setEnabled(true);
+    live_stitch_stop_button_->setEnabled(false);
+    live_stitch_interval_spin_->setEnabled(true);
+    live_stitch_status_label_->setText(tr("实时拼接已停止，共保留 %1 张源图。").arg(stitch_tiles_.size()));
+    if (latest_camera_frame_.IsValid()) {
+        setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
+    }
+    if (showStatus) statusBar()->showMessage(tr("实时拼接已停止"), 4000);
+}
+
+void CameraMainWindow::evaluateLiveStitch()
+{
+    if (!live_stitch_active_ || live_stitch_evaluating_ || !latest_camera_frame_.IsValid()) return;
+    live_stitch_evaluating_ = true;
+    const std::vector<StitchTile> tiles = stitch_tiles_;
+    const ImageFrame candidate = latest_camera_frame_;
+    const quint64 generation = live_stitch_generation_;
+    LiveStitchCaptureOptions options;
+    options.min_movement_percent = 20;
+    options.min_overlap_percent = std::max(5, stitch_overlap_spin_->value() - 10);
+    options.search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    options.reference_tile_count = 3;
+    auto* watcher = new QFutureWatcher<LiveStitchEvaluation>(this);
+    connect(watcher, &QFutureWatcher<LiveStitchEvaluation>::finished, this, [this, watcher] {
+        const LiveStitchEvaluation evaluation = watcher->result();
+        watcher->deleteLater();
+        if (evaluation.generation != live_stitch_generation_) return;
+        live_stitch_evaluating_ = false;
+        if (!live_stitch_active_ ||
+            evaluation.baseTileCount != stitch_tiles_.size()) return;
+
+        const LiveStitchCaptureDecision& decision = evaluation.decision;
+        if (decision.should_capture) {
+            StitchTile tile;
+            tile.frame = evaluation.frame;
+            tile.offset_x = decision.tile_offset_x;
+            tile.offset_y = decision.tile_offset_y;
+            tile.estimated_position = !decision.registration_valid && !decision.first_tile;
+            stitch_tiles_.push_back(std::move(tile));
+            stitch_tile_sources_.push_back(tr("实时 %1").arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
+            invalidateStitchResult();
+            refreshStitchTileList(static_cast<int>(stitch_tiles_.size()) - 1);
+            live_stitch_status_label_->setText(decision.first_tile
+                ? tr("已采集基准图像，请移动载物台。")
+                : tr("已采集第 %1 张 · 移动 %2% · 重叠 %3%")
+                    .arg(stitch_tiles_.size()).arg(decision.movement_percent).arg(decision.overlap_percent));
+            refreshLiveStitchPreview();
+        } else if (decision.out_of_range_warning || decision.match_missing) {
+            live_stitch_status_label_->setText(tr("未采集：重叠区域不足或配准不稳定，请向上一视野缓慢移回。"));
+        } else {
+            live_stitch_status_label_->setText(tr("等待移动 · 当前移动 %1% · 重叠 %2%")
+                .arg(decision.movement_percent).arg(decision.overlap_percent));
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([tiles, candidate, options, generation] {
+        LiveStitchEvaluation evaluation;
+        evaluation.baseTileCount = tiles.size();
+        evaluation.frame = candidate;
+        evaluation.generation = generation;
+        evaluation.decision = LiveStitchCapturePlanner::Evaluate(tiles, candidate, options);
+        return evaluation;
+    }));
+}
+
+void CameraMainWindow::refreshLiveStitchPreview()
+{
+    if (!live_stitch_active_ || stitch_tiles_.empty()) return;
+    if (live_stitch_preview_running_) {
+        live_stitch_preview_pending_ = true;
+        return;
+    }
+    live_stitch_preview_running_ = true;
+    live_stitch_preview_pending_ = false;
+    const std::vector<StitchTile> tiles = stitch_tiles_;
+    const quint64 generation = live_stitch_generation_;
+    LiveStitchPreviewOptions options;
+    options.overlap_percent = stitch_overlap_spin_->value();
+    options.blend_mode = static_cast<StitchBlendMode>(stitch_blend_combo_->currentData().toInt());
+    auto* watcher = new QFutureWatcher<LiveStitchPreviewResult>(this);
+    connect(watcher, &QFutureWatcher<LiveStitchPreviewResult>::finished, this, [this, watcher, generation] {
+        const LiveStitchPreviewResult preview = watcher->result();
+        watcher->deleteLater();
+        live_stitch_preview_running_ = false;
+        if (live_stitch_active_ && generation == live_stitch_generation_ && preview.image.IsValid()) {
+            setCurrentFrame(preview.image, tr("实时拼接预览"), QStringLiteral("live-stitch-preview"));
+        }
+        if (live_stitch_active_ && live_stitch_preview_pending_) {
+            refreshLiveStitchPreview();
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([tiles, options] {
+        return LiveStitchPreviewBuilder::Build(tiles, options);
+    }));
+}
+
+void CameraMainWindow::saveStitchResult()
+{
+    if (!stitch_result_.IsValid()) return;
+    QString file_name = QFileDialog::getSaveFileName(
+        this, tr("导出拼接结果"), QStringLiteral("stitched-image.png"),
+        tr("PNG 图像 (*.png);;TIFF 图像 (*.tif *.tiff);;JPEG 图像 (*.jpg *.jpeg)"));
+    if (file_name.isEmpty()) return;
+    if (QFileInfo(file_name).suffix().isEmpty()) file_name += QStringLiteral(".png");
+    QImageWriter writer(file_name);
+    if (!writer.write(qImageFromFrame(stitch_result_))) {
+        QMessageBox::warning(this, tr("导出失败"), writer.errorString());
+        return;
+    }
+    statusBar()->showMessage(tr("拼接结果已导出：%1").arg(file_name), 5000);
+}
+
+void CameraMainWindow::invalidateStitchResult()
+{
+    stitch_result_ = {};
+    if (stitch_save_button_) stitch_save_button_->setEnabled(false);
 }
 
 void CameraMainWindow::addEdfFrame()
@@ -1101,6 +1599,7 @@ void CameraMainWindow::addEdfFrame()
 
 void CameraMainWindow::buildEdf()
 {
+    if (busy_) return;
     if (edf_stack_.size() < 2) {
         QMessageBox::information(this, tr("景深扩展"), tr("至少需要两帧焦平面图像。"));
         return;
@@ -1134,9 +1633,15 @@ void CameraMainWindow::showEdfFocusMap()
 
 void CameraMainWindow::clearProcessing()
 {
+    if (busy_) return;
+    if (live_stitch_active_) stopLiveStitch(false);
     stitch_tiles_.clear();
+    stitch_tile_sources_.clear();
+    if (stitch_tile_list_) stitch_tile_list_->clear();
     edf_stack_.clear();
     edf_result_ = {};
+    stitch_result_ = {};
+    if (stitch_save_button_) stitch_save_button_->setEnabled(false);
     focus_map_button_->setEnabled(false);
     updateProcessingLabels();
     statusBar()->showMessage(tr("处理队列已清空"), 3000);
@@ -1155,7 +1660,6 @@ void CameraMainWindow::updateProcessingLabels()
 void CameraMainWindow::setBusy(bool busy, const QString& message)
 {
     busy_ = busy;
-    function_tabs_->setEnabled(!busy);
     statusBar()->showMessage(message);
 }
 
@@ -1195,6 +1699,12 @@ ImagePoint CameraMainWindow::imagePoint(const QPointF& point)
 
 void CameraMainWindow::closeEvent(QCloseEvent* event)
 {
+    if (live_stitch_active_) stopLiveStitch(false);
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("MainWindow"));
+    settings.setValue(QStringLiteral("geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("state"), saveState());
+    settings.endGroup();
     if (camera_thread_.isRunning()) {
         QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::BlockingQueuedConnection);
     }

@@ -224,12 +224,24 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/ImageRegistration.h
     src/imaging/ImageStitcher.cpp
     src/imaging/ImageStitcher.h
+    src/imaging/LiveStitchCapturePlanner.cpp
+    src/imaging/LiveStitchCapturePlanner.h
+    src/imaging/LiveStitchPreviewBuilder.cpp
+    src/imaging/LiveStitchPreviewBuilder.h
     src/imaging/OpenCvStitchBackend.cpp
     src/imaging/OpenCvStitchBackend.h
+    src/imaging/ProcessingJobExecutor.cpp
+    src/imaging/ProcessingJobExecutor.h
     src/imaging/ProcessingParameterRules.cpp
     src/imaging/ProcessingParameterRules.h
+    src/imaging/ProcessingStatusFormatter.cpp
+    src/imaging/ProcessingStatusFormatter.h
     src/imaging/PseudoColorMapper.cpp
     src/imaging/PseudoColorMapper.h
+    src/imaging/StitchTileListActions.cpp
+    src/imaging/StitchTileListActions.h
+    src/imaging/StitchTilePlacementPlanner.cpp
+    src/imaging/StitchTilePlacementPlanner.h
     src/storage/MeasurementCsvExporter.cpp
     src/storage/MeasurementCsvExporter.h
     src/storage/ProjectDocument.h
@@ -244,6 +256,8 @@ qt_add_executable(CameraView WIN32
     src/qt/main_qt.cpp
     src/qt/CameraMainWindow.cpp
     src/qt/CameraMainWindow.h
+    src/qt/CameraViewTheme.cpp
+    src/qt/CameraViewTheme.h
     src/qt/CameraWorker.cpp
     src/qt/CameraWorker.h
     src/qt/HistogramWidget.cpp
@@ -297,13 +311,17 @@ endif()
 
 if(CAMERAVIEW_OPENCV_AVAILABLE AND WIN32)
     set(CAMERAVIEW_OPENCV_RUNTIME_DIR "")
-    if(EXISTS "${OpenCV_DIR}/../bin")
+    if(EXISTS "${OpenCV_DIR}/x64/mingw/bin")
+        get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/x64/mingw/bin" ABSOLUTE)
+    elseif(EXISTS "${OpenCV_DIR}/../bin")
         get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/../bin" ABSOLUTE)
     elseif(EXISTS "${OpenCV_DIR}/x64/vc16/bin")
         get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/x64/vc16/bin" ABSOLUTE)
     endif()
     if(CAMERAVIEW_OPENCV_RUNTIME_DIR)
-        file(GLOB CAMERAVIEW_OPENCV_RUNTIME_DLLS "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/opencv_world*.dll")
+        file(GLOB CAMERAVIEW_OPENCV_RUNTIME_DLLS
+            "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/*opencv_world*.dll"
+            "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/opencv_videoio_ffmpeg*.dll")
         if(CAMERAVIEW_OPENCV_RUNTIME_DLLS)
             add_custom_command(TARGET CameraView POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -381,6 +399,11 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"
+            --workspace-tab 3)
+    set_tests_properties(CameraViewQtUiSnapshot PROPERTIES TIMEOUT 20)
 
     add_executable(CameraViewYoloRegistryTests
         tests/yolo_model_registry_tests.cpp

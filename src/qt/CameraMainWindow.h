@@ -13,7 +13,11 @@
 #include "imaging/PseudoColorMapper.h"
 
 #include <QMainWindow>
+#include <QStringList>
 #include <QThread>
+
+#include <atomic>
+#include <memory>
 
 class CameraWorker;
 class HistogramWidget;
@@ -22,12 +26,15 @@ class QAction;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QDockWidget;
 class QLabel;
 class QListWidget;
 class QPushButton;
+class QProgressBar;
 class QSlider;
 class QSpinBox;
 class QTabWidget;
+class QTimer;
 
 class CameraMainWindow final : public QMainWindow {
     Q_OBJECT
@@ -84,11 +91,22 @@ private:
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
     void updateProcessingLabels();
+    void refreshStitchTileList(int selectedRow = -1);
+    void deleteSelectedStitchTile();
+    StitchProcessingOptions stitchOptionsFromUi() const;
+    void startLiveStitch();
+    void stopLiveStitch(bool showStatus = true);
+    void evaluateLiveStitch();
+    void refreshLiveStitchPreview();
+    void importStitchFiles(const QStringList& files, const QString& sourceDescription);
+    void saveStitchResult();
+    void invalidateStitchResult();
     static ImageFrame imageFrameFromQImage(const QImage& image, quint64 sequence = 0, quint32 timestamp = 0);
     static QImage qImageFromFrame(const ImageFrame& frame);
     static ImagePoint imagePoint(const QPointF& point);
 
     ImageCanvas* canvas_ = nullptr;
+    QDockWidget* function_dock_ = nullptr;
     HistogramWidget* histogram_ = nullptr;
     QTabWidget* function_tabs_ = nullptr;
     YoloWorkspaceWidget* yolo_workspace_ = nullptr;
@@ -113,6 +131,24 @@ private:
     QSpinBox* channel_black_spin_ = nullptr;
     QSpinBox* channel_white_spin_ = nullptr;
     QLabel* stitch_count_label_ = nullptr;
+    QLabel* stitch_backend_label_ = nullptr;
+    QListWidget* stitch_tile_list_ = nullptr;
+    QComboBox* stitch_layout_combo_ = nullptr;
+    QSpinBox* stitch_rows_spin_ = nullptr;
+    QSpinBox* stitch_cols_spin_ = nullptr;
+    QSpinBox* stitch_overlap_spin_ = nullptr;
+    QComboBox* stitch_registration_combo_ = nullptr;
+    QComboBox* stitch_transform_combo_ = nullptr;
+    QComboBox* stitch_blend_combo_ = nullptr;
+    QProgressBar* stitch_progress_ = nullptr;
+    QPushButton* stitch_start_button_ = nullptr;
+    QPushButton* stitch_cancel_button_ = nullptr;
+    QPushButton* stitch_save_button_ = nullptr;
+    QSpinBox* live_stitch_interval_spin_ = nullptr;
+    QPushButton* live_stitch_start_button_ = nullptr;
+    QPushButton* live_stitch_stop_button_ = nullptr;
+    QLabel* live_stitch_status_label_ = nullptr;
+    QTimer* live_stitch_timer_ = nullptr;
     QLabel* edf_count_label_ = nullptr;
     QPushButton* focus_map_button_ = nullptr;
     QDoubleSpinBox* calibration_length_spin_ = nullptr;
@@ -130,6 +166,7 @@ private:
     bool ai_annotation_active_ = false;
 
     ImageFrame current_frame_;
+    ImageFrame latest_camera_frame_;
     ImageFrame display_frame_;
     QString current_source_;
     QString current_source_identity_;
@@ -143,6 +180,14 @@ private:
     std::vector<DyeProfile> dyes_;
     std::vector<FluorescenceChannel> channels_;
     std::vector<StitchTile> stitch_tiles_;
+    QStringList stitch_tile_sources_;
+    std::shared_ptr<std::atomic_bool> stitch_cancel_token_;
+    ImageFrame stitch_result_;
+    bool live_stitch_active_ = false;
+    bool live_stitch_evaluating_ = false;
+    bool live_stitch_preview_running_ = false;
+    bool live_stitch_preview_pending_ = false;
+    quint64 live_stitch_generation_ = 0;
     std::vector<ImageFrame> edf_stack_;
     EdfResult edf_result_;
     bool fusion_enabled_ = false;

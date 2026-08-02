@@ -51,6 +51,11 @@ QWidget* buttonRow(std::initializer_list<QPushButton*> buttons)
     return widget;
 }
 
+void setButtonRole(QPushButton* button, const char* role)
+{
+    button->setProperty("role", QString::fromLatin1(role));
+}
+
 QString safeDatasetFolder(QString value)
 {
     value = value.trimmed();
@@ -92,6 +97,9 @@ void YoloWorkspaceWidget::buildUi()
     auto* root = new QVBoxLayout(this);
     workspace_tabs_ = new QTabWidget;
     workspace_tabs_->setObjectName(QStringLiteral("YoloWorkspaceTabs"));
+    workspace_tabs_->setDocumentMode(true);
+    workspace_tabs_->setUsesScrollButtons(true);
+    workspace_tabs_->setElideMode(Qt::ElideRight);
     auto* tabs = workspace_tabs_;
     root->addWidget(tabs);
 
@@ -125,6 +133,7 @@ void YoloWorkspaceWidget::buildUi()
     model_layout->addLayout(model_form);
     auto* model_buttons = new QHBoxLayout;
     auto* import_button = new QPushButton(tr("导入"));
+    setButtonRole(import_button, "primary");
     auto* activate_button = new QPushButton(tr("设为当前"));
     auto* inspect_button = new QPushButton(tr("读取信息"));
     auto* export_button = new QPushButton(tr("导出 ONNX"));
@@ -166,6 +175,7 @@ void YoloWorkspaceWidget::buildUi()
     options_layout->addRow(tr("最大结果数"), max_detections_spin_);
     options_layout->addRow(tr("设备"), device_edit_);
     infer_button_ = new QPushButton(tr("识别当前图像"));
+    setButtonRole(infer_button_, "primary");
     options_layout->addRow(infer_button_);
     result_list_ = new QListWidget;
     result_list_->setObjectName(QStringLiteral("YoloResultList"));
@@ -218,6 +228,8 @@ void YoloWorkspaceWidget::buildUi()
     auto* train_buttons = new QHBoxLayout;
     train_button_ = new QPushButton(tr("开始训练"));
     cancel_button_ = new QPushButton(tr("停止"));
+    setButtonRole(train_button_, "primary");
+    setButtonRole(cancel_button_, "danger");
     cancel_button_->setEnabled(false);
     train_buttons->addWidget(train_button_);
     train_buttons->addWidget(cancel_button_);
@@ -302,6 +314,7 @@ QWidget* YoloWorkspaceWidget::buildDatasetPage()
     auto* create_button = new QPushButton(tr("新建"));
     auto* open_button = new QPushButton(tr("打开"));
     auto* open_folder_button = new QPushButton(tr("打开目录"));
+    setButtonRole(create_button, "primary");
     project_layout->addWidget(dataset_project_edit_);
     project_layout->addWidget(buttonRow({create_button, open_button, open_folder_button}));
     auto* task_form = new QFormLayout;
@@ -327,6 +340,7 @@ QWidget* YoloWorkspaceWidget::buildDatasetPage()
     auto* add_class_button = new QPushButton(tr("新增类别"));
     auto* rename_class_button = new QPushButton(tr("重命名"));
     auto* remove_class_button = new QPushButton(tr("删除类别"));
+    setButtonRole(remove_class_button, "danger");
     class_layout->addRow(tr("当前类别"), dataset_class_combo_);
     class_layout->addRow(buttonRow({add_class_button, rename_class_button, remove_class_button}));
     dataset_split_combo_ = new QComboBox;
@@ -351,6 +365,8 @@ QWidget* YoloWorkspaceWidget::buildDatasetPage()
     auto* clear_annotations_button = new QPushButton(tr("清空当前标注"));
     annotation_layout->addWidget(buttonRow({remove_annotation_button, clear_annotations_button}));
     auto* save_sample_button = new QPushButton(tr("保存当前图像到数据集"));
+    setButtonRole(clear_annotations_button, "danger");
+    setButtonRole(save_sample_button, "primary");
     save_sample_button->setObjectName(QStringLiteral("DatasetSaveSampleButton"));
     annotation_layout->addWidget(save_sample_button);
     editor_layout->addWidget(annotation_group);
@@ -366,6 +382,8 @@ QWidget* YoloWorkspaceWidget::buildDatasetPage()
     auto* remove_sample_button = new QPushButton(tr("删除选中样本"));
     sample_layout->addWidget(buttonRow({open_sample_button, remove_sample_button}));
     auto* use_training_button = new QPushButton(tr("用于训练"));
+    setButtonRole(remove_sample_button, "danger");
+    setButtonRole(use_training_button, "primary");
     use_training_button->setObjectName(QStringLiteral("DatasetUseTrainingButton"));
     sample_layout->addWidget(use_training_button);
     editor_layout->addWidget(sample_group);

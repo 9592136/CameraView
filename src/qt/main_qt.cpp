@@ -1,4 +1,5 @@
 #include "CameraMainWindow.h"
+#include "CameraViewTheme.h"
 #include "ai/YoloModelRegistry.h"
 
 #include <QApplication>
@@ -11,7 +12,8 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QDebug>
-#include <QStyleFactory>
+#include <QPixmap>
+#include <QTabWidget>
 #include <QTimer>
 
 namespace {
@@ -95,7 +97,7 @@ int main(int argc, char* argv[])
     application.setApplicationName(QStringLiteral("CameraView"));
     application.setApplicationDisplayName(QStringLiteral("CameraView · Qt"));
     application.setOrganizationName(QStringLiteral("CameraView"));
-    application.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    applyCameraViewTheme(application);
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("CameraView Qt industrial camera application"));
@@ -107,8 +109,18 @@ int main(int argc, char* argv[])
         QStringLiteral("import-yolo-manifest"),
         QStringLiteral("Import trained YOLO models from a JSON manifest and exit."),
         QStringLiteral("path"));
+    const QCommandLineOption ui_snapshot(
+        QStringLiteral("ui-snapshot"),
+        QStringLiteral("Render the main window to an image and exit."),
+        QStringLiteral("path"));
+    const QCommandLineOption workspace_tab(
+        QStringLiteral("workspace-tab"),
+        QStringLiteral("Select the workspace tab by zero-based index."),
+        QStringLiteral("index"));
     parser.addOption(smoke_test);
     parser.addOption(import_yolo_manifest);
+    parser.addOption(ui_snapshot);
+    parser.addOption(workspace_tab);
     parser.process(application);
 
     if (parser.isSet(import_yolo_manifest)) {
@@ -116,7 +128,23 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
-    if (parser.isSet(smoke_test)) {
+    if (parser.isSet(workspace_tab)) {
+        bool valid = false;
+        const int index = parser.value(workspace_tab).toInt(&valid);
+        if (QTabWidget* tabs = window.findChild<QTabWidget*>(QStringLiteral("FunctionTabs"));
+            valid && tabs && index >= 0 && index < tabs->count()) {
+            tabs->setCurrentIndex(index);
+        }
+    }
+    if (parser.isSet(ui_snapshot)) {
+        window.show();
+        const QString snapshot_path = parser.value(ui_snapshot);
+        QTimer::singleShot(1000, &application, [&application, &window, snapshot_path] {
+            const bool saved = window.grab().save(snapshot_path);
+            if (!saved) qCritical().noquote() << QStringLiteral("Cannot save UI snapshot: %1").arg(snapshot_path);
+            application.exit(saved ? 0 : 3);
+        });
+    } else if (parser.isSet(smoke_test)) {
         QTimer::singleShot(750, &application, &QCoreApplication::quit);
     } else {
         window.show();
