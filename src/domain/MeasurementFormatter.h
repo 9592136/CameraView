@@ -23,6 +23,22 @@ public:
         const PolygonAreaMeasurement& measurement,
         const CalibrationProfile& calibration,
         MeasurementUnit display_unit);
+    static std::wstring FormatLine(
+        const PointMeasurement& measurement,
+        const CalibrationProfile& calibration,
+        MeasurementUnit display_unit);
+    static std::wstring FormatLine(
+        const PolylineMeasurement& measurement,
+        const CalibrationProfile& calibration,
+        MeasurementUnit display_unit);
+    static std::wstring FormatLine(
+        const CircleMeasurement& measurement,
+        const CalibrationProfile& calibration,
+        MeasurementUnit display_unit);
+    static std::wstring FormatLine(
+        const EllipseMeasurement& measurement,
+        const CalibrationProfile& calibration,
+        MeasurementUnit display_unit);
     static std::vector<std::wstring> FormatCollection(
         const MeasurementCollection& measurements,
         const CalibrationProfile& calibration,

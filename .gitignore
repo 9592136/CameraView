@@ -46,4 +46,16 @@ Desktop.ini
 /third_party/*.exe
 
 # Build toolchain (large binaries, not part of source)
-/tools/
+/tools/*
+!/tools/build_qt.ps1
+!/tools/setup_yolo.ps1
+!/tools/yolo_backend.py
+!/tools/prepare_pannuke.py
+!/tools/run_pannuke.ps1
+
+# Local YOLO runtimes, datasets, weights, and training outputs
+/.venv-yolo/
+/runs/
+/models/
+*.pt
+*.onnx

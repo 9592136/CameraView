@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CameraView LANGUAGES CXX)
 
+if(WIN32)
+    enable_language(RC)
+endif()
+
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGLWidgets)
+qt_standard_project_setup()
+
 option(CAMERAVIEW_WITH_OPENCV "Enable the OpenCV microscopy stitching backend" ON)
 if(CAMERAVIEW_WITH_OPENCV)
     find_package(OpenCV QUIET COMPONENTS core imgproc features2d calib3d video)
@@ -13,7 +20,7 @@ if(CAMERAVIEW_WITH_OPENCV)
     endif()
 endif()
 
-# ── Shared source files used by both CameraView and CameraViewDomainTests ──
+# ── Complete domain source set used by the existing verification suite ──
 set(CAMERAVIEW_DOMAIN_SOURCES
     src/app/DiagnosticReportActions.cpp
     src/app/DiagnosticReportActions.h
@@ -72,6 +79,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/LiveStitchPreviewBuilder.h
     src/imaging/OpenCvStitchBackend.cpp
     src/imaging/OpenCvStitchBackend.h
+    src/imaging/SmartTargetCounter.cpp
+    src/imaging/SmartTargetCounter.h
     src/imaging/ImageViewport.cpp
     src/imaging/ImageViewport.h
     src/imaging/OverlayRenderer.cpp
@@ -113,6 +122,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/HistogramCalculator.cpp
     src/imaging/HistogramCalculator.h
     src/imaging/ImageAdjuster.h
+    src/imaging/ImageFilterProcessor.cpp
+    src/imaging/ImageFilterProcessor.h
     src/imaging/StitchTileListActions.cpp
     src/imaging/StitchTileListActions.h
     src/imaging/StitchTilePlacementPlanner.cpp
@@ -183,25 +194,126 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/ui/WindowLayout.h
 )
 
-# ── CameraView executable (main application) ──
-add_executable(CameraView WIN32
-    src/main.cpp
+# Platform-neutral application services used by the Qt front end.  The legacy
+# Win32 view/layout sources intentionally stay out of the default executable.
+set(CAMERAVIEW_QT_CORE_SOURCES
+    src/domain/CalibrationProfile.cpp
+    src/domain/CalibrationProfile.h
+    src/domain/Geometry.h
+    src/domain/ImageFrame.h
+    src/domain/Measurement.cpp
+    src/domain/Measurement.h
+    src/domain/MeasurementCollection.cpp
+    src/domain/MeasurementCollection.h
+    src/domain/MeasurementFormatter.cpp
+    src/domain/MeasurementFormatter.h
+    src/domain/MeasurementNameFormatter.cpp
+    src/domain/MeasurementNameFormatter.h
+    src/imaging/ChannelFusionEngine.cpp
+    src/imaging/ChannelFusionEngine.h
+    src/imaging/DyeLibrary.cpp
+    src/imaging/DyeLibrary.h
+    src/imaging/EdfProcessor.cpp
+    src/imaging/EdfProcessor.h
+    src/imaging/EdfStackListActions.cpp
+    src/imaging/EdfStackListActions.h
+    src/imaging/Fluorescence.h
+    src/imaging/FluorescenceChannelFactory.cpp
+    src/imaging/FluorescenceChannelFactory.h
+    src/imaging/FluorescenceChannelListActions.cpp
+    src/imaging/FluorescenceChannelListActions.h
+    src/imaging/FluorescenceChannelSettings.cpp
+    src/imaging/FluorescenceChannelSettings.h
+    src/imaging/FluorescenceFormatter.cpp
+    src/imaging/FluorescenceFormatter.h
+    src/imaging/HistogramCalculator.cpp
+    src/imaging/HistogramCalculator.h
+    src/imaging/ImageFilterProcessor.cpp
+    src/imaging/ImageFilterProcessor.h
+    src/imaging/ImageRegistration.cpp
+    src/imaging/ImageRegistration.h
+    src/imaging/ImageProfileSampler.cpp
+    src/imaging/ImageProfileSampler.h
+    src/imaging/ImageStitcher.cpp
+    src/imaging/ImageStitcher.h
+    src/imaging/LiveStitchCapturePlanner.cpp
+    src/imaging/LiveStitchCapturePlanner.h
+    src/imaging/LiveStitchPreviewBuilder.cpp
+    src/imaging/LiveStitchPreviewBuilder.h
+    src/imaging/OpenCvStitchBackend.cpp
+    src/imaging/OpenCvStitchBackend.h
+    src/imaging/SmartTargetCounter.cpp
+    src/imaging/SmartTargetCounter.h
+    src/imaging/ProcessingJobExecutor.cpp
+    src/imaging/ProcessingJobExecutor.h
+    src/imaging/ProcessingParameterRules.cpp
+    src/imaging/ProcessingParameterRules.h
+    src/imaging/ProcessingStatusFormatter.cpp
+    src/imaging/ProcessingStatusFormatter.h
+    src/imaging/PseudoColorMapper.cpp
+    src/imaging/PseudoColorMapper.h
+    src/imaging/StitchTileListActions.cpp
+    src/imaging/StitchTileListActions.h
+    src/imaging/StitchTilePlacementPlanner.cpp
+    src/imaging/StitchTilePlacementPlanner.h
+    src/storage/MeasurementCsvExporter.cpp
+    src/storage/MeasurementCsvExporter.h
+    src/storage/ProjectDocument.h
+    src/storage/ProjectRepository.cpp
+    src/storage/ProjectRepository.h
+    src/storage/ProjectSessionMapper.cpp
+    src/storage/ProjectSessionMapper.h
+)
+
+# ── CameraView executable (Qt 6 application) ──
+qt_add_executable(CameraView WIN32
+    src/qt/main_qt.cpp
+    src/qt/CameraMainWindow.cpp
+    src/qt/CameraMainWindow.h
+    src/qt/CameraViewTheme.cpp
+    src/qt/CameraViewTheme.h
+    src/qt/CameraWorker.cpp
+    src/qt/CameraWorker.h
+    src/qt/HistogramWidget.cpp
+    src/qt/HistogramWidget.h
+    src/qt/ImageCanvas.cpp
+    src/qt/ImageCanvas.h
+    src/qt/MeasurementToolButton.cpp
+    src/qt/MeasurementToolButton.h
+    src/qt/ImageSurface3DDialog.cpp
+    src/qt/ImageSurface3DDialog.h
+    src/qt/ImageSurface3DWidget.cpp
+    src/qt/ImageSurface3DWidget.h
+    src/qt/ProfileAnalysisDialog.cpp
+    src/qt/ProfileAnalysisDialog.h
+    src/qt/ProfilePlotWidget.cpp
+    src/qt/ProfilePlotWidget.h
+    src/qt/ai/YoloModelRegistry.cpp
+    src/qt/ai/YoloModelRegistry.h
+    src/qt/ai/YoloDatasetProject.cpp
+    src/qt/ai/YoloDatasetProject.h
+    src/qt/ai/YoloProcessController.cpp
+    src/qt/ai/YoloProcessController.h
+    src/qt/ai/YoloWorkspaceWidget.cpp
+    src/qt/ai/YoloWorkspaceWidget.h
     src/MUCamApi.cpp
     src/MUCamApi.h
     src/camera/ICameraDriver.h
     src/camera/MUCamCameraDriver.cpp
     src/camera/MUCamCameraDriver.h
     src/domain/ImageFrame.h
-    src/platform/FileDialog.cpp
-    src/platform/FileDialog.h
-    src/ui/HistogramRenderer.cpp
-    src/ui/HistogramRenderer.h
-    src/ui/MainMenu.cpp
-    src/ui/LayoutControls.cpp
-    src/ui/CameraPreviewApp.cpp
-    src/ui/WindowProc.cpp
-    ${CAMERAVIEW_DOMAIN_SOURCES}
+    ${CAMERAVIEW_QT_CORE_SOURCES}
 )
+
+qt_add_resources(CameraView "cameraview_icons"
+    PREFIX "/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/CameraView.png"
+)
+
+if(WIN32)
+    target_sources(CameraView PRIVATE assets/icons/CameraView.rc)
+endif()
 
 target_include_directories(CameraView PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_compile_features(CameraView PRIVATE cxx_std_17)
@@ -212,7 +324,20 @@ target_compile_definitions(CameraView PRIVATE
     NOMINMAX
 )
 
-target_link_libraries(CameraView PRIVATE user32 gdi32 msimg32 comdlg32 ole32 windowscodecs shell32 comctl32 pthread)
+target_link_libraries(CameraView PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Concurrent
+    Qt6::OpenGLWidgets
+    user32
+    gdi32
+    msimg32
+    ole32
+    windowscodecs
+    shell32
+    comctl32
+)
 if(CAMERAVIEW_OPENCV_AVAILABLE)
     target_compile_definitions(CameraView PRIVATE CAMERAVIEW_WITH_OPENCV)
     target_include_directories(CameraView PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -221,13 +346,17 @@ endif()
 
 if(CAMERAVIEW_OPENCV_AVAILABLE AND WIN32)
     set(CAMERAVIEW_OPENCV_RUNTIME_DIR "")
-    if(EXISTS "${OpenCV_DIR}/../bin")
+    if(EXISTS "${OpenCV_DIR}/x64/mingw/bin")
+        get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/x64/mingw/bin" ABSOLUTE)
+    elseif(EXISTS "${OpenCV_DIR}/../bin")
         get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/../bin" ABSOLUTE)
     elseif(EXISTS "${OpenCV_DIR}/x64/vc16/bin")
         get_filename_component(CAMERAVIEW_OPENCV_RUNTIME_DIR "${OpenCV_DIR}/x64/vc16/bin" ABSOLUTE)
     endif()
     if(CAMERAVIEW_OPENCV_RUNTIME_DIR)
-        file(GLOB CAMERAVIEW_OPENCV_RUNTIME_DLLS "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/opencv_world*.dll")
+        file(GLOB CAMERAVIEW_OPENCV_RUNTIME_DLLS
+            "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/*opencv_world*.dll"
+            "${CAMERAVIEW_OPENCV_RUNTIME_DIR}/opencv_videoio_ffmpeg*.dll")
         if(CAMERAVIEW_OPENCV_RUNTIME_DLLS)
             add_custom_command(TARGET CameraView POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -236,10 +365,6 @@ if(CAMERAVIEW_OPENCV_AVAILABLE AND WIN32)
             )
         endif()
     endif()
-endif()
-
-if(MINGW)
-    target_link_options(CameraView PRIVATE -municode)
 endif()
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -256,15 +381,25 @@ foreach(MUCAM_DLL MUCam32Ex.dll MUCam32.dll)
     )
 endforeach()
 
+add_custom_command(TARGET CameraView POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:CameraView>/yolo"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/yolo_backend.py"
+        "$<TARGET_FILE_DIR:CameraView>/yolo/yolo_backend.py"
+    COMMENT "Deploying the CameraView YOLO backend"
+)
+
 # ── MinGW-w64 runtime DLLs ──
-set(MINGW_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/tools/mingw64/bin")
-foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
-    add_custom_command(TARGET CameraView POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
-            "$<TARGET_FILE_DIR:CameraView>/${MINGW_DLL}"
-    )
-endforeach()
+get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${QT_BIN_DIR}" REQUIRED)
+add_custom_command(TARGET CameraView POST_BUILD
+    COMMAND "${WINDEPLOYQT_EXECUTABLE}"
+        --no-translations
+        --no-system-d3d-compiler
+        "$<TARGET_FILE:CameraView>"
+    COMMENT "Deploying the Qt runtime next to CameraView"
+)
 
 # ── Tests ──
 option(CAMERAVIEW_BUILD_TESTS "Build CameraView verification tests" ON)
@@ -295,13 +430,171 @@ if(CAMERAVIEW_BUILD_TESTS)
                     "$<TARGET_FILE_DIR:CameraViewDomainTests>"
             )
         endif()
-    endif()
-    foreach(MINGW_DLL libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
-        add_custom_command(TARGET CameraViewDomainTests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${MINGW_RUNTIME_DIR}/${MINGW_DLL}"
-                "$<TARGET_FILE_DIR:CameraViewDomainTests>/${MINGW_DLL}"
+
+        add_executable(CameraViewSmartTargetCounterTests
+            tests/smart_target_counter_tests.cpp
+            src/imaging/SmartTargetCounter.cpp
+            src/imaging/SmartTargetCounter.h
         )
-    endforeach()
+        target_include_directories(CameraViewSmartTargetCounterTests PRIVATE
+            "${CMAKE_SOURCE_DIR}/src" ${OpenCV_INCLUDE_DIRS})
+        target_compile_features(CameraViewSmartTargetCounterTests PRIVATE cxx_std_17)
+        target_compile_definitions(CameraViewSmartTargetCounterTests PRIVATE CAMERAVIEW_WITH_OPENCV)
+        target_link_libraries(CameraViewSmartTargetCounterTests PRIVATE ${OpenCV_LIBS})
+        if(WIN32 AND CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraViewSmartTargetCounterTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraViewSmartTargetCounterTests>")
+        endif()
+        add_test(NAME CameraViewSmartTargetCounterTests COMMAND CameraViewSmartTargetCounterTests)
+    endif()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
+
+    add_executable(CameraViewMeasurementExtendedTests
+        tests/measurement_extended_tests.cpp
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/domain/Measurement.cpp
+        src/domain/Measurement.h
+        src/domain/MeasurementCollection.cpp
+        src/domain/MeasurementCollection.h
+        src/domain/MeasurementFormatter.cpp
+        src/domain/MeasurementFormatter.h
+        src/domain/MeasurementNameFormatter.cpp
+        src/domain/MeasurementNameFormatter.h
+    )
+    target_include_directories(CameraViewMeasurementExtendedTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewMeasurementExtendedTests PRIVATE cxx_std_17)
+    add_test(NAME CameraViewMeasurementExtendedTests COMMAND CameraViewMeasurementExtendedTests)
+
+    add_executable(CameraViewMeasurementToolIconTests
+        tests/measurement_tool_icon_tests.cpp
+        src/qt/MeasurementToolButton.cpp
+        src/qt/MeasurementToolButton.h
+    )
+    target_include_directories(CameraViewMeasurementToolIconTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewMeasurementToolIconTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewMeasurementToolIconTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME CameraViewMeasurementToolIconTests COMMAND CameraViewMeasurementToolIconTests)
+
+    add_executable(CameraViewImageFilterTests
+        tests/image_filter_processor_tests.cpp
+        src/imaging/ImageFilterProcessor.cpp
+        src/imaging/ImageFilterProcessor.h
+    )
+    target_include_directories(CameraViewImageFilterTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewImageFilterTests PRIVATE cxx_std_17)
+    if(CAMERAVIEW_OPENCV_AVAILABLE)
+        target_compile_definitions(CameraViewImageFilterTests PRIVATE CAMERAVIEW_WITH_OPENCV)
+        target_include_directories(CameraViewImageFilterTests PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(CameraViewImageFilterTests PRIVATE ${OpenCV_LIBS})
+        if(WIN32 AND CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraViewImageFilterTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraViewImageFilterTests>")
+        endif()
+    endif()
+    add_test(NAME CameraViewImageFilterTests COMMAND CameraViewImageFilterTests)
+
+    add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
+    set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewMeasurementToolbarCoverage
+        COMMAND CameraView --verify-measurement-toolbar)
+    set_tests_properties(CameraViewMeasurementToolbarCoverage PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"
+            --workspace-tab 3)
+    set_tests_properties(CameraViewQtUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtMeasurementUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-measurement-ui.png"
+            --workspace-tab 4)
+    set_tests_properties(CameraViewQtMeasurementUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtImageFilterUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-image-filter-ui.png"
+            --workspace-tab 1
+            --focus-widget ImageFilterPipelineLabel)
+    set_tests_properties(CameraViewQtImageFilterUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtSmartCountUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-smart-count-ui.png"
+            --workspace-tab 4
+            --focus-widget SmartCountResultList)
+    set_tests_properties(CameraViewQtSmartCountUiSnapshot PROPERTIES TIMEOUT 20)
+
+    add_executable(CameraViewYoloRegistryTests
+        tests/yolo_model_registry_tests.cpp
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+    )
+    target_include_directories(CameraViewYoloRegistryTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewYoloRegistryTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewYoloRegistryTests PRIVATE Qt6::Core)
+    add_test(NAME CameraViewYoloRegistryTests COMMAND CameraViewYoloRegistryTests)
+
+    add_executable(CameraViewQtInteractionTests
+        tests/qt_interaction_tests.cpp
+        src/qt/ImageCanvas.cpp
+        src/qt/ImageCanvas.h
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+        src/qt/ai/YoloDatasetProject.cpp
+        src/qt/ai/YoloDatasetProject.h
+        src/qt/ai/YoloProcessController.cpp
+        src/qt/ai/YoloProcessController.h
+        src/qt/ai/YoloWorkspaceWidget.cpp
+        src/qt/ai/YoloWorkspaceWidget.h
+    )
+    target_include_directories(CameraViewQtInteractionTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewQtInteractionTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewQtInteractionTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME CameraViewQtInteractionTests COMMAND CameraViewQtInteractionTests)
+
+    add_executable(CameraViewYoloDatasetTests
+        tests/yolo_dataset_project_tests.cpp
+        src/qt/ai/YoloDatasetProject.cpp
+        src/qt/ai/YoloDatasetProject.h
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+    )
+    target_include_directories(CameraViewYoloDatasetTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewYoloDatasetTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewYoloDatasetTests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME CameraViewYoloDatasetTests COMMAND CameraViewYoloDatasetTests)
+
+    add_executable(CameraViewImageProfileTests
+        tests/image_profile_tests.cpp
+        src/imaging/ImageProfileSampler.cpp
+        src/imaging/ImageProfileSampler.h
+    )
+    target_include_directories(CameraViewImageProfileTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewImageProfileTests PRIVATE cxx_std_17)
+    add_test(NAME CameraViewImageProfileTests COMMAND CameraViewImageProfileTests)
+
+    add_executable(CameraViewVisualizationTests
+        tests/visualization_tests.cpp
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/imaging/ImageProfileSampler.cpp
+        src/imaging/ImageProfileSampler.h
+        src/qt/CameraViewTheme.cpp
+        src/qt/CameraViewTheme.h
+        src/qt/ImageSurface3DDialog.cpp
+        src/qt/ImageSurface3DDialog.h
+        src/qt/ImageSurface3DWidget.cpp
+        src/qt/ImageSurface3DWidget.h
+        src/qt/ProfileAnalysisDialog.cpp
+        src/qt/ProfileAnalysisDialog.h
+        src/qt/ProfilePlotWidget.cpp
+        src/qt/ProfilePlotWidget.h
+    )
+    target_include_directories(CameraViewVisualizationTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewVisualizationTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewVisualizationTests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets)
+    add_test(NAME CameraViewVisualizationTests COMMAND CameraViewVisualizationTests)
 endif()

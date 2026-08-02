@@ -167,7 +167,22 @@ void RectangleAreaMeasurement::SetSecond(ImagePoint point)
 
 double RectangleAreaMeasurement::PixelArea() const
 {
-    return std::abs((second_.x - first_.x) * (second_.y - first_.y));
+    return PixelWidth() * PixelHeight();
+}
+
+double RectangleAreaMeasurement::PixelWidth() const
+{
+    return std::abs(second_.x - first_.x);
+}
+
+double RectangleAreaMeasurement::PixelHeight() const
+{
+    return std::abs(second_.y - first_.y);
+}
+
+double RectangleAreaMeasurement::PixelPerimeter() const
+{
+    return 2.0 * (PixelWidth() + PixelHeight());
 }
 
 MeasurementResult RectangleAreaMeasurement::Evaluate(const CalibrationProfile& calibration, MeasurementUnit output_unit) const
@@ -212,7 +227,96 @@ double PolygonAreaMeasurement::PixelArea() const
     return std::abs(twice_area) * 0.5;
 }
 
+double PolygonAreaMeasurement::PixelPerimeter() const
+{
+    if (points_.size() < 2) {
+        return 0.0;
+    }
+    double perimeter = 0.0;
+    for (std::size_t index = 0; index < points_.size(); ++index) {
+        perimeter += DistancePixels(points_[index], points_[(index + 1) % points_.size()]);
+    }
+    return perimeter;
+}
+
 MeasurementResult PolygonAreaMeasurement::Evaluate(const CalibrationProfile& calibration, MeasurementUnit output_unit) const
 {
     return BuildAreaResult(name_, PixelArea(), calibration, output_unit);
+}
+
+PointMeasurement::PointMeasurement(std::wstring name, ImagePoint point)
+    : name_(std::move(name)), point_(point)
+{
+}
+
+void PointMeasurement::SetName(std::wstring name) { name_ = std::move(name); }
+void PointMeasurement::SetPoint(ImagePoint point) { point_ = point; }
+
+PolylineMeasurement::PolylineMeasurement(std::wstring name, std::vector<ImagePoint> points)
+    : name_(std::move(name)), points_(std::move(points))
+{
+}
+
+void PolylineMeasurement::SetName(std::wstring name) { name_ = std::move(name); }
+void PolylineMeasurement::SetPoints(std::vector<ImagePoint> points) { points_ = std::move(points); }
+void PolylineMeasurement::SetPoint(std::size_t index, ImagePoint point)
+{
+    if (index < points_.size()) points_[index] = point;
+}
+
+double PolylineMeasurement::PixelLength() const
+{
+    double length = 0.0;
+    for (std::size_t index = 1; index < points_.size(); ++index) {
+        length += DistancePixels(points_[index - 1], points_[index]);
+    }
+    return length;
+}
+
+MeasurementResult PolylineMeasurement::Evaluate(
+    const CalibrationProfile& calibration, MeasurementUnit output_unit) const
+{
+    MeasurementResult result;
+    result.name = name_;
+    result.kind = L"Polyline";
+    result.pixel_value = PixelLength();
+    result.unit = calibration.IsCalibrated() || output_unit == MeasurementUnit::Pixels
+        ? output_unit : MeasurementUnit::Pixels;
+    result.calibrated_value = result.unit == MeasurementUnit::Pixels
+        ? result.pixel_value : calibration.PixelsToUnit(result.pixel_value, output_unit);
+    result.unit_label = CalibrationProfile::UnitLabel(result.unit);
+    return result;
+}
+
+CircleMeasurement::CircleMeasurement(std::wstring name, ImagePoint center, ImagePoint edge)
+    : name_(std::move(name)), center_(center), edge_(edge)
+{
+}
+
+void CircleMeasurement::SetName(std::wstring name) { name_ = std::move(name); }
+void CircleMeasurement::SetCenter(ImagePoint point) { center_ = point; }
+void CircleMeasurement::SetEdge(ImagePoint point) { edge_ = point; }
+double CircleMeasurement::PixelRadius() const { return DistancePixels(center_, edge_); }
+double CircleMeasurement::PixelDiameter() const { return 2.0 * PixelRadius(); }
+double CircleMeasurement::PixelCircumference() const { return 2.0 * kPi * PixelRadius(); }
+double CircleMeasurement::PixelArea() const { return kPi * PixelRadius() * PixelRadius(); }
+
+EllipseMeasurement::EllipseMeasurement(std::wstring name, ImagePoint first, ImagePoint second)
+    : name_(std::move(name)), first_(first), second_(second)
+{
+}
+
+void EllipseMeasurement::SetName(std::wstring name) { name_ = std::move(name); }
+void EllipseMeasurement::SetFirst(ImagePoint point) { first_ = point; }
+void EllipseMeasurement::SetSecond(ImagePoint point) { second_ = point; }
+double EllipseMeasurement::PixelWidth() const { return std::abs(second_.x - first_.x); }
+double EllipseMeasurement::PixelHeight() const { return std::abs(second_.y - first_.y); }
+double EllipseMeasurement::PixelArea() const { return kPi * PixelWidth() * PixelHeight() / 4.0; }
+double EllipseMeasurement::PixelPerimeter() const
+{
+    const double a = PixelWidth() / 2.0;
+    const double b = PixelHeight() / 2.0;
+    if (a <= 0.0 || b <= 0.0) return 0.0;
+    const double h = ((a - b) * (a - b)) / ((a + b) * (a + b));
+    return kPi * (a + b) * (1.0 + (3.0 * h) / (10.0 + std::sqrt(4.0 - 3.0 * h)));
 }

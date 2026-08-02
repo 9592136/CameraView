@@ -187,7 +187,7 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
 
     output << "{\n";
     output << "  \"format\": \"CameraViewProject\",\n";
-    output << "  \"version\": 8,\n";
+    output << "  \"version\": 9,\n";
     output << "  \"calibration\": {\n";
     output << "    \"microns_per_pixel\": " << std::fixed << std::setprecision(10)
            << document.calibration.MicronsPerPixel() << "\n";
@@ -278,6 +278,53 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
                    << ", \"y\": " << points[index].y << "}";
         }
         output << "]\n";
+        output << "    }";
+    }
+    for (const PointMeasurement& measurement : document.point_measurements) {
+        const ImagePoint point = measurement.Point();
+        write_separator();
+        output << "    {\n";
+        output << "      \"type\": \"point\",\n";
+        output << "      \"name\": \"" << JsonEscape(measurement.Name()) << "\",\n";
+        output << "      \"point\": {\"x\": " << std::setprecision(10) << point.x
+               << ", \"y\": " << point.y << "}\n";
+        output << "    }";
+    }
+    for (const PolylineMeasurement& measurement : document.polyline_measurements) {
+        write_separator();
+        output << "    {\n";
+        output << "      \"type\": \"polyline\",\n";
+        output << "      \"name\": \"" << JsonEscape(measurement.Name()) << "\",\n";
+        output << "      \"points\": [";
+        const auto& points = measurement.Points();
+        for (std::size_t index = 0; index < points.size(); ++index) {
+            if (index > 0) output << ", ";
+            output << "{\"x\": " << std::setprecision(10) << points[index].x
+                   << ", \"y\": " << points[index].y << "}";
+        }
+        output << "]\n";
+        output << "    }";
+    }
+    for (const CircleMeasurement& measurement : document.circle_measurements) {
+        const ImagePoint center = measurement.Center();
+        const ImagePoint edge = measurement.Edge();
+        write_separator();
+        output << "    {\n";
+        output << "      \"type\": \"circle\",\n";
+        output << "      \"name\": \"" << JsonEscape(measurement.Name()) << "\",\n";
+        output << "      \"center\": {\"x\": " << std::setprecision(10) << center.x << ", \"y\": " << center.y << "},\n";
+        output << "      \"edge\": {\"x\": " << edge.x << ", \"y\": " << edge.y << "}\n";
+        output << "    }";
+    }
+    for (const EllipseMeasurement& measurement : document.ellipse_measurements) {
+        const ImagePoint first = measurement.First();
+        const ImagePoint second = measurement.Second();
+        write_separator();
+        output << "    {\n";
+        output << "      \"type\": \"ellipse\",\n";
+        output << "      \"name\": \"" << JsonEscape(measurement.Name()) << "\",\n";
+        output << "      \"first\": {\"x\": " << std::setprecision(10) << first.x << ", \"y\": " << first.y << "},\n";
+        output << "      \"second\": {\"x\": " << second.x << ", \"y\": " << second.y << "}\n";
         output << "    }";
     }
     if (!first_measurement) {
@@ -482,7 +529,7 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
 
     const std::regex polygon_pattern(
         R"project(\{\s*"type"\s*:\s*"polygon_area"\s*,\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"points"\s*:\s*\[([^\]]*)\]\s*\})project");
-    const std::regex point_pattern(
+    const std::regex coordinate_pattern(
         R"project(\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\})project");
 
     begin = std::sregex_iterator(text.begin(), text.end(), polygon_pattern);
@@ -491,7 +538,7 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
         std::vector<ImagePoint> points;
 
         const std::string points_text = match[2].str();
-        auto point_begin = std::sregex_iterator(points_text.begin(), points_text.end(), point_pattern);
+        auto point_begin = std::sregex_iterator(points_text.begin(), points_text.end(), coordinate_pattern);
         auto point_end = std::sregex_iterator();
         for (auto point_iterator = point_begin; point_iterator != point_end; ++point_iterator) {
             const std::smatch& point_match = *point_iterator;
@@ -513,6 +560,74 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
         loaded.polygon_measurements.emplace_back(
             JsonUnescape(match[1].str()),
             std::move(points));
+    }
+
+    const std::regex point_measurement_pattern(
+        R"project(\{\s*"type"\s*:\s*"point"\s*,\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"point"\s*:\s*\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\}\s*\})project");
+    begin = std::sregex_iterator(text.begin(), text.end(), point_measurement_pattern);
+    for (auto iterator = begin; iterator != end; ++iterator) {
+        const std::smatch& match = *iterator;
+        double x = 0.0;
+        double y = 0.0;
+        if (!TryParseDouble(match[2].str(), x) || !TryParseDouble(match[3].str(), y)) {
+            error = L"Invalid point measurement coordinates in project file.";
+            return false;
+        }
+        loaded.point_measurements.emplace_back(JsonUnescape(match[1].str()), ImagePoint{x, y});
+    }
+
+    const std::regex polyline_pattern(
+        R"project(\{\s*"type"\s*:\s*"polyline"\s*,\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"points"\s*:\s*\[([^\]]*)\]\s*\})project");
+    begin = std::sregex_iterator(text.begin(), text.end(), polyline_pattern);
+    for (auto iterator = begin; iterator != end; ++iterator) {
+        const std::smatch& match = *iterator;
+        std::vector<ImagePoint> points;
+        const std::string pointsText = match[2].str();
+        auto pointBegin = std::sregex_iterator(pointsText.begin(), pointsText.end(), coordinate_pattern);
+        for (auto pointIterator = pointBegin; pointIterator != end; ++pointIterator) {
+            double x = 0.0;
+            double y = 0.0;
+            if (!TryParseDouble((*pointIterator)[1].str(), x) || !TryParseDouble((*pointIterator)[2].str(), y)) {
+                error = L"Invalid polyline measurement coordinates in project file.";
+                return false;
+            }
+            points.push_back({x, y});
+        }
+        if (points.size() < 2) {
+            error = L"Polyline measurement in project file has fewer than two points.";
+            return false;
+        }
+        loaded.polyline_measurements.emplace_back(JsonUnescape(match[1].str()), std::move(points));
+    }
+
+    const std::regex circle_pattern(
+        R"project(\{\s*"type"\s*:\s*"circle"\s*,\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"center"\s*:\s*\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\}\s*,\s*"edge"\s*:\s*\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\}\s*\})project");
+    begin = std::sregex_iterator(text.begin(), text.end(), circle_pattern);
+    for (auto iterator = begin; iterator != end; ++iterator) {
+        const std::smatch& match = *iterator;
+        double cx = 0.0, cy = 0.0, ex = 0.0, ey = 0.0;
+        if (!TryParseDouble(match[2].str(), cx) || !TryParseDouble(match[3].str(), cy) ||
+            !TryParseDouble(match[4].str(), ex) || !TryParseDouble(match[5].str(), ey)) {
+            error = L"Invalid circle measurement coordinates in project file.";
+            return false;
+        }
+        loaded.circle_measurements.emplace_back(
+            JsonUnescape(match[1].str()), ImagePoint{cx, cy}, ImagePoint{ex, ey});
+    }
+
+    const std::regex ellipse_pattern(
+        R"project(\{\s*"type"\s*:\s*"ellipse"\s*,\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"first"\s*:\s*\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\}\s*,\s*"second"\s*:\s*\{\s*"x"\s*:\s*([-+0-9.eE]+)\s*,\s*"y"\s*:\s*([-+0-9.eE]+)\s*\}\s*\})project");
+    begin = std::sregex_iterator(text.begin(), text.end(), ellipse_pattern);
+    for (auto iterator = begin; iterator != end; ++iterator) {
+        const std::smatch& match = *iterator;
+        double x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0;
+        if (!TryParseDouble(match[2].str(), x1) || !TryParseDouble(match[3].str(), y1) ||
+            !TryParseDouble(match[4].str(), x2) || !TryParseDouble(match[5].str(), y2)) {
+            error = L"Invalid ellipse measurement coordinates in project file.";
+            return false;
+        }
+        loaded.ellipse_measurements.emplace_back(
+            JsonUnescape(match[1].str()), ImagePoint{x1, y1}, ImagePoint{x2, y2});
     }
 
     const std::regex dye_pattern(

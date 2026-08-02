@@ -65,6 +65,10 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     document.angle_measurements = measurements.Angles();
     document.rectangle_measurements = measurements.Rectangles();
     document.polygon_measurements = measurements.Polygons();
+    document.point_measurements = measurements.Points();
+    document.polyline_measurements = measurements.Polylines();
+    document.circle_measurements = measurements.Circles();
+    document.ellipse_measurements = measurements.Ellipses();
     document.dye_profiles = dye_profiles;
     document.processing_settings.edf_focus_radius = edf_options.focus_radius;
     document.processing_settings.stitch_search_percent = stitch_search_percent;
@@ -146,7 +150,11 @@ ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
         std::move(document.measurements),
         std::move(document.angle_measurements),
         std::move(document.rectangle_measurements),
-        std::move(document.polygon_measurements));
+        std::move(document.polygon_measurements),
+        std::move(document.point_measurements),
+        std::move(document.polyline_measurements),
+        std::move(document.circle_measurements),
+        std::move(document.ellipse_measurements));
     state.dye_profiles = document.dye_profiles.empty()
         ? DyeLibrary::DefaultDyes()
         : std::move(document.dye_profiles);

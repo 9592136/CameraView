@@ -1,0 +1,184 @@
+#include "qt/ImageSurface3DDialog.h"
+#include "qt/ImageSurface3DWidget.h"
+#include "qt/ProfileAnalysisDialog.h"
+#include "qt/ProfilePlotWidget.h"
+#include "qt/CameraViewTheme.h"
+
+#include <QApplication>
+#include <QComboBox>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QImage>
+#include <QLabel>
+#include <QMouseEvent>
+#include <QPixmap>
+
+#include <cmath>
+#include <cstring>
+#include <iostream>
+
+namespace {
+
+int fail(const char* message)
+{
+    std::cerr << message << '\n';
+    return 1;
+}
+
+bool near(double left, double right, double tolerance = 1e-5)
+{
+    return std::abs(left - right) <= tolerance;
+}
+
+ImageFrame frameFromImage(const QImage& image)
+{
+    const QImage bgr = image.convertToFormat(QImage::Format_BGR888);
+    ImageFrame frame;
+    frame.width = bgr.width();
+    frame.height = bgr.height();
+    frame.stride = bgr.bytesPerLine();
+    frame.bgr.resize(static_cast<std::size_t>(frame.stride * frame.height));
+    for (int row = 0; row < frame.height; ++row) {
+        std::memcpy(frame.bgr.data() + row * frame.stride, bgr.constScanLine(row), frame.stride);
+    }
+    return frame;
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    QApplication application(argc, argv);
+    applyCameraViewTheme(application);
+    QImage image(180, 120, QImage::Format_RGB32);
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const double ridge = std::exp(-(
+                std::pow((x - 95.0) / 34.0, 2.0) +
+                std::pow((y - 58.0) / 25.0, 2.0)));
+            const int value = qBound(0, qRound(30.0 + 205.0 * ridge + 20.0 * std::sin(x / 11.0)), 255);
+            image.setPixelColor(x, y, QColor(value, qBound(0, value + y / 5, 255), qBound(0, 255 - value / 2, 255)));
+        }
+    }
+
+    ImageSurface3DWidget surface;
+    surface.resize(760, 500);
+    surface.setImage(image);
+    surface.setResolution(180);
+    surface.setVerticalScale(1.6);
+    surface.show();
+    application.processEvents();
+    if (!surface.hasSurface() || surface.gridSize() != image.size()) {
+        return fail("3D surface grid was not generated.");
+    }
+    if (!surface.renderBackend().startsWith(QStringLiteral("OpenGL"))) {
+        return fail("3D surface did not initialize an OpenGL render backend.");
+    }
+    const QColor reference = image.pixelColor(90, 60);
+    surface.setHeightChannel(SurfaceHeightChannel::Red);
+    if (surface.heightChannel() != SurfaceHeightChannel::Red ||
+        !near(surface.heightAt(90, 60), reference.redF())) {
+        return fail("Red height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Green);
+    if (!near(surface.heightAt(90, 60), reference.greenF())) {
+        return fail("Green height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Blue);
+    if (!near(surface.heightAt(90, 60), reference.blueF())) {
+        return fail("Blue height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Luminance);
+
+    QElapsedTimer render_timer;
+    render_timer.start();
+    const QImage surface_snapshot = surface.grab().toImage();
+    const qint64 full_render_ms = render_timer.elapsed();
+    const int full_face_count = surface.lastRenderedFaceCount();
+    if (surface.lastRenderStride() != 1 ||
+        full_face_count != (surface.gridSize().width() - 1) * (surface.gridSize().height() - 1)) {
+        return fail("Full-quality 3D render did not use every surface cell.");
+    }
+
+    QMouseEvent drag_press(
+        QEvent::MouseButtonPress, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &drag_press);
+    render_timer.restart();
+    surface.grab();
+    const qint64 interactive_render_ms = render_timer.elapsed();
+    const int interactive_face_count = surface.lastRenderedFaceCount();
+    if (surface.lastRenderStride() <= 1 || interactive_face_count >= full_face_count) {
+        return fail("High-resolution drag did not activate adaptive surface detail.");
+    }
+    QMouseEvent drag_release(
+        QEvent::MouseButtonRelease, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &drag_release);
+    surface.grab();
+    if (surface.lastRenderStride() != 1 || surface.lastRenderedFaceCount() != full_face_count) {
+        return fail("Full surface detail was not restored after dragging.");
+    }
+    std::cout << "3D render 180x120: " << full_render_ms << " ms, full faces "
+              << full_face_count << ", interactive faces " << interactive_face_count
+              << " in " << interactive_render_ms << " ms"
+              << ", backend " << surface.renderBackend().toStdString()
+              << (surface.hardwareAccelerated() ? " (hardware)" : " (software fallback)") << '\n';
+    if (surface_snapshot.isNull() || !surface_snapshot.save(
+            QDir::current().filePath(QStringLiteral("CameraView-3d-surface.png")))) {
+        return fail("3D surface snapshot could not be rendered.");
+    }
+
+    const ImageFrame frame = frameFromImage(image);
+    const ImageProfileResult profile = ImageProfileSampler::Sample(
+        frame, {8.0, 60.0}, {170.0, 60.0}, ImageProfileChannel::Luminance);
+    ProfilePlotWidget plot;
+    plot.resize(760, 460);
+    plot.setProfile(profile, 0.5, QStringLiteral("µm"), QStringLiteral("亮度"));
+    plot.show();
+    application.processEvents();
+    if (!profile.IsValid() || plot.profileSampleCount() < 100 ||
+        !plot.grab().save(QDir::current().filePath(QStringLiteral("CameraView-profile-plot.png")))) {
+        return fail("Profile plot could not be rendered.");
+    }
+
+    ImageSurface3DDialog surface_dialog(image, QStringLiteral("synthetic"));
+    auto* height_channel_combo = surface_dialog.findChild<QComboBox*>(
+        QStringLiteral("SurfaceHeightChannelCombo"));
+    auto* backend_label = surface_dialog.findChild<QLabel*>(QStringLiteral("SurfaceRenderBackend"));
+    if (!surface_dialog.surfaceWidget()->hasSurface() ||
+        !height_channel_combo || height_channel_combo->count() != 4 || !backend_label) {
+        return fail("3D dialog did not receive the image surface.");
+    }
+    height_channel_combo->setCurrentIndex(1);
+    if (surface_dialog.surfaceWidget()->heightChannel() != SurfaceHeightChannel::Red) {
+        return fail("3D dialog did not apply its RGB height-channel selection.");
+    }
+    height_channel_combo->setCurrentIndex(0);
+    surface_dialog.resize(1040, 720);
+    surface_dialog.show();
+    application.processEvents();
+    if (!backend_label->text().contains(QStringLiteral("OpenGL"))) {
+        return fail("3D dialog did not display its render backend.");
+    }
+    if (!surface_dialog.grab().save(
+            QDir::current().filePath(QStringLiteral("CameraView-3d-dialog.png")))) {
+        return fail("3D dialog snapshot could not be rendered.");
+    }
+    ProfileAnalysisDialog profile_dialog(
+        frame, {8.0, 60.0}, {170.0, 60.0},
+        CalibrationProfile::FromMicronsPerPixel(0.5),
+        MeasurementUnit::Micrometers,
+        QStringLiteral("synthetic"));
+    if (!profile_dialog.profile().IsValid() || profile_dialog.plotWidget()->profileSampleCount() < 100) {
+        return fail("Profile analysis dialog did not compute calibrated samples.");
+    }
+    profile_dialog.resize(980, 680);
+    profile_dialog.show();
+    application.processEvents();
+    if (!profile_dialog.grab().save(
+            QDir::current().filePath(QStringLiteral("CameraView-profile-dialog.png")))) {
+        return fail("Profile analysis dialog snapshot could not be rendered.");
+    }
+    return 0;
+}

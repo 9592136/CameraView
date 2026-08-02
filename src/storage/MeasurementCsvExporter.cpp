@@ -1,4 +1,5 @@
 #include "MeasurementCsvExporter.h"
+#include "../domain/MeasurementFormatter.h"
 
 #include <windows.h>
 
@@ -109,7 +110,8 @@ void WriteLengthRow(
            << ','
            << ','
            << CsvEscape(objective_label) << ','
-           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, display_unit)) << '\n';
 }
 
 void WriteAngleRow(
@@ -135,7 +137,8 @@ void WriteAngleRow(
            << FormatCsvNumber(second.y, 4) << ','
            << ','
            << CsvEscape(objective_label) << ','
-           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement)) << '\n';
 }
 
 void WriteRectangleRow(
@@ -161,7 +164,8 @@ void WriteRectangleRow(
            << ','
            << ','
            << CsvEscape(objective_label) << ','
-           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, display_unit)) << '\n';
 }
 
 void WritePolygonRow(
@@ -189,7 +193,58 @@ void WritePolygonRow(
     }
     output << CsvEscape(FormatPointListCsv(points)) << ','
            << CsvEscape(objective_label) << ','
-           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << '\n';
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, display_unit)) << '\n';
+}
+
+void WritePointRow(std::ofstream& output, const PointMeasurement& measurement,
+    const CalibrationProfile& calibration, MeasurementUnit displayUnit, const std::wstring& objective)
+{
+    const ImagePoint point = measurement.Point();
+    output << CsvEscape(measurement.Name()) << ",Point,,px,,"
+           << FormatCsvNumber(point.x, 4) << ',' << FormatCsvNumber(point.y, 4)
+           << ",,,,,," << CsvEscape(objective) << ','
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, displayUnit)) << '\n';
+}
+
+void WritePolylineRow(std::ofstream& output, const PolylineMeasurement& measurement,
+    const CalibrationProfile& calibration, MeasurementUnit displayUnit, const std::wstring& objective)
+{
+    const MeasurementResult result = measurement.Evaluate(calibration, displayUnit);
+    const auto& points = measurement.Points();
+    output << CsvEscape(measurement.Name()) << ",Polyline,"
+           << FormatCsvNumber(result.calibrated_value, result.unit == MeasurementUnit::Pixels ? 1 : 4) << ','
+           << CsvEscape(result.unit_label) << ',' << FormatCsvNumber(result.pixel_value, 4) << ',';
+    for (std::size_t index = 0; index < 3; ++index) {
+        if (index < points.size()) output << FormatCsvNumber(points[index].x, 4) << ',' << FormatCsvNumber(points[index].y, 4) << ',';
+        else output << ",,";
+    }
+    output << CsvEscape(FormatPointListCsv(points)) << ',' << CsvEscape(objective) << ','
+           << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, displayUnit)) << '\n';
+}
+
+template <typename Shape>
+void WriteAreaShapeRow(std::ofstream& output, const Shape& measurement, const char* kind,
+    ImagePoint first, ImagePoint second, const CalibrationProfile& calibration,
+    MeasurementUnit displayUnit, const std::wstring& objective)
+{
+    const bool calibrated = calibration.IsCalibrated() && displayUnit != MeasurementUnit::Pixels;
+    const MeasurementUnit unit = calibrated ? displayUnit : MeasurementUnit::Pixels;
+    double value = measurement.PixelArea();
+    if (unit != MeasurementUnit::Pixels) {
+        value *= calibration.MicronsPerPixel() * calibration.MicronsPerPixel();
+        if (unit == MeasurementUnit::Millimeters) value /= 1000000.0;
+    }
+    const std::wstring unitLabel = unit == MeasurementUnit::Micrometers ? L"um^2" :
+        (unit == MeasurementUnit::Millimeters ? L"mm^2" : L"px^2");
+    output << CsvEscape(measurement.Name()) << ',' << kind << ',' << FormatCsvNumber(value, unit == MeasurementUnit::Pixels ? 1 : 4) << ','
+           << CsvEscape(unitLabel) << ',' << FormatCsvNumber(measurement.PixelArea(), 4) << ','
+           << FormatCsvNumber(first.x, 4) << ',' << FormatCsvNumber(first.y, 4) << ','
+           << FormatCsvNumber(second.x, 4) << ',' << FormatCsvNumber(second.y, 4)
+           << ",,,," << CsvEscape(objective) << ',' << FormatCsvNumber(calibration.MicronsPerPixel(), 8) << ','
+           << CsvEscape(MeasurementFormatter::FormatLine(measurement, calibration, displayUnit)) << '\n';
 }
 
 } // namespace
@@ -209,7 +264,7 @@ bool MeasurementCsvExporter::Save(
     }
 
     output << "\xEF\xBB\xBF";
-    output << "Name,Kind,Value,Unit,RawPixelValue,Point1X,Point1Y,Point2X,Point2Y,Point3X,Point3Y,Points,Objective,MicronsPerPixel\n";
+    output << "Name,Kind,Value,Unit,RawPixelValue,Point1X,Point1Y,Point2X,Point2Y,Point3X,Point3Y,Points,Objective,MicronsPerPixel,Metrics\n";
     for (const LengthMeasurement& measurement : measurements.Lengths()) {
         WriteLengthRow(output, measurement, calibration, display_unit, objective_label);
     }
@@ -221,6 +276,20 @@ bool MeasurementCsvExporter::Save(
     }
     for (const PolygonAreaMeasurement& measurement : measurements.Polygons()) {
         WritePolygonRow(output, measurement, calibration, display_unit, objective_label);
+    }
+    for (const PointMeasurement& measurement : measurements.Points()) {
+        WritePointRow(output, measurement, calibration, display_unit, objective_label);
+    }
+    for (const PolylineMeasurement& measurement : measurements.Polylines()) {
+        WritePolylineRow(output, measurement, calibration, display_unit, objective_label);
+    }
+    for (const CircleMeasurement& measurement : measurements.Circles()) {
+        WriteAreaShapeRow(output, measurement, "Circle", measurement.Center(), measurement.Edge(),
+            calibration, display_unit, objective_label);
+    }
+    for (const EllipseMeasurement& measurement : measurements.Ellipses()) {
+        WriteAreaShapeRow(output, measurement, "Ellipse", measurement.First(), measurement.Second(),
+            calibration, display_unit, objective_label);
     }
 
     if (!output) {

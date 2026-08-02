@@ -23,6 +23,14 @@ const wchar_t* MeasurementNameFormatter::PrefixFor(MeasurementKind kind)
         return L"Area";
     case MeasurementKind::PolygonArea:
         return L"Polygon";
+    case MeasurementKind::Point:
+        return L"Point";
+    case MeasurementKind::Polyline:
+        return L"Polyline";
+    case MeasurementKind::Circle:
+        return L"Circle";
+    case MeasurementKind::Ellipse:
+        return L"Ellipse";
     case MeasurementKind::None:
         break;
     }
@@ -42,6 +50,14 @@ std::size_t MeasurementNameFormatter::CountFor(
         return measurements.RectangleCount();
     case MeasurementKind::PolygonArea:
         return measurements.PolygonCount();
+    case MeasurementKind::Point:
+        return measurements.PointCount();
+    case MeasurementKind::Polyline:
+        return measurements.PolylineCount();
+    case MeasurementKind::Circle:
+        return measurements.CircleCount();
+    case MeasurementKind::Ellipse:
+        return measurements.EllipseCount();
     case MeasurementKind::None:
         break;
     }
