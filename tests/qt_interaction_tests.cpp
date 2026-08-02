@@ -2,9 +2,14 @@
 #include "qt/ai/YoloWorkspaceWidget.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
+#include <QTabWidget>
+#include <QTemporaryDir>
 
 #include <cmath>
 #include <iostream>
@@ -107,6 +112,73 @@ int main(int argc, char* argv[])
     emit list->itemDoubleClicked(list->item(3));
     if (request_count != 2) {
         return fail("Rows without geometry unexpectedly requested image focus.");
+    }
+
+    QTemporaryDir dataset_directory;
+    YoloDatasetProject dataset;
+    QString dataset_error;
+    if (!dataset_directory.isValid() || !YoloDatasetProject::create(
+            dataset_directory.filePath(QStringLiteral("annotated-cells")),
+            QStringLiteral("Annotated cells"), YoloTask::Detection,
+            {QStringLiteral("nucleus")}, &dataset, &dataset_error) ||
+        !workspace.loadDatasetProject(dataset.rootDirectory(), &dataset_error)) {
+        return fail("Could not create and load a dataset project for the UI test.");
+    }
+    auto* tabs = workspace.findChild<QTabWidget*>(QStringLiteral("YoloWorkspaceTabs"));
+    auto* annotate_button = workspace.findChild<QPushButton*>(QStringLiteral("DatasetAnnotateButton"));
+    auto* save_button = workspace.findChild<QPushButton*>(QStringLiteral("DatasetSaveSampleButton"));
+    auto* use_training_button = workspace.findChild<QPushButton*>(QStringLiteral("DatasetUseTrainingButton"));
+    auto* annotation_list = workspace.findChild<QListWidget*>(QStringLiteral("DatasetAnnotationList"));
+    auto* sample_list = workspace.findChild<QListWidget*>(QStringLiteral("DatasetSampleList"));
+    auto* training_dataset_edit = workspace.findChild<QLineEdit*>(QStringLiteral("TrainingDatasetEdit"));
+    auto* training_task_combo = workspace.findChild<QComboBox*>(QStringLiteral("TrainingTaskCombo"));
+    if (!tabs || !annotate_button || !save_button || !use_training_button ||
+        !annotation_list || !sample_list || !training_dataset_edit || !training_task_combo) {
+        return fail("Dataset editor controls are missing.");
+    }
+    tabs->setCurrentIndex(1);
+    CanvasTool requested_tool = CanvasTool::None;
+    QObject::connect(&workspace, &YoloWorkspaceWidget::annotationToolRequested,
+        [&requested_tool](CanvasTool tool, const QString&) { requested_tool = tool; });
+    annotate_button->click();
+    if (requested_tool != CanvasTool::Rectangle) {
+        return fail("Detection dataset did not request the rectangle canvas tool.");
+    }
+    workspace.acceptCanvasAnnotation(
+        CanvasTool::Rectangle, {QPointF(25.0, 30.0), QPointF(125.0, 90.0)});
+    if (annotation_list->count() != 1) {
+        return fail("Canvas annotation was not added to the dataset editor.");
+    }
+    save_button->click();
+    if (sample_list->count() != 1) {
+        return fail("The annotated current image was not saved as a dataset sample.");
+    }
+    YoloDatasetProject saved_dataset;
+    if (!saved_dataset.load(dataset.rootDirectory(), &dataset_error) ||
+        saved_dataset.samples().size() != 1 ||
+        saved_dataset.samples().first().annotations.size() != 1) {
+        return fail("The dataset editor did not persist a reloadable sample.");
+    }
+    use_training_button->click();
+    if (tabs->currentIndex() != 2 ||
+        training_dataset_edit->text() != saved_dataset.trainingDataPath() ||
+        training_task_combo->currentData().toString() != QStringLiteral("detect")) {
+        return fail("Use-for-training did not configure the training page.");
+    }
+    tabs->setCurrentIndex(1);
+    QString requested_image_path;
+    QObject::connect(&workspace, &YoloWorkspaceWidget::imageOpenRequested,
+        [&requested_image_path](const QString& path) { requested_image_path = path; });
+    sample_list->setCurrentRow(0);
+    emit sample_list->itemDoubleClicked(sample_list->item(0));
+    if (requested_image_path != saved_dataset.absoluteImagePath(saved_dataset.samples().first())) {
+        return fail("Dataset sample double-click did not request the saved image.");
+    }
+    workspace.cancelPendingDatasetImageOpen();
+    workspace.setCurrentImage(
+        QImage(1000, 500, QImage::Format_RGB32), QStringLiteral("test"), QStringLiteral("different-image"));
+    if (annotation_list->count() != 0) {
+        return fail("Annotations leaked to a different image with the same name and size.");
     }
 
     return 0;

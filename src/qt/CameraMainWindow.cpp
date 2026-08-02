@@ -161,6 +161,28 @@ void CameraMainWindow::setupUi()
         });
     connect(yolo_workspace_, &YoloWorkspaceWidget::focusRequested, this,
         [this](const QRectF& image_bounds) { canvas_->focusOnImageRect(image_bounds); });
+    connect(yolo_workspace_, &YoloWorkspaceWidget::annotationToolRequested, this,
+        [this](CanvasTool tool, const QString& hint) {
+            if (tool == CanvasTool::None) {
+                ai_annotation_active_ = false;
+                canvas_->setTool(CanvasTool::None);
+                statusBar()->showMessage(hint, 4000);
+                return;
+            }
+            if (!currentVisibleFrame().IsValid()) {
+                ai_annotation_active_ = false;
+                yolo_workspace_->cancelPendingDatasetImageOpen();
+                QMessageBox::information(this, tr("数据标注"), tr("请先打开图像或连接相机。"));
+                return;
+            }
+            ai_annotation_active_ = true;
+            canvas_->setTool(tool);
+            statusBar()->showMessage(hint);
+        });
+    connect(yolo_workspace_, &YoloWorkspaceWidget::imageOpenRequested, this,
+        [this](const QString& path) {
+            if (!loadImageFile(path)) yolo_workspace_->cancelPendingDatasetImageOpen();
+        });
     connect(yolo_workspace_, &YoloWorkspaceWidget::statusMessage, this,
         [this](const QString& message) { statusBar()->showMessage(message, 7000); });
     dock->setWidget(function_tabs_);
@@ -625,7 +647,8 @@ bool CameraMainWindow::loadImageFile(const QString& fileName)
         QMessageBox::warning(this, tr("打开失败"), reader.errorString());
         return false;
     }
-    setCurrentFrame(imageFrameFromQImage(image), QFileInfo(fileName).fileName());
+    setCurrentFrame(
+        imageFrameFromQImage(image), QFileInfo(fileName).fileName(), QFileInfo(fileName).absoluteFilePath());
     statusBar()->showMessage(tr("已打开 %1").arg(fileName), 5000);
     return true;
 }
@@ -783,10 +806,14 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
     setCurrentFrame(imageFrameFromQImage(image, sequence, timestamp), tr("MUCam 实时预览"));
 }
 
-void CameraMainWindow::setCurrentFrame(ImageFrame frame, const QString& source)
+void CameraMainWindow::setCurrentFrame(
+    ImageFrame frame,
+    const QString& source,
+    const QString& sourceIdentity)
 {
     current_frame_ = std::move(frame);
     current_source_ = source;
+    current_source_identity_ = sourceIdentity.isEmpty() ? source : sourceIdentity;
     source_label_->setText(tr("%1 · %2 × %3")
         .arg(source)
         .arg(current_frame_.width)
@@ -819,7 +846,8 @@ void CameraMainWindow::updateImagePresentation()
     }
     canvas_->setImage(qImageFromFrame(display_frame_));
     if (yolo_workspace_) {
-        yolo_workspace_->setCurrentImage(qImageFromFrame(display_frame_), current_source_);
+        yolo_workspace_->setCurrentImage(
+            qImageFromFrame(display_frame_), current_source_, current_source_identity_);
     }
     rebuildOverlays();
     if (histogram_) {
@@ -837,6 +865,13 @@ ImageFrame CameraMainWindow::currentVisibleFrame() const
 
 void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
 {
+    if (ai_annotation_active_ && yolo_workspace_ &&
+        (tool == CanvasTool::Rectangle || tool == CanvasTool::Polygon)) {
+        ai_annotation_active_ = false;
+        canvas_->setTool(CanvasTool::None);
+        yolo_workspace_->acceptCanvasAnnotation(tool, std::move(points));
+        return;
+    }
     if (tool == CanvasTool::Calibration && points.size() == 2) {
         const MeasurementUnit unit = calibration_unit_combo_->currentIndex() == 0
             ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters;
@@ -880,6 +915,7 @@ void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
         QMessageBox::information(this, tr("测量"), tr("请先打开图像或连接相机。"));
         return;
     }
+    ai_annotation_active_ = false;
     canvas_->setTool(tool);
     statusBar()->showMessage(hint);
 }

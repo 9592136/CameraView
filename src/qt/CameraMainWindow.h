@@ -76,7 +76,7 @@ private:
     QWidget* buildProcessingPage();
     QWidget* buildMeasurementPage();
     QWidget* buildProjectPage();
-    void setCurrentFrame(ImageFrame frame, const QString& source);
+    void setCurrentFrame(ImageFrame frame, const QString& source, const QString& sourceIdentity = {});
     bool loadImageFile(const QString& fileName);
     ImageFrame currentVisibleFrame() const;
     QVector<CanvasOverlay> measurementOverlays() const;
@@ -127,10 +127,12 @@ private:
     QVector<int> camera_indices_;
     bool camera_open_ = false;
     bool busy_ = false;
+    bool ai_annotation_active_ = false;
 
     ImageFrame current_frame_;
     ImageFrame display_frame_;
     QString current_source_;
+    QString current_source_identity_;
     PseudoColorPalette palette_ = PseudoColorPalette::Original;
     HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
     ImageAdjustParams adjustments_;

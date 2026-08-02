@@ -8,6 +8,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
@@ -41,6 +42,28 @@ QWidget* pathRow(QLineEdit* edit, QPushButton* button)
     return widget;
 }
 
+QWidget* buttonRow(std::initializer_list<QPushButton*> buttons)
+{
+    auto* widget = new QWidget;
+    auto* layout = new QHBoxLayout(widget);
+    layout->setContentsMargins(0, 0, 0, 0);
+    for (QPushButton* button : buttons) layout->addWidget(button);
+    return widget;
+}
+
+QString safeDatasetFolder(QString value)
+{
+    value = value.trimmed();
+    const QString forbidden = QStringLiteral("<>:\"/\\|?*");
+    for (qsizetype index = 0; index < value.size(); ++index) {
+        if (value.at(index).unicode() < 32 || forbidden.contains(value.at(index))) {
+            value[index] = QLatin1Char('_');
+        }
+    }
+    while (value.endsWith(QLatin1Char('.')) || value.endsWith(QLatin1Char(' '))) value.chop(1);
+    return value;
+}
+
 QString existingExecutable(const QStringList& candidates)
 {
     for (const QString& candidate : candidates) {
@@ -67,7 +90,9 @@ YoloWorkspaceWidget::YoloWorkspaceWidget(QWidget* parent)
 void YoloWorkspaceWidget::buildUi()
 {
     auto* root = new QVBoxLayout(this);
-    auto* tabs = new QTabWidget;
+    workspace_tabs_ = new QTabWidget;
+    workspace_tabs_->setObjectName(QStringLiteral("YoloWorkspaceTabs"));
+    auto* tabs = workspace_tabs_;
     root->addWidget(tabs);
 
     auto* inference_page = new QWidget;
@@ -91,6 +116,7 @@ void YoloWorkspaceWidget::buildUi()
     auto* model_form = new QFormLayout;
     model_combo_ = new QComboBox;
     task_combo_ = new QComboBox;
+    task_combo_->setObjectName(QStringLiteral("TrainingTaskCombo"));
     task_combo_->addItem(tr("目标检测"), yoloTaskKey(YoloTask::Detection));
     task_combo_->addItem(tr("图像分类"), yoloTaskKey(YoloTask::Classification));
     task_combo_->addItem(tr("实例分割"), yoloTaskKey(YoloTask::Segmentation));
@@ -153,7 +179,9 @@ void YoloWorkspaceWidget::buildUi()
     inference_scroll->setFrameShape(QFrame::NoFrame);
     inference_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     inference_scroll->setWidget(inference_page);
-    tabs->addTab(inference_scroll, tr("推理与模型"));
+    inference_tab_index_ = tabs->addTab(inference_scroll, tr("推理与模型"));
+
+    dataset_tab_index_ = tabs->addTab(buildDatasetPage(), tr("数据集"));
 
     auto* training_page = new QWidget;
     auto* training_layout = new QVBoxLayout(training_page);
@@ -161,6 +189,7 @@ void YoloWorkspaceWidget::buildUi()
     training_model_edit_ = new QLineEdit;
     auto* choose_training_model = new QPushButton(tr("选择"));
     dataset_edit_ = new QLineEdit;
+    dataset_edit_->setObjectName(QStringLiteral("TrainingDatasetEdit"));
     auto* choose_dataset = new QPushButton(tr("选择"));
     output_edit_ = new QLineEdit(QDir(registry_.rootDirectory()).filePath(QStringLiteral("runs")));
     auto* choose_output = new QPushButton(tr("选择"));
@@ -205,7 +234,7 @@ void YoloWorkspaceWidget::buildUi()
     training_scroll->setFrameShape(QFrame::NoFrame);
     training_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     training_scroll->setWidget(training_page);
-    tabs->addTab(training_scroll, tr("训练"));
+    training_tab_index_ = tabs->addTab(training_scroll, tr("训练"));
 
     connect(choose_python, &QPushButton::clicked, this, &YoloWorkspaceWidget::choosePython);
     connect(probe, &QPushButton::clicked, this, [this] {
@@ -256,6 +285,145 @@ void YoloWorkspaceWidget::buildUi()
     connect(choose_output, &QPushButton::clicked, this, &YoloWorkspaceWidget::chooseTrainingOutput);
     connect(train_button_, &QPushButton::clicked, this, &YoloWorkspaceWidget::startTraining);
     connect(cancel_button_, &QPushButton::clicked, &controller_, &YoloProcessController::cancel);
+    connect(workspace_tabs_, &QTabWidget::currentChanged, this,
+        [this](int) { refreshVisibleOverlays(); });
+}
+
+QWidget* YoloWorkspaceWidget::buildDatasetPage()
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+
+    auto* project_group = new QGroupBox(tr("数据集项目"));
+    auto* project_layout = new QVBoxLayout(project_group);
+    dataset_project_edit_ = new QLineEdit;
+    dataset_project_edit_->setReadOnly(true);
+    dataset_project_edit_->setPlaceholderText(tr("尚未创建或打开数据集"));
+    auto* create_button = new QPushButton(tr("新建"));
+    auto* open_button = new QPushButton(tr("打开"));
+    auto* open_folder_button = new QPushButton(tr("打开目录"));
+    project_layout->addWidget(dataset_project_edit_);
+    project_layout->addWidget(buttonRow({create_button, open_button, open_folder_button}));
+    auto* task_form = new QFormLayout;
+    dataset_task_combo_ = new QComboBox;
+    dataset_task_combo_->addItem(tr("目标检测"), yoloTaskKey(YoloTask::Detection));
+    dataset_task_combo_->addItem(tr("实例分割"), yoloTaskKey(YoloTask::Segmentation));
+    dataset_task_combo_->addItem(tr("图像分类"), yoloTaskKey(YoloTask::Classification));
+    task_form->addRow(tr("任务类型"), dataset_task_combo_);
+    project_layout->addLayout(task_form);
+    dataset_summary_ = new QLabel(tr("创建或打开数据集后即可开始标注。"));
+    dataset_summary_->setWordWrap(true);
+    project_layout->addWidget(dataset_summary_);
+    layout->addWidget(project_group);
+
+    dataset_editor_ = new QWidget;
+    auto* editor_layout = new QVBoxLayout(dataset_editor_);
+    editor_layout->setContentsMargins(0, 0, 0, 0);
+
+    auto* class_group = new QGroupBox(tr("类别与划分"));
+    auto* class_layout = new QFormLayout(class_group);
+    dataset_class_combo_ = new QComboBox;
+    dataset_class_combo_->setObjectName(QStringLiteral("DatasetClassCombo"));
+    auto* add_class_button = new QPushButton(tr("新增类别"));
+    auto* rename_class_button = new QPushButton(tr("重命名"));
+    auto* remove_class_button = new QPushButton(tr("删除类别"));
+    class_layout->addRow(tr("当前类别"), dataset_class_combo_);
+    class_layout->addRow(buttonRow({add_class_button, rename_class_button, remove_class_button}));
+    dataset_split_combo_ = new QComboBox;
+    dataset_split_combo_->setObjectName(QStringLiteral("DatasetSplitCombo"));
+    dataset_split_combo_->addItem(tr("训练集"), QStringLiteral("train"));
+    dataset_split_combo_->addItem(tr("验证集"), QStringLiteral("val"));
+    dataset_split_combo_->addItem(tr("测试集"), QStringLiteral("test"));
+    class_layout->addRow(tr("样本划分"), dataset_split_combo_);
+    editor_layout->addWidget(class_group);
+
+    auto* annotation_group = new QGroupBox(tr("当前图像标注"));
+    auto* annotation_layout = new QVBoxLayout(annotation_group);
+    dataset_annotate_button_ = new QPushButton(tr("绘制检测框"));
+    dataset_annotate_button_->setObjectName(QStringLiteral("DatasetAnnotateButton"));
+    auto* cancel_annotation_button = new QPushButton(tr("取消绘制"));
+    annotation_layout->addWidget(buttonRow({dataset_annotate_button_, cancel_annotation_button}));
+    dataset_annotation_list_ = new QListWidget;
+    dataset_annotation_list_->setObjectName(QStringLiteral("DatasetAnnotationList"));
+    dataset_annotation_list_->setMinimumHeight(100);
+    annotation_layout->addWidget(dataset_annotation_list_);
+    auto* remove_annotation_button = new QPushButton(tr("删除选中标注"));
+    auto* clear_annotations_button = new QPushButton(tr("清空当前标注"));
+    annotation_layout->addWidget(buttonRow({remove_annotation_button, clear_annotations_button}));
+    auto* save_sample_button = new QPushButton(tr("保存当前图像到数据集"));
+    save_sample_button->setObjectName(QStringLiteral("DatasetSaveSampleButton"));
+    annotation_layout->addWidget(save_sample_button);
+    editor_layout->addWidget(annotation_group);
+
+    auto* sample_group = new QGroupBox(tr("数据集样本"));
+    auto* sample_layout = new QVBoxLayout(sample_group);
+    dataset_sample_list_ = new QListWidget;
+    dataset_sample_list_->setObjectName(QStringLiteral("DatasetSampleList"));
+    dataset_sample_list_->setMinimumHeight(140);
+    dataset_sample_list_->setToolTip(tr("双击样本可重新打开并编辑标注"));
+    sample_layout->addWidget(dataset_sample_list_);
+    auto* open_sample_button = new QPushButton(tr("打开选中样本"));
+    auto* remove_sample_button = new QPushButton(tr("删除选中样本"));
+    sample_layout->addWidget(buttonRow({open_sample_button, remove_sample_button}));
+    auto* use_training_button = new QPushButton(tr("用于训练"));
+    use_training_button->setObjectName(QStringLiteral("DatasetUseTrainingButton"));
+    sample_layout->addWidget(use_training_button);
+    editor_layout->addWidget(sample_group);
+    editor_layout->addStretch();
+    layout->addWidget(dataset_editor_);
+    layout->addStretch();
+
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(page);
+
+    connect(create_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::createDataset);
+    connect(open_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::openDataset);
+    connect(open_folder_button, &QPushButton::clicked, this, [this] {
+        if (dataset_project_.isOpen()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dataset_project_.rootDirectory()));
+        }
+    });
+    connect(add_class_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::addDatasetClass);
+    connect(rename_class_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::renameDatasetClass);
+    connect(remove_class_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::removeDatasetClass);
+    connect(dataset_annotate_button_, &QPushButton::clicked, this, &YoloWorkspaceWidget::beginDatasetAnnotation);
+    connect(cancel_annotation_button, &QPushButton::clicked, this, [this] {
+        emit annotationToolRequested(CanvasTool::None, tr("已取消数据标注绘制"));
+    });
+    connect(remove_annotation_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::removeCurrentAnnotation);
+    connect(clear_annotations_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::clearCurrentAnnotations);
+    connect(save_sample_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::saveCurrentDatasetSample);
+    connect(open_sample_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::openSelectedDatasetSample);
+    connect(remove_sample_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::removeSelectedDatasetSample);
+    connect(use_training_button, &QPushButton::clicked, this, &YoloWorkspaceWidget::useDatasetForTraining);
+    connect(dataset_sample_list_, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem*) { openSelectedDatasetSample(); });
+    connect(dataset_annotation_list_, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem* item) {
+            if (!item) return;
+            bool valid_index = false;
+            const int index = item->data(Qt::UserRole).toInt(&valid_index);
+            if (!valid_index || index < 0 || index >= current_annotations_.size()) return;
+            const QVector<QPointF>& points = current_annotations_.at(index).points;
+            if (points.isEmpty()) return;
+            double left = points.first().x();
+            double right = left;
+            double top = points.first().y();
+            double bottom = top;
+            for (const QPointF& point : points) {
+                left = std::min(left, point.x());
+                right = std::max(right, point.x());
+                top = std::min(top, point.y());
+                bottom = std::max(bottom, point.y());
+            }
+            emit focusRequested(QRectF(QPointF(left, top), QPointF(right, bottom)));
+        });
+
+    refreshDatasetUi();
+    return scroll;
 }
 
 void YoloWorkspaceWidget::connectController()
@@ -351,15 +519,434 @@ void YoloWorkspaceWidget::discoverPython()
     controller_.setPythonExecutable(found);
 }
 
-void YoloWorkspaceWidget::setCurrentImage(const QImage& image, const QString& sourceName)
+void YoloWorkspaceWidget::setCurrentImage(
+    const QImage& image,
+    const QString& sourceName,
+    const QString& sourceIdentity)
 {
-    if (sourceName != current_source_ || image.size() != current_image_.size() || image.isNull()) {
+    const QString identity = sourceIdentity.isEmpty() ? sourceName : sourceIdentity;
+    const bool image_changed = identity != current_source_identity_ ||
+        image.size() != current_image_.size() || image.isNull();
+    if (image_changed) {
         if (result_list_) result_list_->clear();
-        emit overlaysChanged({});
+        inference_overlays_.clear();
+        if (pending_dataset_sample_id_.isEmpty()) {
+            current_dataset_sample_id_.clear();
+            current_annotations_.clear();
+        }
     }
     current_image_ = image;
     current_source_ = sourceName;
+    current_source_identity_ = identity;
     infer_button_->setEnabled(!image.isNull() && !controller_.isBusy());
+    if (!pending_dataset_sample_id_.isEmpty() && !image.isNull()) {
+        current_dataset_sample_id_ = pending_dataset_sample_id_;
+        current_annotations_ = pending_annotations_;
+        const int split_index = dataset_split_combo_
+            ? dataset_split_combo_->findData(pending_split_) : -1;
+        if (split_index >= 0) dataset_split_combo_->setCurrentIndex(split_index);
+        pending_dataset_sample_id_.clear();
+        pending_annotations_.clear();
+        pending_split_.clear();
+        emit statusMessage(tr("数据集样本已打开，可继续编辑标注"));
+    }
+    if (image_changed) refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+bool YoloWorkspaceWidget::loadDatasetProject(const QString& rootDirectory, QString* error)
+{
+    YoloDatasetProject loaded;
+    if (!loaded.load(rootDirectory, error)) return false;
+    dataset_project_ = std::move(loaded);
+    current_dataset_sample_id_.clear();
+    current_annotations_.clear();
+    cancelPendingDatasetImageOpen();
+    refreshDatasetUi();
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+    return true;
+}
+
+void YoloWorkspaceWidget::acceptCanvasAnnotation(CanvasTool tool, QVector<QPointF> points)
+{
+    if (!dataset_project_.isOpen() || current_image_.isNull()) return;
+    const int class_id = dataset_class_combo_->currentIndex();
+    if (class_id < 0 || class_id >= dataset_project_.classes().size()) return;
+    const bool detection = dataset_project_.task() == YoloTask::Detection;
+    const bool segmentation = dataset_project_.task() == YoloTask::Segmentation;
+    if ((detection && (tool != CanvasTool::Rectangle || points.size() != 2)) ||
+        (segmentation && (tool != CanvasTool::Polygon || points.size() < 3))) {
+        emit statusMessage(tr("画布返回的标注类型与数据集任务不匹配"));
+        return;
+    }
+    if (!detection && !segmentation) return;
+    current_annotations_.push_back({class_id, std::move(points)});
+    refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+    emit statusMessage(tr("已添加标注，保存当前图像后写入数据集"));
+}
+
+void YoloWorkspaceWidget::cancelPendingDatasetImageOpen()
+{
+    pending_dataset_sample_id_.clear();
+    pending_annotations_.clear();
+    pending_split_.clear();
+}
+
+void YoloWorkspaceWidget::createDataset()
+{
+    const QString parent = QFileDialog::getExistingDirectory(
+        this, tr("选择新数据集的保存位置"),
+        QSettings().value(QStringLiteral("yolo/dataset_parent")).toString());
+    if (parent.isEmpty()) return;
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, tr("新建数据集"), tr("数据集名称"), QLineEdit::Normal,
+        QStringLiteral("cell_dataset"), &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+    const QStringList task_labels = {tr("目标检测"), tr("实例分割"), tr("图像分类")};
+    const QString task_label = QInputDialog::getItem(
+        this, tr("新建数据集"), tr("任务类型"), task_labels, 0, false, &accepted);
+    if (!accepted) return;
+    const int task_index = task_labels.indexOf(task_label);
+    const YoloTask task = task_index == 1 ? YoloTask::Segmentation
+        : task_index == 2 ? YoloTask::Classification : YoloTask::Detection;
+    const QString first_class = QInputDialog::getText(
+        this, tr("新建数据集"), tr("第一个类别名称"), QLineEdit::Normal,
+        QStringLiteral("cell"), &accepted).trimmed();
+    if (!accepted || first_class.isEmpty()) return;
+    const QString folder = safeDatasetFolder(name);
+    if (folder.isEmpty()) {
+        QMessageBox::warning(this, tr("新建失败"), tr("数据集名称不能用于创建目录。"));
+        return;
+    }
+
+    YoloDatasetProject created;
+    QString error;
+    const QString root = QDir(parent).filePath(folder);
+    if (!YoloDatasetProject::create(root, name, task, {first_class}, &created, &error)) {
+        QMessageBox::warning(this, tr("新建失败"), error);
+        return;
+    }
+    dataset_project_ = std::move(created);
+    current_dataset_sample_id_.clear();
+    current_annotations_.clear();
+    QSettings().setValue(QStringLiteral("yolo/dataset_parent"), parent);
+    refreshDatasetUi();
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+    emit statusMessage(tr("数据集已创建：%1").arg(root));
+}
+
+void YoloWorkspaceWidget::openDataset()
+{
+    const QString root = QFileDialog::getExistingDirectory(
+        this, tr("打开 CameraView 数据集"),
+        QSettings().value(QStringLiteral("yolo/dataset_parent")).toString());
+    if (root.isEmpty()) return;
+    QString error;
+    if (!loadDatasetProject(root, &error)) {
+        QMessageBox::warning(this, tr("打开失败"), error);
+        return;
+    }
+    QSettings().setValue(QStringLiteral("yolo/dataset_parent"), QFileInfo(root).absolutePath());
+    refreshDatasetUi();
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+    emit statusMessage(tr("数据集已打开：%1").arg(root));
+}
+
+void YoloWorkspaceWidget::refreshDatasetUi(const QString& selectSampleId)
+{
+    if (!dataset_project_edit_ || !dataset_editor_) return;
+    const bool opened = dataset_project_.isOpen();
+    dataset_project_edit_->setText(opened ? dataset_project_.rootDirectory() : QString());
+    dataset_editor_->setEnabled(opened);
+    dataset_task_combo_->setEnabled(!opened);
+    if (!opened) {
+        dataset_summary_->setText(tr("创建或打开数据集后即可开始标注。"));
+        dataset_class_combo_->clear();
+        dataset_annotation_list_->clear();
+        dataset_sample_list_->clear();
+        return;
+    }
+
+    const int task_index = dataset_task_combo_->findData(yoloTaskKey(dataset_project_.task()));
+    if (task_index >= 0) dataset_task_combo_->setCurrentIndex(task_index);
+    const int previous_class = dataset_class_combo_->currentIndex();
+    dataset_class_combo_->clear();
+    dataset_class_combo_->addItems(dataset_project_.classes());
+    if (dataset_class_combo_->count() > 0) {
+        dataset_class_combo_->setCurrentIndex(std::clamp(previous_class, 0, dataset_class_combo_->count() - 1));
+    }
+    dataset_annotate_button_->setText(dataset_project_.task() == YoloTask::Detection
+        ? tr("绘制检测框")
+        : dataset_project_.task() == YoloTask::Segmentation
+            ? tr("绘制分割多边形") : tr("设置当前图像分类"));
+
+    int train_count = 0;
+    int val_count = 0;
+    int test_count = 0;
+    int annotation_count = 0;
+    for (const YoloDatasetSample& sample : dataset_project_.samples()) {
+        if (sample.split == QStringLiteral("train")) ++train_count;
+        else if (sample.split == QStringLiteral("val")) ++val_count;
+        else if (sample.split == QStringLiteral("test")) ++test_count;
+        annotation_count += sample.annotations.size();
+    }
+    dataset_summary_->setText(tr("%1 · %2 · %3 个类别 · %4 个样本 / %5 个标注\n训练 %6 · 验证 %7 · 测试 %8")
+        .arg(dataset_project_.name(), yoloTaskDisplayName(dataset_project_.task()))
+        .arg(dataset_project_.classes().size()).arg(dataset_project_.samples().size())
+        .arg(annotation_count).arg(train_count).arg(val_count).arg(test_count));
+
+    dataset_annotation_list_->clear();
+    for (int index = 0; index < current_annotations_.size(); ++index) {
+        const YoloDatasetAnnotation& annotation = current_annotations_.at(index);
+        const QString class_name = annotation.classId >= 0 && annotation.classId < dataset_project_.classes().size()
+            ? dataset_project_.classes().at(annotation.classId) : tr("无效类别");
+        QString geometry;
+        if (dataset_project_.task() == YoloTask::Classification) {
+            geometry = tr("整张图像");
+        } else if (dataset_project_.task() == YoloTask::Detection && annotation.points.size() == 2) {
+            const QRectF bounds(annotation.points.at(0), annotation.points.at(1));
+            const QRectF normalized = bounds.normalized();
+            geometry = tr("矩形 %1,%2  %3×%4")
+                .arg(normalized.x(), 0, 'f', 0).arg(normalized.y(), 0, 'f', 0)
+                .arg(normalized.width(), 0, 'f', 0).arg(normalized.height(), 0, 'f', 0);
+        } else {
+            geometry = tr("多边形 %1 点").arg(annotation.points.size());
+        }
+        auto* item = new QListWidgetItem(QStringLiteral("%1 · %2").arg(class_name, geometry), dataset_annotation_list_);
+        item->setData(Qt::UserRole, index);
+    }
+
+    const QString wanted_sample = selectSampleId.isEmpty()
+        ? (dataset_sample_list_->currentItem()
+            ? dataset_sample_list_->currentItem()->data(Qt::UserRole).toString() : QString())
+        : selectSampleId;
+    dataset_sample_list_->clear();
+    int selected_row = -1;
+    for (const YoloDatasetSample& sample : dataset_project_.samples()) {
+        const QString split = sample.split == QStringLiteral("train") ? tr("训练")
+            : sample.split == QStringLiteral("val") ? tr("验证") : tr("测试");
+        auto* item = new QListWidgetItem(
+            tr("[%1] %2 · %3 个标注").arg(split, sample.sourceName).arg(sample.annotations.size()),
+            dataset_sample_list_);
+        item->setData(Qt::UserRole, sample.id);
+        item->setToolTip(dataset_project_.absoluteImagePath(sample));
+        if (sample.id == wanted_sample) selected_row = dataset_sample_list_->count() - 1;
+    }
+    if (selected_row >= 0) dataset_sample_list_->setCurrentRow(selected_row);
+}
+
+void YoloWorkspaceWidget::addDatasetClass()
+{
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, tr("新增类别"), tr("类别名称"), QLineEdit::Normal, {}, &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+    QString error;
+    if (!dataset_project_.addClass(name, &error)) {
+        QMessageBox::warning(this, tr("新增失败"), error);
+        return;
+    }
+    refreshDatasetUi();
+    dataset_class_combo_->setCurrentIndex(dataset_class_combo_->count() - 1);
+}
+
+void YoloWorkspaceWidget::renameDatasetClass()
+{
+    const int index = dataset_class_combo_->currentIndex();
+    if (index < 0) return;
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, tr("重命名类别"), tr("类别名称"), QLineEdit::Normal,
+        dataset_project_.classes().at(index), &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+    QString error;
+    if (!dataset_project_.renameClass(index, name, &error)) {
+        QMessageBox::warning(this, tr("重命名失败"), error);
+        return;
+    }
+    refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+void YoloWorkspaceWidget::removeDatasetClass()
+{
+    const int index = dataset_class_combo_->currentIndex();
+    if (index < 0) return;
+    if (QMessageBox::question(this, tr("删除类别"),
+            tr("确定删除类别“%1”？").arg(dataset_project_.classes().at(index))) != QMessageBox::Yes) return;
+    QString error;
+    if (!dataset_project_.removeClass(index, &error)) {
+        QMessageBox::warning(this, tr("删除失败"), error);
+        return;
+    }
+    for (int annotation_index = current_annotations_.size() - 1; annotation_index >= 0; --annotation_index) {
+        if (current_annotations_.at(annotation_index).classId == index) {
+            current_annotations_.removeAt(annotation_index);
+        } else if (current_annotations_.at(annotation_index).classId > index) {
+            --current_annotations_[annotation_index].classId;
+        }
+    }
+    refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+void YoloWorkspaceWidget::beginDatasetAnnotation()
+{
+    if (!dataset_project_.isOpen() || current_image_.isNull()) {
+        emit statusMessage(tr("请先打开数据集和要标注的图像"));
+        return;
+    }
+    const int class_id = dataset_class_combo_->currentIndex();
+    if (class_id < 0) {
+        emit statusMessage(tr("请先选择标注类别"));
+        return;
+    }
+    if (dataset_project_.task() == YoloTask::Classification) {
+        current_annotations_ = {{class_id, {}}};
+        refreshDatasetUi(current_dataset_sample_id_);
+        updateDatasetOverlays();
+        refreshVisibleOverlays();
+        emit statusMessage(tr("已设置当前图像分类，点击保存写入数据集"));
+        return;
+    }
+    const CanvasTool tool = dataset_project_.task() == YoloTask::Detection
+        ? CanvasTool::Rectangle : CanvasTool::Polygon;
+    const QString hint = tool == CanvasTool::Rectangle
+        ? tr("请在图像上选择检测框的两个对角点")
+        : tr("请依次选择分割轮廓顶点，双击完成");
+    emit annotationToolRequested(tool, hint);
+}
+
+void YoloWorkspaceWidget::removeCurrentAnnotation()
+{
+    const int row = dataset_annotation_list_->currentRow();
+    if (row < 0 || row >= current_annotations_.size()) return;
+    current_annotations_.removeAt(row);
+    refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+void YoloWorkspaceWidget::clearCurrentAnnotations()
+{
+    current_annotations_.clear();
+    refreshDatasetUi(current_dataset_sample_id_);
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+void YoloWorkspaceWidget::saveCurrentDatasetSample()
+{
+    if (!dataset_project_.isOpen() || current_image_.isNull()) {
+        emit statusMessage(tr("请先打开数据集和要保存的图像"));
+        return;
+    }
+    const QString split = dataset_split_combo_->currentData().toString();
+    QString source_name = current_source_.isEmpty() ? QStringLiteral("current-image") : current_source_;
+    const int existing_index = dataset_project_.sampleIndex(current_dataset_sample_id_);
+    if (existing_index >= 0) source_name = dataset_project_.samples().at(existing_index).sourceName;
+    QString saved_id;
+    QString error;
+    if (!dataset_project_.saveSample(current_image_, source_name, split, current_annotations_,
+            current_dataset_sample_id_, &saved_id, &error)) {
+        QMessageBox::warning(this, tr("保存样本失败"), error);
+        return;
+    }
+    current_dataset_sample_id_ = saved_id;
+    refreshDatasetUi(saved_id);
+    emit statusMessage(tr("样本已保存到 %1").arg(dataset_project_.rootDirectory()));
+}
+
+void YoloWorkspaceWidget::openSelectedDatasetSample()
+{
+    QListWidgetItem* item = dataset_sample_list_->currentItem();
+    if (!item) return;
+    const QString id = item->data(Qt::UserRole).toString();
+    const int index = dataset_project_.sampleIndex(id);
+    if (index < 0) return;
+    QImage image;
+    QVector<YoloDatasetAnnotation> annotations;
+    QString error;
+    if (!dataset_project_.loadSample(id, &image, &annotations, &error)) {
+        QMessageBox::warning(this, tr("打开样本失败"), error);
+        return;
+    }
+    pending_dataset_sample_id_ = id;
+    pending_annotations_ = annotations;
+    pending_split_ = dataset_project_.samples().at(index).split;
+    emit imageOpenRequested(dataset_project_.absoluteImagePath(dataset_project_.samples().at(index)));
+}
+
+void YoloWorkspaceWidget::removeSelectedDatasetSample()
+{
+    QListWidgetItem* item = dataset_sample_list_->currentItem();
+    if (!item) return;
+    const QString id = item->data(Qt::UserRole).toString();
+    if (QMessageBox::question(this, tr("删除样本"), tr("确定从数据集删除选中图像和标签？")) != QMessageBox::Yes) return;
+    QString error;
+    if (!dataset_project_.removeSample(id, &error)) {
+        QMessageBox::warning(this, tr("删除失败"), error);
+        return;
+    }
+    if (current_dataset_sample_id_ == id) {
+        current_dataset_sample_id_.clear();
+        current_annotations_.clear();
+    }
+    refreshDatasetUi();
+    updateDatasetOverlays();
+    refreshVisibleOverlays();
+}
+
+void YoloWorkspaceWidget::useDatasetForTraining()
+{
+    if (!dataset_project_.isOpen()) return;
+    QString error;
+    if (!dataset_project_.validate(&error)) {
+        QMessageBox::warning(this, tr("数据集不可用"), error);
+        return;
+    }
+    const bool has_training_sample = std::any_of(
+        dataset_project_.samples().cbegin(), dataset_project_.samples().cend(),
+        [](const YoloDatasetSample& sample) { return sample.split == QStringLiteral("train"); });
+    if (!has_training_sample) {
+        QMessageBox::information(this, tr("缺少训练样本"), tr("请先保存至少一张训练集图像。"));
+        return;
+    }
+    dataset_edit_->setText(dataset_project_.trainingDataPath());
+    const int task_index = task_combo_->findData(yoloTaskKey(dataset_project_.task()));
+    if (task_index >= 0) task_combo_->setCurrentIndex(task_index);
+    workspace_tabs_->setCurrentIndex(training_tab_index_);
+    emit statusMessage(tr("训练数据已设置：%1").arg(dataset_project_.trainingDataPath()));
+}
+
+void YoloWorkspaceWidget::updateDatasetOverlays()
+{
+    dataset_overlays_.clear();
+    if (!dataset_project_.isOpen()) return;
+    for (const YoloDatasetAnnotation& annotation : current_annotations_) {
+        if (annotation.points.isEmpty()) continue;
+        const QString label = annotation.classId >= 0 && annotation.classId < dataset_project_.classes().size()
+            ? dataset_project_.classes().at(annotation.classId) : tr("无效类别");
+        const CanvasTool kind = dataset_project_.task() == YoloTask::Detection
+            ? CanvasTool::Rectangle : CanvasTool::Polygon;
+        dataset_overlays_.push_back({kind, annotation.points, label, classColor(annotation.classId)});
+    }
+}
+
+void YoloWorkspaceWidget::refreshVisibleOverlays()
+{
+    if (!workspace_tabs_) return;
+    emit overlaysChanged(workspace_tabs_->currentIndex() == dataset_tab_index_
+        ? dataset_overlays_ : inference_overlays_);
 }
 
 void YoloWorkspaceWidget::refreshModels(const QString& selectId)
@@ -550,7 +1137,8 @@ void YoloWorkspaceWidget::renderInference(const QJsonObject& result)
     }
     if (predictions.isEmpty()) result_list_->addItem(tr("未发现符合阈值的结果"));
     result_list_->addItem(tr("耗时 %1 ms").arg(result.value(QStringLiteral("elapsed_ms")).toDouble(), 0, 'f', 1));
-    emit overlaysChanged(overlays);
+    inference_overlays_ = std::move(overlays);
+    refreshVisibleOverlays();
     emit statusMessage(tr("YOLO 推理完成，共 %1 个结果").arg(predictions.size()));
 }
 

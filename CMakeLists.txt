@@ -252,6 +252,8 @@ qt_add_executable(CameraView WIN32
     src/qt/ImageCanvas.h
     src/qt/ai/YoloModelRegistry.cpp
     src/qt/ai/YoloModelRegistry.h
+    src/qt/ai/YoloDatasetProject.cpp
+    src/qt/ai/YoloDatasetProject.h
     src/qt/ai/YoloProcessController.cpp
     src/qt/ai/YoloProcessController.h
     src/qt/ai/YoloWorkspaceWidget.cpp
@@ -396,6 +398,8 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ImageCanvas.h
         src/qt/ai/YoloModelRegistry.cpp
         src/qt/ai/YoloModelRegistry.h
+        src/qt/ai/YoloDatasetProject.cpp
+        src/qt/ai/YoloDatasetProject.h
         src/qt/ai/YoloProcessController.cpp
         src/qt/ai/YoloProcessController.h
         src/qt/ai/YoloWorkspaceWidget.cpp
@@ -405,4 +409,16 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_compile_features(CameraViewQtInteractionTests PRIVATE cxx_std_17)
     target_link_libraries(CameraViewQtInteractionTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
     add_test(NAME CameraViewQtInteractionTests COMMAND CameraViewQtInteractionTests)
+
+    add_executable(CameraViewYoloDatasetTests
+        tests/yolo_dataset_project_tests.cpp
+        src/qt/ai/YoloDatasetProject.cpp
+        src/qt/ai/YoloDatasetProject.h
+        src/qt/ai/YoloModelRegistry.cpp
+        src/qt/ai/YoloModelRegistry.h
+    )
+    target_include_directories(CameraViewYoloDatasetTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewYoloDatasetTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewYoloDatasetTests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME CameraViewYoloDatasetTests COMMAND CameraViewYoloDatasetTests)
 endif()
