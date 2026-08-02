@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CameraView LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGLWidgets)
 qt_standard_project_setup()
 
 option(CAMERAVIEW_WITH_OPENCV "Enable the OpenCV microscopy stitching backend" ON)
@@ -305,6 +305,7 @@ target_link_libraries(CameraView PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Concurrent
+    Qt6::OpenGLWidgets
     user32
     gdi32
     msimg32
@@ -483,6 +484,7 @@ if(CAMERAVIEW_BUILD_TESTS)
     )
     target_include_directories(CameraViewVisualizationTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewVisualizationTests PRIVATE cxx_std_17)
-    target_link_libraries(CameraViewVisualizationTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    target_link_libraries(CameraViewVisualizationTests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGLWidgets)
     add_test(NAME CameraViewVisualizationTests COMMAND CameraViewVisualizationTests)
 endif()

@@ -1,11 +1,14 @@
 #include "ImageSurface3DWidget.h"
 
 #include <QMouseEvent>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QPainter>
 #include <QPainterPath>
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace {
@@ -18,20 +21,40 @@ struct ProjectedPoint {
 };
 
 struct SurfaceFace {
-    QPolygonF polygon;
+    std::array<QPointF, 4> points;
     QColor color;
     double depth = 0.0;
 };
 
+constexpr int kInteractiveFaceBudget = 6000;
+
 } // namespace
 
-ImageSurface3DWidget::ImageSurface3DWidget(QWidget* parent) : QWidget(parent)
+ImageSurface3DWidget::ImageSurface3DWidget(QWidget* parent) : QOpenGLWidget(parent)
 {
     setObjectName(QStringLiteral("ImageSurface3D"));
     setMinimumSize(640, 440);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setCursor(Qt::OpenHandCursor);
+}
+
+void ImageSurface3DWidget::initializeGL()
+{
+    QOpenGLFunctions* functions = context() ? context()->functions() : nullptr;
+    const char* renderer = functions
+        ? reinterpret_cast<const char*>(functions->glGetString(GL_RENDERER))
+        : nullptr;
+    const QString renderer_name = renderer ? QString::fromLatin1(renderer) : tr("不可用");
+    render_backend_ = tr("OpenGL · %1").arg(renderer_name);
+    const QString lowered = renderer_name.toLower();
+    hardware_accelerated_ = renderer &&
+        !lowered.contains(QStringLiteral("software")) &&
+        !lowered.contains(QStringLiteral("llvmpipe")) &&
+        !lowered.contains(QStringLiteral("swiftshader")) &&
+        !lowered.contains(QStringLiteral("gdi generic")) &&
+        !lowered.contains(QStringLiteral("microsoft basic render"));
+    emit renderBackendChanged(render_backend_, hardware_accelerated_);
 }
 
 void ImageSurface3DWidget::setImage(const QImage& image)
@@ -52,6 +75,13 @@ void ImageSurface3DWidget::setResolution(int resolution)
     if (resolution_ == normalized) return;
     resolution_ = normalized;
     rebuildSurface();
+}
+
+void ImageSurface3DWidget::setHeightChannel(SurfaceHeightChannel channel)
+{
+    if (height_channel_ == channel) return;
+    height_channel_ = channel;
+    updateHeights();
 }
 
 void ImageSurface3DWidget::setColorMode(SurfaceColorMode mode)
@@ -75,6 +105,12 @@ void ImageSurface3DWidget::resetView()
     update();
 }
 
+float ImageSurface3DWidget::heightAt(int column, int row) const
+{
+    if (column < 0 || column >= columns_ || row < 0 || row >= rows_) return 0.0F;
+    return heights_.at(row * columns_ + column);
+}
+
 void ImageSurface3DWidget::rebuildSurface()
 {
     heights_.clear();
@@ -93,18 +129,41 @@ void ImageSurface3DWidget::rebuildSurface()
         rows_ = std::min(resolution_, source_.height());
         columns_ = std::max(2, qRound(rows_ * source_.width() / static_cast<double>(source_.height())));
     }
-    heights_.reserve(columns_ * rows_);
     original_colors_.reserve(columns_ * rows_);
     for (int row = 0; row < rows_; ++row) {
         const int y = qRound(row * (source_.height() - 1) / static_cast<double>(rows_ - 1));
         for (int column = 0; column < columns_; ++column) {
             const int x = qRound(column * (source_.width() - 1) / static_cast<double>(columns_ - 1));
             const QColor color = source_.pixelColor(x, y);
-            const float luminance = static_cast<float>(
-                (0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()) / 255.0);
-            heights_.push_back(luminance);
             original_colors_.push_back(color);
         }
+    }
+    updateHeights();
+}
+
+void ImageSurface3DWidget::updateHeights()
+{
+    heights_.clear();
+    heights_.reserve(original_colors_.size());
+    for (const QColor& color : original_colors_) {
+        float height = 0.0F;
+        switch (height_channel_) {
+        case SurfaceHeightChannel::Red:
+            height = static_cast<float>(color.redF());
+            break;
+        case SurfaceHeightChannel::Green:
+            height = static_cast<float>(color.greenF());
+            break;
+        case SurfaceHeightChannel::Blue:
+            height = static_cast<float>(color.blueF());
+            break;
+        case SurfaceHeightChannel::Luminance:
+        default:
+            height = static_cast<float>(
+                (0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()) / 255.0);
+            break;
+        }
+        heights_.push_back(height);
     }
     update();
 }
@@ -125,10 +184,11 @@ QColor ImageSurface3DWidget::surfaceColor(int index) const
     }
 }
 
-void ImageSurface3DWidget::paintEvent(QPaintEvent*)
+void ImageSurface3DWidget::paintGL()
 {
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    const bool interactive = drag_button_ != Qt::NoButton;
+    painter.setRenderHint(QPainter::Antialiasing, !interactive);
     QLinearGradient background(rect().topLeft(), rect().bottomRight());
     background.setColorAt(0.0, QColor(9, 14, 20));
     background.setColorAt(1.0, QColor(19, 28, 38));
@@ -169,38 +229,74 @@ void ImageSurface3DWidget::paintEvent(QPaintEvent*)
             camera_depth};
     };
 
-    QVector<SurfaceFace> faces;
-    faces.reserve((columns_ - 1) * (rows_ - 1) * 2);
-    auto append_face = [&](int a_column, int a_row, int b_column, int b_row, int c_column, int c_row) {
-        const ProjectedPoint a = project(a_column, a_row);
-        const ProjectedPoint b = project(b_column, b_row);
-        const ProjectedPoint c = project(c_column, c_row);
-        const int ai = a_row * columns_ + a_column;
-        const int bi = b_row * columns_ + b_column;
-        const int ci = c_row * columns_ + c_column;
-        QColor color(
-            (surfaceColor(ai).red() + surfaceColor(bi).red() + surfaceColor(ci).red()) / 3,
-            (surfaceColor(ai).green() + surfaceColor(bi).green() + surfaceColor(ci).green()) / 3,
-            (surfaceColor(ai).blue() + surfaceColor(bi).blue() + surfaceColor(ci).blue()) / 3);
-        const double facing = std::abs(
-            (b.point.x() - a.point.x()) * (c.point.y() - a.point.y()) -
-            (b.point.y() - a.point.y()) * (c.point.x() - a.point.x()));
-        color = facing < 0.5 ? color.darker(125) : color;
-        faces.push_back({QPolygonF{a.point, b.point, c.point}, color, (a.depth + b.depth + c.depth) / 3.0});
-    };
-    for (int row = 0; row + 1 < rows_; ++row) {
-        for (int column = 0; column + 1 < columns_; ++column) {
-            append_face(column, row, column + 1, row, column + 1, row + 1);
-            append_face(column, row, column + 1, row + 1, column, row + 1);
+    QVector<ProjectedPoint> projected;
+    projected.resize(columns_ * rows_);
+    QVector<QColor> vertex_colors;
+    vertex_colors.resize(columns_ * rows_);
+    for (int row = 0; row < rows_; ++row) {
+        for (int column = 0; column < columns_; ++column) {
+            const int index = row * columns_ + column;
+            projected[index] = project(column, row);
+            vertex_colors[index] = surfaceColor(index);
         }
     }
+
+    const int full_face_count = (columns_ - 1) * (rows_ - 1);
+    int stride = 1;
+    if (interactive && full_face_count > kInteractiveFaceBudget) {
+        stride = std::max(2, static_cast<int>(std::ceil(
+            std::sqrt(full_face_count / static_cast<double>(kInteractiveFaceBudget)))));
+    }
+    QVector<int> sampled_columns;
+    QVector<int> sampled_rows;
+    for (int column = 0; column < columns_ - 1; column += stride) sampled_columns.push_back(column);
+    for (int row = 0; row < rows_ - 1; row += stride) sampled_rows.push_back(row);
+    sampled_columns.push_back(columns_ - 1);
+    sampled_rows.push_back(rows_ - 1);
+
+    QVector<SurfaceFace> faces;
+    faces.reserve((sampled_columns.size() - 1) * (sampled_rows.size() - 1));
+    for (int row_index = 0; row_index + 1 < sampled_rows.size(); ++row_index) {
+        const int top = sampled_rows.at(row_index);
+        const int bottom = sampled_rows.at(row_index + 1);
+        for (int column_index = 0; column_index + 1 < sampled_columns.size(); ++column_index) {
+            const int left = sampled_columns.at(column_index);
+            const int right = sampled_columns.at(column_index + 1);
+            const int indices[] = {
+                top * columns_ + left,
+                top * columns_ + right,
+                bottom * columns_ + right,
+                bottom * columns_ + left};
+            const ProjectedPoint& a = projected.at(indices[0]);
+            const ProjectedPoint& b = projected.at(indices[1]);
+            const ProjectedPoint& c = projected.at(indices[2]);
+            const ProjectedPoint& d = projected.at(indices[3]);
+            QColor color(
+                (vertex_colors.at(indices[0]).red() + vertex_colors.at(indices[1]).red() +
+                    vertex_colors.at(indices[2]).red() + vertex_colors.at(indices[3]).red()) / 4,
+                (vertex_colors.at(indices[0]).green() + vertex_colors.at(indices[1]).green() +
+                    vertex_colors.at(indices[2]).green() + vertex_colors.at(indices[3]).green()) / 4,
+                (vertex_colors.at(indices[0]).blue() + vertex_colors.at(indices[1]).blue() +
+                    vertex_colors.at(indices[2]).blue() + vertex_colors.at(indices[3]).blue()) / 4);
+            const double facing = std::abs(
+                (b.point.x() - a.point.x()) * (c.point.y() - a.point.y()) -
+                (b.point.y() - a.point.y()) * (c.point.x() - a.point.x()));
+            if (facing < 0.5) color = color.darker(125);
+            faces.push_back({
+                {a.point, b.point, c.point, d.point},
+                color,
+                (a.depth + b.depth + c.depth + d.depth) / 4.0});
+        }
+    }
+    last_render_stride_ = stride;
+    last_rendered_face_count_ = faces.size();
     std::sort(faces.begin(), faces.end(), [](const SurfaceFace& left, const SurfaceFace& right) {
         return left.depth > right.depth;
     });
-    painter.setPen(mesh_visible_ ? QPen(QColor(11, 19, 28, 75), 0.6) : Qt::NoPen);
+    painter.setPen(mesh_visible_ ? QPen(QColor(11, 19, 28, interactive ? 45 : 75), 0.6) : Qt::NoPen);
     for (const SurfaceFace& face : faces) {
         painter.setBrush(face.color);
-        painter.drawPolygon(face.polygon);
+        painter.drawPolygon(face.points.data(), static_cast<int>(face.points.size()));
     }
 
     const QRect legend(width() - 34, 34, 12, std::max(100, height() / 3));
@@ -252,6 +348,7 @@ void ImageSurface3DWidget::mouseReleaseEvent(QMouseEvent* event)
     if (event->button() == drag_button_) {
         drag_button_ = Qt::NoButton;
         setCursor(Qt::OpenHandCursor);
+        update();
     }
 }
 

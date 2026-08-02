@@ -5,8 +5,12 @@
 #include "qt/CameraViewTheme.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QLabel>
+#include <QMouseEvent>
 #include <QPixmap>
 
 #include <cmath>
@@ -19,6 +23,11 @@ int fail(const char* message)
 {
     std::cerr << message << '\n';
     return 1;
+}
+
+bool near(double left, double right, double tolerance = 1e-5)
+{
+    return std::abs(left - right) <= tolerance;
 }
 
 ImageFrame frameFromImage(const QImage& image)
@@ -55,14 +64,66 @@ int main(int argc, char* argv[])
     ImageSurface3DWidget surface;
     surface.resize(760, 500);
     surface.setImage(image);
-    surface.setResolution(64);
+    surface.setResolution(180);
     surface.setVerticalScale(1.6);
     surface.show();
     application.processEvents();
-    if (!surface.hasSurface() || surface.gridSize().width() != 64 || surface.gridSize().height() < 40) {
+    if (!surface.hasSurface() || surface.gridSize() != image.size()) {
         return fail("3D surface grid was not generated.");
     }
+    if (!surface.renderBackend().startsWith(QStringLiteral("OpenGL"))) {
+        return fail("3D surface did not initialize an OpenGL render backend.");
+    }
+    const QColor reference = image.pixelColor(90, 60);
+    surface.setHeightChannel(SurfaceHeightChannel::Red);
+    if (surface.heightChannel() != SurfaceHeightChannel::Red ||
+        !near(surface.heightAt(90, 60), reference.redF())) {
+        return fail("Red height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Green);
+    if (!near(surface.heightAt(90, 60), reference.greenF())) {
+        return fail("Green height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Blue);
+    if (!near(surface.heightAt(90, 60), reference.blueF())) {
+        return fail("Blue height channel was not applied.");
+    }
+    surface.setHeightChannel(SurfaceHeightChannel::Luminance);
+
+    QElapsedTimer render_timer;
+    render_timer.start();
     const QImage surface_snapshot = surface.grab().toImage();
+    const qint64 full_render_ms = render_timer.elapsed();
+    const int full_face_count = surface.lastRenderedFaceCount();
+    if (surface.lastRenderStride() != 1 ||
+        full_face_count != (surface.gridSize().width() - 1) * (surface.gridSize().height() - 1)) {
+        return fail("Full-quality 3D render did not use every surface cell.");
+    }
+
+    QMouseEvent drag_press(
+        QEvent::MouseButtonPress, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &drag_press);
+    render_timer.restart();
+    surface.grab();
+    const qint64 interactive_render_ms = render_timer.elapsed();
+    const int interactive_face_count = surface.lastRenderedFaceCount();
+    if (surface.lastRenderStride() <= 1 || interactive_face_count >= full_face_count) {
+        return fail("High-resolution drag did not activate adaptive surface detail.");
+    }
+    QMouseEvent drag_release(
+        QEvent::MouseButtonRelease, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &drag_release);
+    surface.grab();
+    if (surface.lastRenderStride() != 1 || surface.lastRenderedFaceCount() != full_face_count) {
+        return fail("Full surface detail was not restored after dragging.");
+    }
+    std::cout << "3D render 180x120: " << full_render_ms << " ms, full faces "
+              << full_face_count << ", interactive faces " << interactive_face_count
+              << " in " << interactive_render_ms << " ms"
+              << ", backend " << surface.renderBackend().toStdString()
+              << (surface.hardwareAccelerated() ? " (hardware)" : " (software fallback)") << '\n';
     if (surface_snapshot.isNull() || !surface_snapshot.save(
             QDir::current().filePath(QStringLiteral("CameraView-3d-surface.png")))) {
         return fail("3D surface snapshot could not be rendered.");
@@ -82,12 +143,24 @@ int main(int argc, char* argv[])
     }
 
     ImageSurface3DDialog surface_dialog(image, QStringLiteral("synthetic"));
-    if (!surface_dialog.surfaceWidget()->hasSurface()) {
+    auto* height_channel_combo = surface_dialog.findChild<QComboBox*>(
+        QStringLiteral("SurfaceHeightChannelCombo"));
+    auto* backend_label = surface_dialog.findChild<QLabel*>(QStringLiteral("SurfaceRenderBackend"));
+    if (!surface_dialog.surfaceWidget()->hasSurface() ||
+        !height_channel_combo || height_channel_combo->count() != 4 || !backend_label) {
         return fail("3D dialog did not receive the image surface.");
     }
+    height_channel_combo->setCurrentIndex(1);
+    if (surface_dialog.surfaceWidget()->heightChannel() != SurfaceHeightChannel::Red) {
+        return fail("3D dialog did not apply its RGB height-channel selection.");
+    }
+    height_channel_combo->setCurrentIndex(0);
     surface_dialog.resize(1040, 720);
     surface_dialog.show();
     application.processEvents();
+    if (!backend_label->text().contains(QStringLiteral("OpenGL"))) {
+        return fail("3D dialog did not display its render backend.");
+    }
     if (!surface_dialog.grab().save(
             QDir::current().filePath(QStringLiteral("CameraView-3d-dialog.png")))) {
         return fail("3D dialog snapshot could not be rendered.");

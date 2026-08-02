@@ -54,6 +54,12 @@ ImageSurface3DDialog::ImageSurface3DDialog(
     resolution_spin->setRange(16, 180);
     resolution_spin->setValue(80);
     resolution_spin->setSuffix(tr(" 点"));
+    auto* height_channel_combo = new QComboBox;
+    height_channel_combo->setObjectName(QStringLiteral("SurfaceHeightChannelCombo"));
+    height_channel_combo->addItem(tr("亮度"), static_cast<int>(SurfaceHeightChannel::Luminance));
+    height_channel_combo->addItem(tr("红色通道"), static_cast<int>(SurfaceHeightChannel::Red));
+    height_channel_combo->addItem(tr("绿色通道"), static_cast<int>(SurfaceHeightChannel::Green));
+    height_channel_combo->addItem(tr("蓝色通道"), static_cast<int>(SurfaceHeightChannel::Blue));
     auto* color_combo = new QComboBox;
     color_combo->setObjectName(QStringLiteral("SurfaceColorCombo"));
     color_combo->addItem(tr("高度伪彩"), static_cast<int>(SurfaceColorMode::HeightMap));
@@ -61,14 +67,20 @@ ImageSurface3DDialog::ImageSurface3DDialog(
     color_combo->addItem(tr("灰度"), static_cast<int>(SurfaceColorMode::Grayscale));
     auto* mesh_check = new QCheckBox(tr("显示网格线"));
     mesh_check->setChecked(true);
+    auto* backend_label = new QLabel(surface_->renderBackend());
+    backend_label->setObjectName(QStringLiteral("SurfaceRenderBackend"));
+    backend_label->setWordWrap(true);
+    backend_label->setStyleSheet(QStringLiteral("color: #93a4b8;"));
     form->addRow(tr("高度倍率"), height_row);
     form->addRow(tr("网格精度"), resolution_spin);
+    form->addRow(tr("高度通道"), height_channel_combo);
     form->addRow(tr("表面着色"), color_combo);
     form->addRow(QString(), mesh_check);
+    form->addRow(tr("渲染后端"), backend_label);
     controls_layout->addLayout(form);
 
     auto* note = new QLabel(tr(
-        "高度由图像亮度映射，用于观察纹理、边缘和强度起伏；"
+        "高度由所选亮度或 RGB 通道映射，用于分别观察各通道的纹理、边缘和强度起伏；"
         "它不是没有深度标定时的真实物理高度。"));
     note->setWordWrap(true);
     note->setStyleSheet(QStringLiteral("color: #93a4b8;"));
@@ -90,10 +102,21 @@ ImageSurface3DDialog::ImageSurface3DDialog(
     });
     connect(resolution_spin, qOverload<int>(&QSpinBox::valueChanged),
         surface_, &ImageSurface3DWidget::setResolution);
+    connect(height_channel_combo, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this, height_channel_combo] {
+            surface_->setHeightChannel(static_cast<SurfaceHeightChannel>(
+                height_channel_combo->currentData().toInt()));
+        });
     connect(color_combo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, color_combo] {
         surface_->setColorMode(static_cast<SurfaceColorMode>(color_combo->currentData().toInt()));
     });
     connect(mesh_check, &QCheckBox::toggled, surface_, &ImageSurface3DWidget::setMeshVisible);
+    connect(surface_, &ImageSurface3DWidget::renderBackendChanged,
+        this, [backend_label](const QString& description, bool hardware) {
+            backend_label->setText(hardware
+                ? QObject::tr("%1（硬件加速）").arg(description)
+                : QObject::tr("%1（软件回退）").arg(description));
+        });
     connect(reset, &QPushButton::clicked, surface_, &ImageSurface3DWidget::resetView);
     connect(export_button, &QPushButton::clicked, this, &ImageSurface3DDialog::exportView);
     connect(close_button, &QPushButton::clicked, this, &QDialog::close);
