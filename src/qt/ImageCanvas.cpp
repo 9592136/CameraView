@@ -14,6 +14,7 @@ int requiredPointCount(CanvasTool tool)
     switch (tool) {
     case CanvasTool::Calibration:
     case CanvasTool::Length:
+    case CanvasTool::ProfileLine:
     case CanvasTool::Rectangle:
         return 2;
     case CanvasTool::Angle:

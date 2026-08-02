@@ -222,6 +222,8 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/HistogramCalculator.h
     src/imaging/ImageRegistration.cpp
     src/imaging/ImageRegistration.h
+    src/imaging/ImageProfileSampler.cpp
+    src/imaging/ImageProfileSampler.h
     src/imaging/ImageStitcher.cpp
     src/imaging/ImageStitcher.h
     src/imaging/LiveStitchCapturePlanner.cpp
@@ -264,6 +266,14 @@ qt_add_executable(CameraView WIN32
     src/qt/HistogramWidget.h
     src/qt/ImageCanvas.cpp
     src/qt/ImageCanvas.h
+    src/qt/ImageSurface3DDialog.cpp
+    src/qt/ImageSurface3DDialog.h
+    src/qt/ImageSurface3DWidget.cpp
+    src/qt/ImageSurface3DWidget.h
+    src/qt/ProfileAnalysisDialog.cpp
+    src/qt/ProfileAnalysisDialog.h
+    src/qt/ProfilePlotWidget.cpp
+    src/qt/ProfilePlotWidget.h
     src/qt/ai/YoloModelRegistry.cpp
     src/qt/ai/YoloModelRegistry.h
     src/qt/ai/YoloDatasetProject.cpp
@@ -444,4 +454,35 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_compile_features(CameraViewYoloDatasetTests PRIVATE cxx_std_17)
     target_link_libraries(CameraViewYoloDatasetTests PRIVATE Qt6::Core Qt6::Gui)
     add_test(NAME CameraViewYoloDatasetTests COMMAND CameraViewYoloDatasetTests)
+
+    add_executable(CameraViewImageProfileTests
+        tests/image_profile_tests.cpp
+        src/imaging/ImageProfileSampler.cpp
+        src/imaging/ImageProfileSampler.h
+    )
+    target_include_directories(CameraViewImageProfileTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewImageProfileTests PRIVATE cxx_std_17)
+    add_test(NAME CameraViewImageProfileTests COMMAND CameraViewImageProfileTests)
+
+    add_executable(CameraViewVisualizationTests
+        tests/visualization_tests.cpp
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/imaging/ImageProfileSampler.cpp
+        src/imaging/ImageProfileSampler.h
+        src/qt/CameraViewTheme.cpp
+        src/qt/CameraViewTheme.h
+        src/qt/ImageSurface3DDialog.cpp
+        src/qt/ImageSurface3DDialog.h
+        src/qt/ImageSurface3DWidget.cpp
+        src/qt/ImageSurface3DWidget.h
+        src/qt/ProfileAnalysisDialog.cpp
+        src/qt/ProfileAnalysisDialog.h
+        src/qt/ProfilePlotWidget.cpp
+        src/qt/ProfilePlotWidget.h
+    )
+    target_include_directories(CameraViewVisualizationTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewVisualizationTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewVisualizationTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME CameraViewVisualizationTests COMMAND CameraViewVisualizationTests)
 endif()

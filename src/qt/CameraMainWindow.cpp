@@ -2,6 +2,8 @@
 
 #include "CameraWorker.h"
 #include "HistogramWidget.h"
+#include "ImageSurface3DDialog.h"
+#include "ProfileAnalysisDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
 #include "domain/MeasurementFormatter.h"
 #include "domain/MeasurementNameFormatter.h"
@@ -334,6 +336,11 @@ void CameraMainWindow::setupMenusAndToolbar()
     image_menu->addAction(tr("逆时针旋转 90°"), this, [transform_frame] {
         transform_frame(QTransform().rotate(-90.0), QObject::tr("逆时针旋转结果"));
     });
+    image_menu->addSeparator();
+    QAction* surface_action = image_menu->addAction(tr("3D 高度图…"), this, &CameraMainWindow::show3DView);
+    surface_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
+    QAction* profile_action = image_menu->addAction(tr("剖线测量"), this, &CameraMainWindow::startProfileMeasurement);
+    profile_action->setShortcut(QKeySequence(Qt::Key_P));
 
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
     view_menu->addAction(tr("适合窗口"), QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
@@ -369,6 +376,9 @@ void CameraMainWindow::setupMenusAndToolbar()
     length_action->setShortcut(QKeySequence(Qt::Key_L));
     toolbar->addAction(tr("角度"), this,
         [this] { setMeasurementTool(CanvasTool::Angle, tr("请依次选择端点、顶点、端点")); });
+    toolbar->addAction(profile_action);
+    toolbar->addSeparator();
+    toolbar->addAction(surface_action);
 }
 
 QWidget* CameraMainWindow::buildCameraPage()
@@ -772,10 +782,11 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* tool_group = new QGroupBox(tr("测量工具"));
     auto* tool_layout = new QVBoxLayout(tool_group);
     auto* length = new QPushButton(tr("长度"));
+    auto* profile = new QPushButton(tr("剖线"));
     auto* angle = new QPushButton(tr("角度"));
     auto* rectangle = new QPushButton(tr("矩形面积"));
     auto* polygon = new QPushButton(tr("多边形面积（双击完成）"));
-    tool_layout->addWidget(buttonRow({length, angle}));
+    tool_layout->addWidget(buttonRow({length, profile, angle}));
     tool_layout->addWidget(buttonRow({rectangle, polygon}));
     display_unit_combo_ = new QComboBox;
     display_unit_combo_->addItems({tr("像素"), tr("µm"), tr("mm")});
@@ -802,6 +813,7 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         updateMeasurementList();
     });
     connect(length, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Length, tr("请选择长度的两个端点")); });
+    connect(profile, &QPushButton::clicked, this, &CameraMainWindow::startProfileMeasurement);
     connect(angle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Angle, tr("请选择端点、顶点和端点")); });
     connect(rectangle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Rectangle, tr("请选择矩形的两个对角点")); });
     connect(polygon, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polygon, tr("依次选择顶点，双击完成多边形")); });
@@ -1035,9 +1047,13 @@ void CameraMainWindow::setCurrentFrame(
     const QString& source,
     const QString& sourceIdentity)
 {
+    const QString new_identity = sourceIdentity.isEmpty() ? source : sourceIdentity;
+    if (!current_source_identity_.isEmpty() && current_source_identity_ != new_identity) {
+        profile_line_points_.clear();
+    }
     current_frame_ = std::move(frame);
     current_source_ = source;
-    current_source_identity_ = sourceIdentity.isEmpty() ? source : sourceIdentity;
+    current_source_identity_ = new_identity;
     if (export_action_) export_action_->setEnabled(current_frame_.IsValid());
     source_label_->setText(tr("%1 · %2 × %3")
         .arg(source)
@@ -1108,6 +1124,20 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
             calibration_label_->setText(tr("%1 µm / px").arg(calibration_.MicronsPerPixel(), 0, 'g', 7));
             statusBar()->showMessage(tr("标定已完成"), 5000);
         }
+    } else if (tool == CanvasTool::ProfileLine && points.size() == 2) {
+        profile_line_points_ = points;
+        const ImageFrame frame = currentVisibleFrame();
+        auto* dialog = new ProfileAnalysisDialog(
+            frame,
+            imagePoint(points.at(0)),
+            imagePoint(points.at(1)),
+            calibration_,
+            display_unit_,
+            current_source_,
+            this);
+        dialog->show();
+        rebuildOverlays();
+        statusBar()->showMessage(tr("剖线测量已生成"), 4000);
     } else if (tool == CanvasTool::Length && points.size() == 2) {
         measurements_.AddLength(
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::Length, measurements_),
@@ -1190,6 +1220,9 @@ QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
             QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
             QColor(192, 132, 252)});
     }
+    if (profile_line_points_.size() == 2) {
+        overlays.push_back({CanvasTool::ProfileLine, profile_line_points_, tr("剖线"), QColor(255, 202, 58)});
+    }
     return overlays;
 }
 
@@ -1203,6 +1236,7 @@ void CameraMainWindow::rebuildOverlays()
 void CameraMainWindow::clearMeasurements()
 {
     measurements_.Clear();
+    profile_line_points_.clear();
     updateMeasurementList();
     statusBar()->showMessage(tr("测量结果已清空"), 3000);
 }
@@ -1236,6 +1270,23 @@ void CameraMainWindow::exportMeasurements()
         return;
     }
     statusBar()->showMessage(tr("测量数据已导出：%1").arg(file_name), 5000);
+}
+
+void CameraMainWindow::show3DView()
+{
+    const ImageFrame frame = currentVisibleFrame();
+    if (!frame.IsValid()) {
+        QMessageBox::information(this, tr("3D 高度图"), tr("请先打开图像或连接相机。"));
+        return;
+    }
+    auto* dialog = new ImageSurface3DDialog(qImageFromFrame(frame), current_source_, this);
+    dialog->show();
+    statusBar()->showMessage(tr("已打开图像 3D 高度图"), 3000);
+}
+
+void CameraMainWindow::startProfileMeasurement()
+{
+    setMeasurementTool(CanvasTool::ProfileLine, tr("请在图像上选择剖线的两个端点"));
 }
 
 void CameraMainWindow::addFluorescenceChannel()

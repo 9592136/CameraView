@@ -9,6 +9,7 @@ enum class CanvasTool {
     None,
     Calibration,
     Length,
+    ProfileLine,
     Angle,
     Rectangle,
     Polygon

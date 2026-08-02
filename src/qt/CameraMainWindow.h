@@ -71,6 +71,8 @@ private slots:
     void clearMeasurements();
     void deleteSelectedMeasurement();
     void exportMeasurements();
+    void show3DView();
+    void startProfileMeasurement();
     void updateImagePresentation();
     void updateMeasurementList();
 
@@ -177,6 +179,7 @@ private:
     MeasurementUnit display_unit_ = MeasurementUnit::Micrometers;
     MeasurementCollection measurements_;
     QVector<CanvasOverlay> ai_overlays_;
+    QVector<QPointF> profile_line_points_;
     std::vector<DyeProfile> dyes_;
     std::vector<FluorescenceChannel> channels_;
     std::vector<StitchTile> stitch_tiles_;

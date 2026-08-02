@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -53,6 +54,28 @@ int main(int argc, char* argv[])
     }
     if (canvas.focusOnImageRect(QRectF(1200.0, 600.0, 20.0, 20.0))) {
         return fail("ImageCanvas accepted a target outside the image.");
+    }
+    canvas.fitToView();
+    canvas.setTool(CanvasTool::ProfileLine);
+    CanvasTool committed_tool = CanvasTool::None;
+    QVector<QPointF> committed_points;
+    QObject::connect(&canvas, &ImageCanvas::pointsCommitted,
+        [&committed_tool, &committed_points](CanvasTool tool, const QVector<QPointF>& points) {
+            committed_tool = tool;
+            committed_points = points;
+        });
+    QMouseEvent first_profile_point(
+        QEvent::MouseButtonPress, QPointF(80.0, 180.0), QPointF(80.0, 180.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent second_profile_point(
+        QEvent::MouseButtonPress, QPointF(720.0, 420.0), QPointF(720.0, 420.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &first_profile_point);
+    QApplication::sendEvent(&canvas, &second_profile_point);
+    if (committed_tool != CanvasTool::ProfileLine || committed_points.size() != 2 ||
+        !near(committed_points.at(0).x(), 100.0) || !near(committed_points.at(0).y(), 100.0) ||
+        !near(committed_points.at(1).x(), 900.0) || !near(committed_points.at(1).y(), 400.0)) {
+        return fail("Profile-line canvas interaction did not commit two image-space endpoints.");
     }
 
     YoloWorkspaceWidget workspace;
