@@ -54,6 +54,7 @@ signals:
     void pointsCommitted(CanvasTool tool, QVector<QPointF> points);
     void imagePositionChanged(QPointF point);
     void zoomChanged(double zoom);
+    void toolChanged(CanvasTool tool);
     void edgeSnapEvaluated(bool snapped, QPointF original, QPointF result, double strength);
     void overlayPointMoved(int sourceIndex, int pointIndex, QPointF point, bool finished);
 

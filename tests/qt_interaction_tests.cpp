@@ -56,7 +56,17 @@ int main(int argc, char* argv[])
         return fail("ImageCanvas accepted a target outside the image.");
     }
     canvas.fitToView();
+    CanvasTool announced_tool = CanvasTool::None;
+    int tool_change_notifications = 0;
+    QObject::connect(&canvas, &ImageCanvas::toolChanged,
+        [&announced_tool, &tool_change_notifications](CanvasTool tool) {
+            announced_tool = tool;
+            ++tool_change_notifications;
+        });
     canvas.setTool(CanvasTool::ProfileLine);
+    if (announced_tool != CanvasTool::ProfileLine || tool_change_notifications != 1) {
+        return fail("ImageCanvas did not publish its active measurement tool for button-state synchronization.");
+    }
     CanvasTool committed_tool = CanvasTool::None;
     QVector<QPointF> committed_points;
     QObject::connect(&canvas, &ImageCanvas::pointsCommitted,

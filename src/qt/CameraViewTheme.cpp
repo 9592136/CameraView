@@ -66,6 +66,28 @@ void applyCameraViewTheme(QApplication& application)
         }
         QToolButton:hover { background: #222d3a; border-color: #344456; }
         QToolButton:pressed, QToolButton:checked { background: #253b5a; border-color: #397fdf; }
+        QToolButton[role="measurementTool"] {
+            background: #1d2733;
+            border: 1px solid #354558;
+            border-radius: 8px;
+            padding: 7px 5px 6px 5px;
+            font-weight: 500;
+        }
+        QToolButton[role="measurementTool"]:hover {
+            background: #263548;
+            border-color: #52729a;
+        }
+        QToolButton[role="measurementTool"]:checked {
+            background: #25558f;
+            border-color: #69a7ff;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        QToolButton[role="measurementTool"]:disabled {
+            background: #171e27;
+            color: #657184;
+            border-color: #28323e;
+        }
 
         QDockWidget { background: #131a23; border-left: 1px solid #2c3745; }
         QDockWidget::title {

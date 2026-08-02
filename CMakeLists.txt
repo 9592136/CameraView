@@ -274,6 +274,8 @@ qt_add_executable(CameraView WIN32
     src/qt/HistogramWidget.h
     src/qt/ImageCanvas.cpp
     src/qt/ImageCanvas.h
+    src/qt/MeasurementToolButton.cpp
+    src/qt/MeasurementToolButton.h
     src/qt/ImageSurface3DDialog.cpp
     src/qt/ImageSurface3DDialog.h
     src/qt/ImageSurface3DWidget.cpp
@@ -461,6 +463,17 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_include_directories(CameraViewMeasurementExtendedTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewMeasurementExtendedTests PRIVATE cxx_std_17)
     add_test(NAME CameraViewMeasurementExtendedTests COMMAND CameraViewMeasurementExtendedTests)
+
+    add_executable(CameraViewMeasurementToolIconTests
+        tests/measurement_tool_icon_tests.cpp
+        src/qt/MeasurementToolButton.cpp
+        src/qt/MeasurementToolButton.h
+    )
+    target_include_directories(CameraViewMeasurementToolIconTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewMeasurementToolIconTests PRIVATE cxx_std_17)
+    target_link_libraries(CameraViewMeasurementToolIconTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME CameraViewMeasurementToolIconTests COMMAND CameraViewMeasurementToolIconTests)
+
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtUiSnapshot

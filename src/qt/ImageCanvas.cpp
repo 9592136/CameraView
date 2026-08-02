@@ -76,6 +76,7 @@ void ImageCanvas::setTool(CanvasTool tool)
     pending_points_.clear();
     hover_image_point_valid_ = false;
     setCursor(tool == CanvasTool::None ? Qt::ArrowCursor : Qt::CrossCursor);
+    emit toolChanged(tool_);
     update();
 }
 

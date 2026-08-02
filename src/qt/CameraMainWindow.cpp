@@ -3,6 +3,7 @@
 #include "CameraWorker.h"
 #include "HistogramWidget.h"
 #include "ImageSurface3DDialog.h"
+#include "MeasurementToolButton.h"
 #include "ProfileAnalysisDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
 #include "domain/MeasurementFormatter.h"
@@ -22,6 +23,7 @@
 #include "storage/ProjectSessionMapper.h"
 
 #include <QAction>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -36,6 +38,7 @@
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QImageReader>
 #include <QImageWriter>
@@ -409,9 +412,12 @@ void CameraMainWindow::setupMenusAndToolbar()
     fit_action->setShortcut(QKeySequence(Qt::Key_F));
     QAction* length_action = toolbar->addAction(tr("长度"), this,
         [this] { setMeasurementTool(CanvasTool::Length, tr("请在图像上选择两个点")); });
+    length_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Length));
     length_action->setShortcut(QKeySequence(Qt::Key_L));
-    toolbar->addAction(tr("角度"), this,
+    QAction* angle_action = toolbar->addAction(tr("角度"), this,
         [this] { setMeasurementTool(CanvasTool::Angle, tr("请依次选择端点、顶点、端点")); });
+    angle_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Angle));
+    profile_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Profile));
     toolbar->addAction(profile_action);
     toolbar->addSeparator();
     toolbar->addAction(surface_action);
@@ -809,6 +815,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     calibration_form->addRow(tr("真实长度"), calibration_length_spin_);
     calibration_form->addRow(tr("单位"), calibration_unit_combo_);
     auto* calibrate = new QPushButton(tr("两点标定"));
+    calibrate->setIcon(measurementToolIcon(MeasurementToolGlyph::Calibration));
+    calibrate->setIconSize(QSize(22, 22));
     auto* clear_calibration = new QPushButton(tr("清除标定"));
     calibration_form->addRow(buttonRow({calibrate, clear_calibration}));
     calibration_label_ = new QLabel(tr("未标定"));
@@ -817,19 +825,45 @@ QWidget* CameraMainWindow::buildMeasurementPage()
 
     auto* tool_group = new QGroupBox(tr("测量工具"));
     auto* tool_layout = new QVBoxLayout(tool_group);
-    auto* length = new QPushButton(tr("长度"));
-    auto* profile = new QPushButton(tr("剖线"));
-    auto* angle = new QPushButton(tr("角度"));
-    auto* rectangle = new QPushButton(tr("矩形面积"));
-    auto* polygon = new QPushButton(tr("多边形面积（双击完成）"));
-    auto* point = new QPushButton(tr("点坐标"));
-    auto* polyline = new QPushButton(tr("折线长度（双击完成）"));
-    auto* circle = new QPushButton(tr("圆"));
-    auto* ellipse = new QPushButton(tr("椭圆"));
-    tool_layout->addWidget(buttonRow({length, profile, angle}));
-    tool_layout->addWidget(buttonRow({rectangle, polygon}));
-    tool_layout->addWidget(buttonRow({point, circle, ellipse}));
-    tool_layout->addWidget(polyline);
+    auto* tool_grid = new QGridLayout;
+    tool_grid->setContentsMargins(0, 0, 0, 0);
+    tool_grid->setHorizontalSpacing(7);
+    tool_grid->setVerticalSpacing(7);
+    auto* tool_buttons = new QButtonGroup(tool_group);
+    tool_buttons->setExclusive(true);
+    auto make_tool_button = [tool_group, tool_grid, tool_buttons](
+        MeasurementToolGlyph glyph,
+        CanvasTool canvasTool,
+        const QString& text,
+        const QString& toolTip,
+        const QString& objectName,
+        int row,
+        int column) {
+        auto* button = new MeasurementToolButton(glyph, text, toolTip, tool_group);
+        button->setObjectName(objectName);
+        tool_buttons->addButton(button, static_cast<int>(canvasTool));
+        tool_grid->addWidget(button, row, column);
+        return button;
+    };
+    auto* point = make_tool_button(MeasurementToolGlyph::Point, CanvasTool::Point,
+        tr("点坐标"), tr("记录图像中一个点的坐标"), QStringLiteral("MeasurementPointButton"), 0, 0);
+    auto* length = make_tool_button(MeasurementToolGlyph::Length, CanvasTool::Length,
+        tr("长度"), tr("选择两个端点测量直线长度"), QStringLiteral("MeasurementLengthButton"), 0, 1);
+    auto* polyline = make_tool_button(MeasurementToolGlyph::Polyline, CanvasTool::Polyline,
+        tr("折线"), tr("依次选择节点，双击完成折线长度测量"), QStringLiteral("MeasurementPolylineButton"), 0, 2);
+    auto* angle = make_tool_button(MeasurementToolGlyph::Angle, CanvasTool::Angle,
+        tr("角度"), tr("依次选择端点、顶点和端点"), QStringLiteral("MeasurementAngleButton"), 1, 0);
+    auto* rectangle = make_tool_button(MeasurementToolGlyph::Rectangle, CanvasTool::Rectangle,
+        tr("矩形"), tr("选择两个对角点测量宽、高、周长和面积"), QStringLiteral("MeasurementRectangleButton"), 1, 1);
+    auto* polygon = make_tool_button(MeasurementToolGlyph::Polygon, CanvasTool::Polygon,
+        tr("多边形"), tr("依次选择顶点，双击完成面积测量"), QStringLiteral("MeasurementPolygonButton"), 1, 2);
+    auto* circle = make_tool_button(MeasurementToolGlyph::Circle, CanvasTool::Circle,
+        tr("圆"), tr("选择圆心和圆周上一点"), QStringLiteral("MeasurementCircleButton"), 2, 0);
+    auto* ellipse = make_tool_button(MeasurementToolGlyph::Ellipse, CanvasTool::Ellipse,
+        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"), QStringLiteral("MeasurementEllipseButton"), 2, 1);
+    auto* profile = make_tool_button(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
+        tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"), QStringLiteral("MeasurementProfileButton"), 2, 2);
+    tool_layout->addLayout(tool_grid);
     display_unit_combo_ = new QComboBox;
     display_unit_combo_->addItems({tr("像素"), tr("µm"), tr("mm")});
     display_unit_combo_->setCurrentIndex(1);
@@ -855,6 +889,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     smart_hint->setWordWrap(true);
     smart_layout->addWidget(smart_hint);
     smart_select_button_ = new QPushButton(tr("开始框选样本"));
+    smart_select_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::SmartCount));
+    smart_select_button_->setIconSize(QSize(22, 22));
     smart_select_button_->setObjectName(QStringLiteral("SmartCountSelectButton"));
     auto* remove_smart_sample = new QPushButton(tr("撤销一个"));
     auto* clear_smart = new QPushButton(tr("清除"));
@@ -919,15 +955,22 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         calibration_label_->setText(tr("未标定"));
         updateMeasurementList();
     });
-    connect(length, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Length, tr("请选择长度的两个端点")); });
-    connect(profile, &QPushButton::clicked, this, &CameraMainWindow::startProfileMeasurement);
-    connect(angle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Angle, tr("请选择端点、顶点和端点")); });
-    connect(rectangle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Rectangle, tr("请选择矩形的两个对角点")); });
-    connect(polygon, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polygon, tr("依次选择顶点，双击完成多边形")); });
-    connect(point, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Point, tr("请选择需要记录坐标的点")); });
-    connect(polyline, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
-    connect(circle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
-    connect(ellipse, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
+    connect(length, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Length, tr("请选择长度的两个端点")); });
+    connect(profile, &QToolButton::clicked, this, &CameraMainWindow::startProfileMeasurement);
+    connect(angle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Angle, tr("请选择端点、顶点和端点")); });
+    connect(rectangle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Rectangle, tr("请选择矩形的两个对角点")); });
+    connect(polygon, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polygon, tr("依次选择顶点，双击完成多边形")); });
+    connect(point, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Point, tr("请选择需要记录坐标的点")); });
+    connect(polyline, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
+    connect(circle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
+    connect(ellipse, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
+    connect(canvas_, &ImageCanvas::toolChanged, page, [tool_buttons](CanvasTool tool) {
+        tool_buttons->setExclusive(false);
+        for (QAbstractButton* button : tool_buttons->buttons()) {
+            button->setChecked(tool_buttons->id(button) == static_cast<int>(tool));
+        }
+        tool_buttons->setExclusive(true);
+    });
     connect(edge_snap_check_, &QCheckBox::toggled, this, [this](bool enabled) {
         canvas_->setEdgeSnappingEnabled(enabled);
         statusBar()->showMessage(enabled ? tr("自动寻边已开启") : tr("自动寻边已关闭"), 2500);
@@ -1390,6 +1433,7 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
 void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
 {
     if (!currentVisibleFrame().IsValid()) {
+        canvas_->setTool(CanvasTool::None);
         QMessageBox::information(this, tr("测量"), tr("请先打开图像或连接相机。"));
         return;
     }
