@@ -3166,6 +3166,11 @@ int main()
     document.polygon_measurements.emplace_back(
         L"Polygon 1",
         std::vector<ImagePoint>{ImagePoint{0.0, 0.0}, ImagePoint{10.0, 0.0}, ImagePoint{10.0, 10.0}, ImagePoint{0.0, 10.0}});
+    document.point_measurements.emplace_back(L"Point 1", ImagePoint{7.0, 9.0});
+    document.polyline_measurements.emplace_back(
+        L"Polyline 1", std::vector<ImagePoint>{{0.0, 0.0}, {3.0, 4.0}, {6.0, 4.0}});
+    document.circle_measurements.emplace_back(L"Circle 1", ImagePoint{10.0, 10.0}, ImagePoint{13.0, 14.0});
+    document.ellipse_measurements.emplace_back(L"Ellipse 1", ImagePoint{2.0, 3.0}, ImagePoint{12.0, 9.0});
     document.dye_profiles.push_back(DyeProfile{L"Custom Green", 488.0, 520.0, RgbColor{20, 240, 90}});
     document.processing_settings.edf_focus_radius = 4;
     document.processing_settings.stitch_search_percent = 35;
@@ -3202,6 +3207,10 @@ int main()
         loaded_document.angle_measurements.size() != 1 ||
         loaded_document.rectangle_measurements.size() != 1 ||
         loaded_document.polygon_measurements.size() != 1 ||
+        loaded_document.point_measurements.size() != 1 ||
+        loaded_document.polyline_measurements.size() != 1 ||
+        loaded_document.circle_measurements.size() != 1 ||
+        loaded_document.ellipse_measurements.size() != 1 ||
         loaded_document.dye_profiles.size() != 1 ||
         loaded_document.fluorescence_channels.size() != 1 ||
         loaded_document.measurements[0].Name() != document.measurements[0].Name() ||
@@ -3210,6 +3219,10 @@ int main()
         !Near(loaded_document.rectangle_measurements[0].PixelArea(), 200.0) ||
         !Near(loaded_document.polygon_measurements[0].PixelArea(), 100.0) ||
         loaded_document.polygon_measurements[0].Points().size() != 4 ||
+        !Near(loaded_document.point_measurements[0].Point().x, 7.0) ||
+        !Near(loaded_document.polyline_measurements[0].PixelLength(), 8.0) ||
+        !Near(loaded_document.circle_measurements[0].PixelRadius(), 5.0) ||
+        !Near(loaded_document.ellipse_measurements[0].PixelArea(), 15.0 * 3.14159265358979323846) ||
         loaded_document.dye_profiles[0].name != L"Custom Green" ||
         !Near(loaded_document.dye_profiles[0].excitation_nm, 488.0) ||
         !Near(loaded_document.dye_profiles[0].emission_nm, 520.0) ||
@@ -3232,6 +3245,10 @@ int main()
     MeasurementCollection project_measurements;
     project_measurements.AddLength(L"Mapped Length", ImagePoint{0.0, 0.0}, ImagePoint{8.0, 0.0});
     project_measurements.AddAngle(L"Mapped Angle", ImagePoint{1.0, 0.0}, ImagePoint{0.0, 0.0}, ImagePoint{0.0, 1.0});
+    project_measurements.AddPoint(L"Mapped Point", ImagePoint{2.0, 3.0});
+    project_measurements.AddPolyline(L"Mapped Polyline", {{0.0, 0.0}, {3.0, 4.0}});
+    project_measurements.AddCircle(L"Mapped Circle", ImagePoint{0.0, 0.0}, ImagePoint{5.0, 0.0});
+    project_measurements.AddEllipse(L"Mapped Ellipse", ImagePoint{0.0, 0.0}, ImagePoint{10.0, 6.0});
     FluorescenceChannel mapped_channel;
     mapped_channel.name = L"Mapped Channel";
     mapped_channel.color = RgbColor{9, 8, 7};
@@ -3260,6 +3277,10 @@ int main()
         false);
     if (mapped_document.measurements.size() != 1 ||
         mapped_document.angle_measurements.size() != 1 ||
+        mapped_document.point_measurements.size() != 1 ||
+        mapped_document.polyline_measurements.size() != 1 ||
+        mapped_document.circle_measurements.size() != 1 ||
+        mapped_document.ellipse_measurements.size() != 1 ||
         mapped_document.selected_objective != L"63x Oil" ||
         mapped_document.objective_calibrations.size() != mapped_objective_labels.size() ||
         mapped_document.objective_calibrations[1].objective != L"20x Oil" ||
@@ -3305,6 +3326,10 @@ int main()
         !Near(project_load.session_state.calibration.MicronsPerPixel(), 0.125) ||
         project_load.session_state.measurements.LengthCount() != 1 ||
         project_load.session_state.measurements.AngleCount() != 1 ||
+        project_load.session_state.measurements.PointCount() != 1 ||
+        project_load.session_state.measurements.PolylineCount() != 1 ||
+        project_load.session_state.measurements.CircleCount() != 1 ||
+        project_load.session_state.measurements.EllipseCount() != 1 ||
         project_load.session_state.dye_profiles.size() != 1 ||
         project_load.session_state.fluorescence_channels.size() != 1 ||
         project_load.session_state.fluorescence_channels[0].name != L"Mapped Channel" ||
@@ -4773,6 +4798,10 @@ int main()
     csv_measurements.AddPolygonArea(
         L"CSV Polygon",
         std::vector<ImagePoint>{ImagePoint{0.0, 0.0}, ImagePoint{4.0, 0.0}, ImagePoint{4.0, 4.0}});
+    csv_measurements.AddPoint(L"CSV Point", ImagePoint{8.0, 9.0});
+    csv_measurements.AddPolyline(L"CSV Polyline", {{0.0, 0.0}, {3.0, 4.0}});
+    csv_measurements.AddCircle(L"CSV Circle", ImagePoint{0.0, 0.0}, ImagePoint{5.0, 0.0});
+    csv_measurements.AddEllipse(L"CSV Ellipse", ImagePoint{0.0, 0.0}, ImagePoint{10.0, 6.0});
     const std::filesystem::path csv_path =
         std::filesystem::temp_directory_path() / "CameraViewDomainTests.csv";
     if (!MeasurementCsvExporter::Save(
@@ -4800,7 +4829,12 @@ int main()
         csv_text.find("Points,Objective,MicronsPerPixel") == std::string::npos ||
         csv_text.find("\"CSV, \"\"Length\"\"\"") == std::string::npos ||
         csv_text.find("\"63x, Oil\"") == std::string::npos ||
-        csv_text.find("0.0000:0.0000;4.0000:0.0000;4.0000:4.0000") == std::string::npos) {
+        csv_text.find("0.0000:0.0000;4.0000:0.0000;4.0000:4.0000") == std::string::npos ||
+        csv_text.find("CSV Point,Point") == std::string::npos ||
+        csv_text.find("CSV Polyline,Polyline") == std::string::npos ||
+        csv_text.find("CSV Circle,Circle") == std::string::npos ||
+        csv_text.find("CSV Ellipse,Ellipse") == std::string::npos ||
+        csv_text.find("MicronsPerPixel,Metrics") == std::string::npos) {
         return Fail("CSV export did not preserve BOM, escaping, or polygon point list.");
     }
 

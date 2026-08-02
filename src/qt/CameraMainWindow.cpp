@@ -41,6 +41,7 @@
 #include <QImageWriter>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLineF>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
@@ -51,6 +52,7 @@
 #include <QPushButton>
 #include <QPainter>
 #include <QSaveFile>
+#include <QShortcut>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
@@ -191,6 +193,38 @@ void CameraMainWindow::setupUi()
     connect(canvas_, &ImageCanvas::zoomChanged, this, [this](double zoom) {
         zoom_label_->setText(tr("缩放 %1%").arg(qRound(zoom * 100.0)));
     });
+    connect(canvas_, &ImageCanvas::edgeSnapEvaluated, this,
+        [this](bool snapped, const QPointF& original, const QPointF& result, double) {
+            if (snapped) {
+                statusBar()->showMessage(tr("自动寻边：已从 (%1, %2) 吸附到 (%3, %4)")
+                    .arg(original.x(), 0, 'f', 1).arg(original.y(), 0, 'f', 1)
+                    .arg(result.x(), 0, 'f', 1).arg(result.y(), 0, 'f', 1), 2500);
+            } else {
+                statusBar()->showMessage(tr("自动寻边：附近未发现清晰边缘，保留原始落点"), 2500);
+            }
+        });
+    connect(canvas_, &ImageCanvas::overlayPointMoved, this,
+        [this](int sourceIndex, int pointIndex, const QPointF& point, bool finished) {
+            if (sourceIndex < 0) return;
+            const auto reference = measurements_.AtFlatIndex(static_cast<std::size_t>(sourceIndex));
+            if (!reference) return;
+            EditablePoint editablePoint = EditablePoint::None;
+            if (reference->kind == MeasurementKind::Angle) {
+                editablePoint = pointIndex == 0 ? EditablePoint::First :
+                    (pointIndex == 1 ? EditablePoint::Vertex : EditablePoint::Second);
+            } else if (reference->kind == MeasurementKind::Length ||
+                reference->kind == MeasurementKind::RectangleArea ||
+                reference->kind == MeasurementKind::Circle ||
+                reference->kind == MeasurementKind::Ellipse) {
+                editablePoint = pointIndex == 0 ? EditablePoint::First : EditablePoint::Second;
+            }
+            if (measurements_.SetPoint(*reference, editablePoint,
+                    static_cast<std::size_t>(std::max(0, pointIndex)), imagePoint(point))) {
+                measurement_list_->setCurrentRow(sourceIndex);
+                updateMeasurementList();
+                if (finished) statusBar()->showMessage(tr("测量点位置已更新"), 2500);
+            }
+        });
 
     function_dock_ = new QDockWidget(tr("工作区"), this);
     function_dock_->setObjectName(QStringLiteral("FunctionDock"));
@@ -221,6 +255,7 @@ void CameraMainWindow::setupUi()
         [this](CanvasTool tool, const QString& hint) {
             if (tool == CanvasTool::None) {
                 ai_annotation_active_ = false;
+                canvas_->setEdgeSnappingEnabled(edge_snap_check_ && edge_snap_check_->isChecked());
                 canvas_->setTool(CanvasTool::None);
                 statusBar()->showMessage(hint, 4000);
                 return;
@@ -232,6 +267,7 @@ void CameraMainWindow::setupUi()
                 return;
             }
             ai_annotation_active_ = true;
+            canvas_->setEdgeSnappingEnabled(false);
             canvas_->setTool(tool);
             statusBar()->showMessage(hint);
         });
@@ -786,15 +822,38 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* angle = new QPushButton(tr("角度"));
     auto* rectangle = new QPushButton(tr("矩形面积"));
     auto* polygon = new QPushButton(tr("多边形面积（双击完成）"));
+    auto* point = new QPushButton(tr("点坐标"));
+    auto* polyline = new QPushButton(tr("折线长度（双击完成）"));
+    auto* circle = new QPushButton(tr("圆"));
+    auto* ellipse = new QPushButton(tr("椭圆"));
     tool_layout->addWidget(buttonRow({length, profile, angle}));
     tool_layout->addWidget(buttonRow({rectangle, polygon}));
+    tool_layout->addWidget(buttonRow({point, circle, ellipse}));
+    tool_layout->addWidget(polyline);
     display_unit_combo_ = new QComboBox;
     display_unit_combo_->addItems({tr("像素"), tr("µm"), tr("mm")});
     display_unit_combo_->setCurrentIndex(1);
-    tool_layout->addWidget(display_unit_combo_);
+    auto* display_unit_row = new QFormLayout;
+    display_unit_row->addRow(tr("显示单位"), display_unit_combo_);
+    tool_layout->addLayout(display_unit_row);
     layout->addWidget(tool_group);
 
+    auto* edge_group = new QGroupBox(tr("自动寻边"));
+    auto* edge_form = new QFormLayout(edge_group);
+    edge_snap_check_ = new QCheckBox(tr("落点吸附到附近最清晰的边缘"));
+    edge_snap_radius_spin_ = new QSpinBox;
+    edge_snap_radius_spin_->setRange(2, 40);
+    edge_snap_radius_spin_->setValue(12);
+    edge_snap_radius_spin_->setSuffix(tr(" px"));
+    edge_form->addRow(edge_snap_check_);
+    edge_form->addRow(tr("搜索半径"), edge_snap_radius_spin_);
+    layout->addWidget(edge_group);
+
+    measurement_count_label_ = new QLabel(tr("测量结果（0）"));
+    layout->addWidget(measurement_count_label_);
     measurement_list_ = new QListWidget;
+    measurement_list_->setAlternatingRowColors(true);
+    measurement_list_->setToolTip(tr("单击高亮，双击在图像中定位；F2 重命名，Delete 删除"));
     layout->addWidget(measurement_list_, 1);
     auto* rename_selected = new QPushButton(tr("重命名"));
     auto* delete_selected = new QPushButton(tr("删除选中"));
@@ -817,6 +876,16 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(angle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Angle, tr("请选择端点、顶点和端点")); });
     connect(rectangle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Rectangle, tr("请选择矩形的两个对角点")); });
     connect(polygon, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polygon, tr("依次选择顶点，双击完成多边形")); });
+    connect(point, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Point, tr("请选择需要记录坐标的点")); });
+    connect(polyline, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
+    connect(circle, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
+    connect(ellipse, &QPushButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
+    connect(edge_snap_check_, &QCheckBox::toggled, this, [this](bool enabled) {
+        canvas_->setEdgeSnappingEnabled(enabled);
+        statusBar()->showMessage(enabled ? tr("自动寻边已开启") : tr("自动寻边已关闭"), 2500);
+    });
+    connect(edge_snap_radius_spin_, qOverload<int>(&QSpinBox::valueChanged),
+        canvas_, &ImageCanvas::setEdgeSnapRadius);
     connect(display_unit_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         display_unit_ = index == 0 ? MeasurementUnit::Pixels :
             (index == 1 ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters);
@@ -838,8 +907,14 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         }
     };
     connect(rename_selected, &QPushButton::clicked, this, rename_current);
+    connect(measurement_list_, &QListWidget::currentRowChanged, this,
+        [this](int) { rebuildOverlays(); });
     connect(measurement_list_, &QListWidget::itemDoubleClicked, this,
-        [rename_current](QListWidgetItem*) { rename_current(); });
+        [this](QListWidgetItem*) { focusSelectedMeasurement(); });
+    auto* rename_shortcut = new QShortcut(QKeySequence(Qt::Key_F2), measurement_list_);
+    connect(rename_shortcut, &QShortcut::activated, this, rename_current);
+    auto* delete_shortcut = new QShortcut(QKeySequence::Delete, measurement_list_);
+    connect(delete_shortcut, &QShortcut::activated, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(delete_selected, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearMeasurements);
     connect(export_csv, &QPushButton::clicked, this, &CameraMainWindow::exportMeasurements);
@@ -921,8 +996,19 @@ void CameraMainWindow::exportImage()
         }
         painter.setPen(QPen(overlay.color, pen_width));
         painter.setBrush(Qt::NoBrush);
-        if (overlay.kind == CanvasTool::Rectangle && overlay.points.size() >= 2) {
-            painter.drawRect(QRectF(overlay.points[0], overlay.points[1]).normalized());
+        if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse) &&
+            overlay.points.size() >= 2) {
+            const QRectF bounds = QRectF(overlay.points[0], overlay.points[1]).normalized();
+            if (overlay.kind == CanvasTool::Ellipse) painter.drawEllipse(bounds);
+            else painter.drawRect(bounds);
+        } else if (overlay.kind == CanvasTool::Circle && overlay.points.size() >= 2) {
+            const double radius = QLineF(overlay.points[0], overlay.points[1]).length();
+            painter.drawEllipse(overlay.points[0], radius, radius);
+            painter.drawLine(overlay.points[0], overlay.points[1]);
+        } else if (overlay.kind == CanvasTool::Point) {
+            const double arm = pen_width * 4.0;
+            painter.drawLine(overlay.points[0] + QPointF(-arm, 0.0), overlay.points[0] + QPointF(arm, 0.0));
+            painter.drawLine(overlay.points[0] + QPointF(0.0, -arm), overlay.points[0] + QPointF(0.0, arm));
         } else if (overlay.kind == CanvasTool::Polygon && overlay.points.size() >= 3) {
             painter.drawPolygon(QPolygonF(overlay.points));
         } else {
@@ -1106,10 +1192,12 @@ ImageFrame CameraMainWindow::currentVisibleFrame() const
 
 void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
 {
+    std::optional<MeasurementReference> added_measurement;
     if (ai_annotation_active_ && yolo_workspace_ &&
         (tool == CanvasTool::Rectangle || tool == CanvasTool::Polygon)) {
         ai_annotation_active_ = false;
         canvas_->setTool(CanvasTool::None);
+        canvas_->setEdgeSnappingEnabled(edge_snap_check_ && edge_snap_check_->isChecked());
         yolo_workspace_->acceptCanvasAnnotation(tool, std::move(points));
         return;
     }
@@ -1139,18 +1227,22 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
         rebuildOverlays();
         statusBar()->showMessage(tr("剖线测量已生成"), 4000);
     } else if (tool == CanvasTool::Length && points.size() == 2) {
+        added_measurement = MeasurementReference{MeasurementKind::Length, measurements_.LengthCount()};
         measurements_.AddLength(
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::Length, measurements_),
             imagePoint(points[0]), imagePoint(points[1]));
     } else if (tool == CanvasTool::Angle && points.size() == 3) {
+        added_measurement = MeasurementReference{MeasurementKind::Angle, measurements_.AngleCount()};
         measurements_.AddAngle(
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::Angle, measurements_),
             imagePoint(points[0]), imagePoint(points[1]), imagePoint(points[2]));
     } else if (tool == CanvasTool::Rectangle && points.size() == 2) {
+        added_measurement = MeasurementReference{MeasurementKind::RectangleArea, measurements_.RectangleCount()};
         measurements_.AddRectangleArea(
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::RectangleArea, measurements_),
             imagePoint(points[0]), imagePoint(points[1]));
     } else if (tool == CanvasTool::Polygon && points.size() >= 3) {
+        added_measurement = MeasurementReference{MeasurementKind::PolygonArea, measurements_.PolygonCount()};
         std::vector<ImagePoint> polygon;
         polygon.reserve(static_cast<std::size_t>(points.size()));
         for (const QPointF& point : points) {
@@ -1159,9 +1251,35 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
         measurements_.AddPolygonArea(
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::PolygonArea, measurements_),
             std::move(polygon));
+    } else if (tool == CanvasTool::Point && points.size() == 1) {
+        added_measurement = MeasurementReference{MeasurementKind::Point, measurements_.PointCount()};
+        measurements_.AddPoint(
+            MeasurementNameFormatter::NextDefaultName(MeasurementKind::Point, measurements_),
+            imagePoint(points[0]));
+    } else if (tool == CanvasTool::Polyline && points.size() >= 2) {
+        added_measurement = MeasurementReference{MeasurementKind::Polyline, measurements_.PolylineCount()};
+        std::vector<ImagePoint> polyline;
+        polyline.reserve(static_cast<std::size_t>(points.size()));
+        for (const QPointF& point : points) polyline.push_back(imagePoint(point));
+        measurements_.AddPolyline(
+            MeasurementNameFormatter::NextDefaultName(MeasurementKind::Polyline, measurements_),
+            std::move(polyline));
+    } else if (tool == CanvasTool::Circle && points.size() == 2) {
+        added_measurement = MeasurementReference{MeasurementKind::Circle, measurements_.CircleCount()};
+        measurements_.AddCircle(
+            MeasurementNameFormatter::NextDefaultName(MeasurementKind::Circle, measurements_),
+            imagePoint(points[0]), imagePoint(points[1]));
+    } else if (tool == CanvasTool::Ellipse && points.size() == 2) {
+        added_measurement = MeasurementReference{MeasurementKind::Ellipse, measurements_.EllipseCount()};
+        measurements_.AddEllipse(
+            MeasurementNameFormatter::NextDefaultName(MeasurementKind::Ellipse, measurements_),
+            imagePoint(points[0]), imagePoint(points[1]));
     }
     canvas_->setTool(CanvasTool::None);
     updateMeasurementList();
+    if (added_measurement) {
+        measurement_list_->setCurrentRow(static_cast<int>(measurements_.FlatIndexOf(*added_measurement)));
+    }
 }
 
 void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
@@ -1171,6 +1289,7 @@ void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
         return;
     }
     ai_annotation_active_ = false;
+    canvas_->setEdgeSnappingEnabled(edge_snap_check_ && edge_snap_check_->isChecked());
     canvas_->setTool(tool);
     statusBar()->showMessage(hint);
 }
@@ -1184,6 +1303,9 @@ void CameraMainWindow::updateMeasurementList()
     for (const std::wstring& line : lines) {
         measurement_list_->addItem(QString::fromStdWString(line));
     }
+    if (measurement_count_label_) {
+        measurement_count_label_->setText(tr("测量结果（%1）").arg(measurement_list_->count()));
+    }
     if (measurement_list_->count() > 0) {
         measurement_list_->setCurrentRow(std::clamp(previous, 0, measurement_list_->count() - 1));
     }
@@ -1193,20 +1315,27 @@ void CameraMainWindow::updateMeasurementList()
 QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
 {
     QVector<CanvasOverlay> overlays;
+    const int selected = measurement_list_ ? measurement_list_->currentRow() : -1;
+    auto append = [&overlays, selected](CanvasOverlay overlay) {
+        overlay.highlighted = overlays.size() == selected;
+        overlay.editable = true;
+        overlay.source_index = overlays.size();
+        overlays.push_back(std::move(overlay));
+    };
     for (const LengthMeasurement& measurement : measurements_.Lengths()) {
         const MeasurementResult result = measurement.Evaluate(calibration_, display_unit_);
-        overlays.push_back({CanvasTool::Length,
+        append({CanvasTool::Length,
             {{measurement.First().x, measurement.First().y}, {measurement.Second().x, measurement.Second().y}},
             QString::fromStdWString(MeasurementFormatter::FormatResultLine(result)), QColor(76, 201, 240)});
     }
     for (const AngleMeasurement& measurement : measurements_.Angles()) {
-        overlays.push_back({CanvasTool::Angle,
+        append({CanvasTool::Angle,
             {{measurement.First().x, measurement.First().y}, {measurement.Vertex().x, measurement.Vertex().y},
                 {measurement.Second().x, measurement.Second().y}},
             QString::fromStdWString(MeasurementFormatter::FormatLine(measurement)), QColor(251, 146, 60)});
     }
     for (const RectangleAreaMeasurement& measurement : measurements_.Rectangles()) {
-        overlays.push_back({CanvasTool::Rectangle,
+        append({CanvasTool::Rectangle,
             {{measurement.First().x, measurement.First().y}, {measurement.Second().x, measurement.Second().y}},
             QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
             QColor(74, 222, 128)});
@@ -1216,14 +1345,132 @@ QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
         for (const ImagePoint& point : measurement.Points()) {
             points.push_back({point.x, point.y});
         }
-        overlays.push_back({CanvasTool::Polygon, points,
+        append({CanvasTool::Polygon, points,
             QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
             QColor(192, 132, 252)});
+    }
+    for (const PointMeasurement& measurement : measurements_.Points()) {
+        append({CanvasTool::Point, {{measurement.Point().x, measurement.Point().y}},
+            QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
+            QColor(250, 204, 21)});
+    }
+    for (const PolylineMeasurement& measurement : measurements_.Polylines()) {
+        QVector<QPointF> points;
+        for (const ImagePoint& point : measurement.Points()) points.push_back({point.x, point.y});
+        append({CanvasTool::Polyline, points,
+            QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
+            QColor(45, 212, 191)});
+    }
+    for (const CircleMeasurement& measurement : measurements_.Circles()) {
+        append({CanvasTool::Circle,
+            {{measurement.Center().x, measurement.Center().y}, {measurement.Edge().x, measurement.Edge().y}},
+            QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
+            QColor(244, 114, 182)});
+    }
+    for (const EllipseMeasurement& measurement : measurements_.Ellipses()) {
+        append({CanvasTool::Ellipse,
+            {{measurement.First().x, measurement.First().y}, {measurement.Second().x, measurement.Second().y}},
+            QString::fromStdWString(MeasurementFormatter::FormatLine(measurement, calibration_, display_unit_)),
+            QColor(129, 140, 248)});
     }
     if (profile_line_points_.size() == 2) {
         overlays.push_back({CanvasTool::ProfileLine, profile_line_points_, tr("剖线"), QColor(255, 202, 58)});
     }
     return overlays;
+}
+
+QRectF CameraMainWindow::measurementBounds(MeasurementReference reference) const
+{
+    QVector<QPointF> points;
+    switch (reference.kind) {
+    case MeasurementKind::Length: {
+        if (reference.index >= measurements_.Lengths().size()) return {};
+        const auto& item = measurements_.Lengths()[reference.index];
+        points = {{item.First().x, item.First().y}, {item.Second().x, item.Second().y}};
+        break;
+    }
+    case MeasurementKind::Angle: {
+        if (reference.index >= measurements_.Angles().size()) return {};
+        const auto& item = measurements_.Angles()[reference.index];
+        points = {{item.First().x, item.First().y}, {item.Vertex().x, item.Vertex().y},
+            {item.Second().x, item.Second().y}};
+        break;
+    }
+    case MeasurementKind::RectangleArea: {
+        if (reference.index >= measurements_.Rectangles().size()) return {};
+        const auto& item = measurements_.Rectangles()[reference.index];
+        points = {{item.First().x, item.First().y}, {item.Second().x, item.Second().y}};
+        break;
+    }
+    case MeasurementKind::PolygonArea: {
+        if (reference.index >= measurements_.Polygons().size()) return {};
+        for (const ImagePoint& point : measurements_.Polygons()[reference.index].Points())
+            points.push_back({point.x, point.y});
+        break;
+    }
+    case MeasurementKind::Point: {
+        if (reference.index >= measurements_.Points().size()) return {};
+        const ImagePoint point = measurements_.Points()[reference.index].Point();
+        points = {{point.x, point.y}};
+        break;
+    }
+    case MeasurementKind::Polyline: {
+        if (reference.index >= measurements_.Polylines().size()) return {};
+        for (const ImagePoint& point : measurements_.Polylines()[reference.index].Points())
+            points.push_back({point.x, point.y});
+        break;
+    }
+    case MeasurementKind::Circle: {
+        if (reference.index >= measurements_.Circles().size()) return {};
+        const auto& item = measurements_.Circles()[reference.index];
+        const double radius = item.PixelRadius();
+        return QRectF(item.Center().x - radius, item.Center().y - radius,
+            radius * 2.0, radius * 2.0);
+    }
+    case MeasurementKind::Ellipse: {
+        if (reference.index >= measurements_.Ellipses().size()) return {};
+        const auto& item = measurements_.Ellipses()[reference.index];
+        return QRectF(QPointF(item.First().x, item.First().y),
+            QPointF(item.Second().x, item.Second().y)).normalized();
+    }
+    case MeasurementKind::None:
+        return {};
+    }
+    if (points.isEmpty()) return {};
+    double left = points.first().x();
+    double right = left;
+    double top = points.first().y();
+    double bottom = top;
+    for (const QPointF& point : points) {
+        left = std::min(left, point.x());
+        right = std::max(right, point.x());
+        top = std::min(top, point.y());
+        bottom = std::max(bottom, point.y());
+    }
+    constexpr double minimumSize = 12.0;
+    if (right - left < minimumSize) {
+        const double center = (left + right) / 2.0;
+        left = center - minimumSize / 2.0;
+        right = center + minimumSize / 2.0;
+    }
+    if (bottom - top < minimumSize) {
+        const double center = (top + bottom) / 2.0;
+        top = center - minimumSize / 2.0;
+        bottom = center + minimumSize / 2.0;
+    }
+    return QRectF(QPointF(left, top), QPointF(right, bottom));
+}
+
+void CameraMainWindow::focusSelectedMeasurement()
+{
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const auto reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    if (!reference) return;
+    if (canvas_->focusOnImageRect(measurementBounds(*reference))) {
+        statusBar()->showMessage(tr("已定位到测量项：%1")
+            .arg(QString::fromStdWString(measurements_.Name(*reference))), 3000);
+    }
 }
 
 void CameraMainWindow::rebuildOverlays()

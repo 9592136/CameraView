@@ -422,6 +422,23 @@ if(CAMERAVIEW_BUILD_TESTS)
         endif()
     endif()
     add_test(NAME CameraViewDomainTests COMMAND CameraViewDomainTests)
+
+    add_executable(CameraViewMeasurementExtendedTests
+        tests/measurement_extended_tests.cpp
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/domain/Measurement.cpp
+        src/domain/Measurement.h
+        src/domain/MeasurementCollection.cpp
+        src/domain/MeasurementCollection.h
+        src/domain/MeasurementFormatter.cpp
+        src/domain/MeasurementFormatter.h
+        src/domain/MeasurementNameFormatter.cpp
+        src/domain/MeasurementNameFormatter.h
+    )
+    target_include_directories(CameraViewMeasurementExtendedTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewMeasurementExtendedTests PRIVATE cxx_std_17)
+    add_test(NAME CameraViewMeasurementExtendedTests COMMAND CameraViewMeasurementExtendedTests)
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtUiSnapshot
@@ -429,6 +446,11 @@ if(CAMERAVIEW_BUILD_TESTS)
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"
             --workspace-tab 3)
     set_tests_properties(CameraViewQtUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtMeasurementUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-measurement-ui.png"
+            --workspace-tab 4)
+    set_tests_properties(CameraViewQtMeasurementUiSnapshot PROPERTIES TIMEOUT 20)
 
     add_executable(CameraViewYoloRegistryTests
         tests/yolo_model_registry_tests.cpp

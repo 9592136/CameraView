@@ -12,7 +12,11 @@ enum class MeasurementKind {
     Length,
     Angle,
     RectangleArea,
-    PolygonArea
+    PolygonArea,
+    Point,
+    Polyline,
+    Circle,
+    Ellipse
 };
 
 enum class EditablePoint {
@@ -33,11 +37,19 @@ public:
     const std::vector<AngleMeasurement>& Angles() const { return angles_; }
     const std::vector<RectangleAreaMeasurement>& Rectangles() const { return rectangles_; }
     const std::vector<PolygonAreaMeasurement>& Polygons() const { return polygons_; }
+    const std::vector<PointMeasurement>& Points() const { return points_; }
+    const std::vector<PolylineMeasurement>& Polylines() const { return polylines_; }
+    const std::vector<CircleMeasurement>& Circles() const { return circles_; }
+    const std::vector<EllipseMeasurement>& Ellipses() const { return ellipses_; }
 
     std::size_t LengthCount() const { return lengths_.size(); }
     std::size_t AngleCount() const { return angles_.size(); }
     std::size_t RectangleCount() const { return rectangles_.size(); }
     std::size_t PolygonCount() const { return polygons_.size(); }
+    std::size_t PointCount() const { return points_.size(); }
+    std::size_t PolylineCount() const { return polylines_.size(); }
+    std::size_t CircleCount() const { return circles_.size(); }
+    std::size_t EllipseCount() const { return ellipses_.size(); }
     std::size_t Count() const;
     bool Empty() const { return Count() == 0; }
 
@@ -45,13 +57,21 @@ public:
     AngleMeasurement& AddAngle(std::wstring name, ImagePoint first, ImagePoint vertex, ImagePoint second);
     RectangleAreaMeasurement& AddRectangleArea(std::wstring name, ImagePoint first, ImagePoint second);
     PolygonAreaMeasurement& AddPolygonArea(std::wstring name, std::vector<ImagePoint> points);
+    PointMeasurement& AddPoint(std::wstring name, ImagePoint point);
+    PolylineMeasurement& AddPolyline(std::wstring name, std::vector<ImagePoint> points);
+    CircleMeasurement& AddCircle(std::wstring name, ImagePoint center, ImagePoint edge);
+    EllipseMeasurement& AddEllipse(std::wstring name, ImagePoint first, ImagePoint second);
 
     void Clear();
     void SetAll(
         std::vector<LengthMeasurement> lengths,
         std::vector<AngleMeasurement> angles,
         std::vector<RectangleAreaMeasurement> rectangles,
-        std::vector<PolygonAreaMeasurement> polygons);
+        std::vector<PolygonAreaMeasurement> polygons,
+        std::vector<PointMeasurement> points = {},
+        std::vector<PolylineMeasurement> polylines = {},
+        std::vector<CircleMeasurement> circles = {},
+        std::vector<EllipseMeasurement> ellipses = {});
 
     std::optional<MeasurementReference> AtFlatIndex(std::size_t selection) const;
     std::size_t FlatIndexOf(MeasurementReference reference) const;
@@ -65,4 +85,8 @@ private:
     std::vector<AngleMeasurement> angles_;
     std::vector<RectangleAreaMeasurement> rectangles_;
     std::vector<PolygonAreaMeasurement> polygons_;
+    std::vector<PointMeasurement> points_;
+    std::vector<PolylineMeasurement> polylines_;
+    std::vector<CircleMeasurement> circles_;
+    std::vector<EllipseMeasurement> ellipses_;
 };

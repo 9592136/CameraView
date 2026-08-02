@@ -89,6 +89,8 @@ private:
     bool loadImageFile(const QString& fileName);
     ImageFrame currentVisibleFrame() const;
     QVector<CanvasOverlay> measurementOverlays() const;
+    QRectF measurementBounds(MeasurementReference reference) const;
+    void focusSelectedMeasurement();
     void rebuildOverlays();
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
@@ -157,6 +159,9 @@ private:
     QComboBox* calibration_unit_combo_ = nullptr;
     QComboBox* display_unit_combo_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
+    QLabel* measurement_count_label_ = nullptr;
+    QCheckBox* edge_snap_check_ = nullptr;
+    QSpinBox* edge_snap_radius_spin_ = nullptr;
     QLabel* calibration_label_ = nullptr;
     QAction* export_action_ = nullptr;
 

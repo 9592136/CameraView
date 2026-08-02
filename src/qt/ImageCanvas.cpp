@@ -3,9 +3,13 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QLineF>
+#include <QKeyEvent>
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace {
 
@@ -16,9 +20,13 @@ int requiredPointCount(CanvasTool tool)
     case CanvasTool::Length:
     case CanvasTool::ProfileLine:
     case CanvasTool::Rectangle:
+    case CanvasTool::Circle:
+    case CanvasTool::Ellipse:
         return 2;
     case CanvasTool::Angle:
         return 3;
+    case CanvasTool::Point:
+        return 1;
     default:
         return 0;
     }
@@ -38,10 +46,21 @@ void ImageCanvas::setImage(const QImage& image)
 {
     const bool size_changed = image_.size() != image.size();
     image_ = image;
+    grayscale_image_ = image_.convertToFormat(QImage::Format_Grayscale8);
     if (size_changed) {
         fitToView();
     }
     update();
+}
+
+void ImageCanvas::setEdgeSnappingEnabled(bool enabled)
+{
+    edge_snapping_enabled_ = enabled;
+}
+
+void ImageCanvas::setEdgeSnapRadius(int radius)
+{
+    edge_snap_radius_ = std::clamp(radius, 2, 40);
 }
 
 void ImageCanvas::setOverlays(QVector<CanvasOverlay> overlays)
@@ -54,6 +73,7 @@ void ImageCanvas::setTool(CanvasTool tool)
 {
     tool_ = tool;
     pending_points_.clear();
+    hover_image_point_valid_ = false;
     setCursor(tool == CanvasTool::None ? Qt::ArrowCursor : Qt::CrossCursor);
     update();
 }
@@ -202,7 +222,12 @@ void ImageCanvas::paintEvent(QPaintEvent*)
         drawOverlay(painter, overlay);
     }
     if (!pending_points_.isEmpty()) {
-        CanvasOverlay pending{tool_, pending_points_, tr("进行中"), QColor(255, 193, 7)};
+        QVector<QPointF> preview = pending_points_;
+        if (hover_image_point_valid_ &&
+            (preview.isEmpty() || QLineF(preview.last(), hover_image_point_).length() >= 0.01)) {
+            preview.push_back(hover_image_point_);
+        }
+        CanvasOverlay pending{tool_, preview, tr("进行中"), QColor(255, 193, 7)};
         drawOverlay(painter, pending);
     }
 }
@@ -218,13 +243,26 @@ void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) c
         points.push_back(imageToWidget(point));
     }
 
-    QPen pen(overlay.color, 2.0);
+    QPen pen(overlay.highlighted ? overlay.color.lighter(145) : overlay.color,
+        overlay.highlighted ? 3.5 : 2.0);
     pen.setCosmetic(true);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
 
-    if (overlay.kind == CanvasTool::Rectangle && points.size() >= 2) {
-        painter.drawRect(QRectF(points[0], points[1]).normalized());
+    if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse) && points.size() >= 2) {
+        if (overlay.kind == CanvasTool::Ellipse) {
+            painter.drawEllipse(QRectF(points[0], points[1]).normalized());
+        } else {
+            painter.drawRect(QRectF(points[0], points[1]).normalized());
+        }
+    } else if (overlay.kind == CanvasTool::Circle && points.size() >= 2) {
+        const double radius = QLineF(points[0], points[1]).length();
+        painter.drawEllipse(points[0], radius, radius);
+        painter.drawLine(points[0], points[1]);
+    } else if (overlay.kind == CanvasTool::Point) {
+        constexpr double arm = 8.0;
+        painter.drawLine(points[0] + QPointF(-arm, 0.0), points[0] + QPointF(arm, 0.0));
+        painter.drawLine(points[0] + QPointF(0.0, -arm), points[0] + QPointF(0.0, arm));
     } else if (overlay.kind == CanvasTool::Polygon && points.size() >= 2) {
         painter.drawPolyline(points.constData(), points.size());
         if (points.size() >= 3) {
@@ -272,11 +310,37 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
         return;
     }
     if (event->button() != Qt::LeftButton || tool_ == CanvasTool::None) {
+        if (event->button() == Qt::LeftButton && tool_ == CanvasTool::None) {
+            double bestDistance = std::numeric_limits<double>::max();
+            for (int overlayIndex = 0; overlayIndex < overlays_.size(); ++overlayIndex) {
+                const CanvasOverlay& overlay = overlays_[overlayIndex];
+                if (!overlay.editable || overlay.source_index < 0) continue;
+                for (int pointIndex = 0; pointIndex < overlay.points.size(); ++pointIndex) {
+                    const double distance = QLineF(event->position(), imageToWidget(overlay.points[pointIndex])).length();
+                    if (distance <= 10.0 && distance < bestDistance) {
+                        bestDistance = distance;
+                        dragged_overlay_index_ = overlayIndex;
+                        dragged_point_index_ = pointIndex;
+                    }
+                }
+            }
+            if (dragged_overlay_index_ >= 0) {
+                setCursor(Qt::SizeAllCursor);
+                event->accept();
+            }
+        }
         return;
     }
-    const QPointF point = widgetToImage(event->position());
+    const QPointF original = widgetToImage(event->position());
+    QPointF point = original;
     if (!containsImagePoint(point)) {
         return;
+    }
+    if (edge_snapping_enabled_) {
+        bool snapped = false;
+        double strength = 0.0;
+        point = snapToNearestEdge(original, &snapped, &strength);
+        emit edgeSnapEvaluated(snapped, original, point, strength);
     }
     pending_points_.push_back(point);
     commitIfComplete();
@@ -288,16 +352,61 @@ void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
     const QPointF image_point = widgetToImage(event->position());
     if (containsImagePoint(image_point)) {
         emit imagePositionChanged(image_point);
+        bool ignored = false;
+        double ignoredStrength = 0.0;
+        hover_image_point_ = edge_snapping_enabled_
+            ? snapToNearestEdge(image_point, &ignored, &ignoredStrength) : image_point;
+        hover_image_point_valid_ = true;
+        if (!pending_points_.isEmpty()) update();
+    } else if (hover_image_point_valid_) {
+        hover_image_point_valid_ = false;
+        if (!pending_points_.isEmpty()) update();
     }
     if (panning_) {
         pan_ += event->position() - last_mouse_;
         last_mouse_ = event->position();
         update();
+    } else if (dragged_overlay_index_ >= 0 && dragged_point_index_ >= 0 &&
+        dragged_overlay_index_ < overlays_.size()) {
+        QPointF target = image_point;
+        if (containsImagePoint(target)) {
+            bool ignored = false;
+            double ignoredStrength = 0.0;
+            if (edge_snapping_enabled_) target = snapToNearestEdge(target, &ignored, &ignoredStrength);
+            CanvasOverlay& overlay = overlays_[dragged_overlay_index_];
+            if (dragged_point_index_ < overlay.points.size()) {
+                overlay.points[dragged_point_index_] = target;
+                emit overlayPointMoved(overlay.source_index, dragged_point_index_, target, false);
+                update();
+            }
+        }
     }
+}
+
+void ImageCanvas::keyPressEvent(QKeyEvent* event)
+{
+    if (event->key() == Qt::Key_Escape && tool_ != CanvasTool::None) {
+        setTool(CanvasTool::None);
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
 }
 
 void ImageCanvas::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::LeftButton && dragged_overlay_index_ >= 0 &&
+        dragged_overlay_index_ < overlays_.size()) {
+        const CanvasOverlay& overlay = overlays_[dragged_overlay_index_];
+        if (dragged_point_index_ >= 0 && dragged_point_index_ < overlay.points.size()) {
+            emit overlayPointMoved(overlay.source_index, dragged_point_index_,
+                overlay.points[dragged_point_index_], true);
+        }
+        dragged_overlay_index_ = -1;
+        dragged_point_index_ = -1;
+        setCursor(Qt::ArrowCursor);
+        return;
+    }
     if (panning_ && (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)) {
         panning_ = false;
         setCursor(tool_ == CanvasTool::None ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -306,12 +415,67 @@ void ImageCanvas::mouseReleaseEvent(QMouseEvent* event)
 
 void ImageCanvas::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if (tool_ == CanvasTool::Polygon && event->button() == Qt::LeftButton && pending_points_.size() >= 3) {
-        const QVector<QPointF> points = pending_points_;
+    const bool variableTool = tool_ == CanvasTool::Polygon || tool_ == CanvasTool::Polyline;
+    const int minimumPoints = tool_ == CanvasTool::Polygon ? 3 : 2;
+    if (variableTool && event->button() == Qt::LeftButton && pending_points_.size() >= minimumPoints) {
+        QVector<QPointF> points = pending_points_;
+        while (points.size() >= 2 && QLineF(points[points.size() - 2], points.last()).length() < 0.01) {
+            points.removeLast();
+        }
+        if (points.size() < minimumPoints) return;
         pending_points_.clear();
         emit pointsCommitted(tool_, points);
         update();
     }
+}
+
+QPointF ImageCanvas::snapToNearestEdge(const QPointF& point, bool* snapped, double* strength) const
+{
+    if (snapped) *snapped = false;
+    if (strength) *strength = 0.0;
+    if (grayscale_image_.isNull() || grayscale_image_.width() < 3 || grayscale_image_.height() < 3) {
+        return point;
+    }
+
+    const int centerX = qRound(point.x());
+    const int centerY = qRound(point.y());
+    const int left = std::max(1, centerX - edge_snap_radius_);
+    const int right = std::min(grayscale_image_.width() - 2, centerX + edge_snap_radius_);
+    const int top = std::max(1, centerY - edge_snap_radius_);
+    const int bottom = std::min(grayscale_image_.height() - 2, centerY + edge_snap_radius_);
+    if (left > right || top > bottom) return point;
+
+    auto valueAt = [this](int x, int y) {
+        return static_cast<int>(grayscale_image_.constScanLine(y)[x]);
+    };
+    double bestScore = 0.0;
+    double bestMagnitude = 0.0;
+    QPointF best = point;
+    for (int y = top; y <= bottom; ++y) {
+        for (int x = left; x <= right; ++x) {
+            const int gx = -valueAt(x - 1, y - 1) + valueAt(x + 1, y - 1)
+                - 2 * valueAt(x - 1, y) + 2 * valueAt(x + 1, y)
+                - valueAt(x - 1, y + 1) + valueAt(x + 1, y + 1);
+            const int gy = -valueAt(x - 1, y - 1) - 2 * valueAt(x, y - 1) - valueAt(x + 1, y - 1)
+                + valueAt(x - 1, y + 1) + 2 * valueAt(x, y + 1) + valueAt(x + 1, y + 1);
+            const double magnitude = std::hypot(static_cast<double>(gx), static_cast<double>(gy));
+            const double distance = std::hypot(x - point.x(), y - point.y());
+            const double score = magnitude - distance * 3.0;
+            if (score > bestScore) {
+                bestScore = score;
+                bestMagnitude = magnitude;
+                best = QPointF(x, y);
+            }
+        }
+    }
+
+    constexpr double minimumSobelMagnitude = 80.0;
+    if (bestMagnitude >= minimumSobelMagnitude) {
+        if (snapped) *snapped = true;
+        if (strength) *strength = bestMagnitude;
+        return best;
+    }
+    return point;
 }
 
 void ImageCanvas::commitIfComplete()

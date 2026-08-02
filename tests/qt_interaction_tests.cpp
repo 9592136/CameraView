@@ -78,6 +78,97 @@ int main(int argc, char* argv[])
         return fail("Profile-line canvas interaction did not commit two image-space endpoints.");
     }
 
+    QImage edge_image(100, 100, QImage::Format_RGB32);
+    edge_image.fill(Qt::black);
+    for (int y = 0; y < edge_image.height(); ++y) {
+        for (int x = 50; x < edge_image.width(); ++x) edge_image.setPixelColor(x, y, Qt::white);
+    }
+    canvas.resize(500, 500);
+    canvas.setImage(edge_image);
+    canvas.fitToView();
+    canvas.setEdgeSnappingEnabled(true);
+    canvas.setEdgeSnapRadius(10);
+    bool snap_reported = false;
+    bool snap_succeeded = false;
+    QObject::connect(&canvas, &ImageCanvas::edgeSnapEvaluated,
+        [&snap_reported, &snap_succeeded](bool snapped, const QPointF&, const QPointF&, double) {
+            snap_reported = true;
+            snap_succeeded = snapped;
+        });
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    canvas.setTool(CanvasTool::Point);
+    QMouseEvent edge_point(
+        QEvent::MouseButtonPress, QPointF(225.0, 250.0), QPointF(225.0, 250.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &edge_point);
+    if (!snap_reported || !snap_succeeded || committed_tool != CanvasTool::Point ||
+        committed_points.size() != 1 || committed_points[0].x() < 48.0 || committed_points[0].x() > 51.0) {
+        return fail("Automatic edge snapping did not move a point measurement to the image edge.");
+    }
+
+    canvas.setEdgeSnappingEnabled(false);
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    canvas.setTool(CanvasTool::Circle);
+    QMouseEvent circle_center(QEvent::MouseButtonPress, QPointF(100.0, 100.0), QPointF(100.0, 100.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent circle_edge(QEvent::MouseButtonPress, QPointF(200.0, 100.0), QPointF(200.0, 100.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &circle_center);
+    QApplication::sendEvent(&canvas, &circle_edge);
+    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2) {
+        return fail("Circle canvas interaction did not commit center and edge points.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    canvas.setTool(CanvasTool::Polyline);
+    QMouseEvent line_first(QEvent::MouseButtonPress, QPointF(100.0, 100.0), QPointF(100.0, 100.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent line_second(QEvent::MouseButtonPress, QPointF(200.0, 150.0), QPointF(200.0, 150.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent line_third(QEvent::MouseButtonPress, QPointF(300.0, 200.0), QPointF(300.0, 200.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent line_finish(QEvent::MouseButtonDblClick, QPointF(300.0, 200.0), QPointF(300.0, 200.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &line_first);
+    QApplication::sendEvent(&canvas, &line_second);
+    QApplication::sendEvent(&canvas, &line_third);
+    QApplication::sendEvent(&canvas, &line_finish);
+    if (committed_tool != CanvasTool::Polyline || committed_points.size() != 3) {
+        return fail("Polyline canvas interaction did not commit its variable point list.");
+    }
+
+    int moved_source = -1;
+    int moved_point = -1;
+    QPointF moved_position;
+    bool move_finished = false;
+    QObject::connect(&canvas, &ImageCanvas::overlayPointMoved,
+        [&moved_source, &moved_point, &moved_position, &move_finished](
+            int source, int pointIndex, const QPointF& position, bool finished) {
+            moved_source = source;
+            moved_point = pointIndex;
+            moved_position = position;
+            move_finished = finished;
+        });
+    canvas.setTool(CanvasTool::None);
+    canvas.setOverlays({CanvasOverlay{CanvasTool::Length, {{20.0, 20.0}, {40.0, 20.0}},
+        QStringLiteral("editable"), Qt::cyan, true, true, 3}});
+    QMouseEvent drag_press(QEvent::MouseButtonPress, QPointF(100.0, 100.0), QPointF(100.0, 100.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent drag_move(QEvent::MouseMove, QPointF(150.0, 125.0), QPointF(150.0, 125.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent drag_release(QEvent::MouseButtonRelease, QPointF(150.0, 125.0), QPointF(150.0, 125.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &drag_press);
+    QApplication::sendEvent(&canvas, &drag_move);
+    QApplication::sendEvent(&canvas, &drag_release);
+    if (moved_source != 3 || moved_point != 0 || !near(moved_position.x(), 30.0) ||
+        !near(moved_position.y(), 25.0) || !move_finished) {
+        return fail("Editable measurement overlay did not report a completed handle drag.");
+    }
+
     YoloWorkspaceWidget workspace;
     workspace.setCurrentImage(QImage(1000, 500, QImage::Format_RGB32), QStringLiteral("test"));
     QRectF requested_bounds;

@@ -26,6 +26,10 @@ struct ProjectDocument {
     std::vector<AngleMeasurement> angle_measurements;
     std::vector<RectangleAreaMeasurement> rectangle_measurements;
     std::vector<PolygonAreaMeasurement> polygon_measurements;
+    std::vector<PointMeasurement> point_measurements;
+    std::vector<PolylineMeasurement> polyline_measurements;
+    std::vector<CircleMeasurement> circle_measurements;
+    std::vector<EllipseMeasurement> ellipse_measurements;
     std::vector<DyeProfile> dye_profiles;
     std::vector<FluorescenceChannelRecipe> fluorescence_channels;
     ProjectProcessingSettings processing_settings;
