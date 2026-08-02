@@ -9,6 +9,7 @@
 #include "imaging/Fluorescence.h"
 #include "imaging/HistogramCalculator.h"
 #include "imaging/ImageAdjuster.h"
+#include "imaging/ImageFilterProcessor.h"
 #include "imaging/ImageStitcher.h"
 #include "imaging/PseudoColorMapper.h"
 #include "imaging/SmartTargetCounter.h"
@@ -36,6 +37,7 @@ class QSlider;
 class QSpinBox;
 class QTabWidget;
 class QTimer;
+class QToolBar;
 
 class CameraMainWindow final : public QMainWindow {
     Q_OBJECT
@@ -72,10 +74,15 @@ private slots:
     void clearMeasurements();
     void deleteSelectedMeasurement();
     void exportMeasurements();
+    void startSmartTargetSampleSelection();
     void runSmartTargetCounting();
     void clearSmartTargetCounting();
     void show3DView();
     void startProfileMeasurement();
+    void applySelectedImageFilter();
+    void undoImageFilter();
+    void clearImageFilters();
+    void updateImageFilterControls();
     void updateImagePresentation();
     void updateMeasurementList();
 
@@ -96,6 +103,7 @@ private:
     QRectF measurementBounds(MeasurementReference reference) const;
     void focusSelectedMeasurement();
     void updateSmartTargetUi();
+    void updateImageFilterPipelineUi();
     void rebuildOverlays();
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
@@ -128,6 +136,10 @@ private:
     QDoubleSpinBox* gain_spin_ = nullptr;
     QComboBox* palette_combo_ = nullptr;
     QComboBox* histogram_channel_combo_ = nullptr;
+    QComboBox* image_filter_combo_ = nullptr;
+    QLabel* image_filter_parameter_label_ = nullptr;
+    QSpinBox* image_filter_parameter_spin_ = nullptr;
+    QLabel* image_filter_pipeline_label_ = nullptr;
     QSlider* brightness_slider_ = nullptr;
     QSlider* contrast_slider_ = nullptr;
     QSlider* gamma_slider_ = nullptr;
@@ -177,6 +189,7 @@ private:
     QProgressBar* smart_count_progress_ = nullptr;
     QListWidget* smart_result_list_ = nullptr;
     QAction* export_action_ = nullptr;
+    QToolBar* measurement_toolbar_ = nullptr;
 
     QThread camera_thread_;
     CameraWorker* camera_worker_ = nullptr;
@@ -188,6 +201,7 @@ private:
     ImageFrame current_frame_;
     ImageFrame latest_camera_frame_;
     ImageFrame display_frame_;
+    std::vector<ImageFilterStep> image_filter_pipeline_;
     QString current_source_;
     QString current_source_identity_;
     PseudoColorPalette palette_ = PseudoColorPalette::Original;

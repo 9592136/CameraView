@@ -23,6 +23,7 @@
 #include "storage/ProjectSessionMapper.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -74,6 +75,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -134,6 +136,39 @@ QString errorText(const std::wstring& value)
     return QString::fromStdWString(value);
 }
 
+QString imageFilterName(ImageFilterKind kind)
+{
+    switch (kind) {
+    case ImageFilterKind::Grayscale: return QObject::tr("灰度");
+    case ImageFilterKind::Invert: return QObject::tr("反相");
+    case ImageFilterKind::AutoContrast: return QObject::tr("自动对比度");
+    case ImageFilterKind::HistogramEqualization: return QObject::tr("直方图均衡");
+    case ImageFilterKind::GaussianBlur: return QObject::tr("高斯平滑");
+    case ImageFilterKind::MedianDenoise: return QObject::tr("中值降噪");
+    case ImageFilterKind::Sharpen: return QObject::tr("反锐化增强");
+    case ImageFilterKind::EdgeDetection: return QObject::tr("边缘检测");
+    case ImageFilterKind::BinaryThreshold: return QObject::tr("二值化");
+    }
+    return QObject::tr("未知处理");
+}
+
+QString imageFilterStepDescription(const ImageFilterStep& step)
+{
+    const QString name = imageFilterName(step.kind);
+    switch (step.kind) {
+    case ImageFilterKind::GaussianBlur:
+    case ImageFilterKind::MedianDenoise:
+        return QObject::tr("%1（半径 %2 px）").arg(name).arg(step.parameter);
+    case ImageFilterKind::Sharpen:
+        return QObject::tr("%1（%2%）").arg(name).arg(step.parameter);
+    case ImageFilterKind::EdgeDetection:
+    case ImageFilterKind::BinaryThreshold:
+        return QObject::tr("%1（阈值 %2）").arg(name).arg(step.parameter);
+    default:
+        return name;
+    }
+}
+
 } // namespace
 
 CameraMainWindow::CameraMainWindow(QWidget* parent)
@@ -146,6 +181,7 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("state")).toByteArray());
     settings.endGroup();
+    if (measurement_toolbar_) insertToolBarBreak(measurement_toolbar_);
     setAcceptDrops(true);
 
     camera_worker_ = new CameraWorker;
@@ -410,17 +446,107 @@ void CameraMainWindow::setupMenusAndToolbar()
     QAction* fit_action = toolbar->addAction(
         style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
     fit_action->setShortcut(QKeySequence(Qt::Key_F));
-    QAction* length_action = toolbar->addAction(tr("长度"), this,
-        [this] { setMeasurementTool(CanvasTool::Length, tr("请在图像上选择两个点")); });
-    length_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Length));
-    length_action->setShortcut(QKeySequence(Qt::Key_L));
-    QAction* angle_action = toolbar->addAction(tr("角度"), this,
-        [this] { setMeasurementTool(CanvasTool::Angle, tr("请依次选择端点、顶点、端点")); });
-    angle_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Angle));
-    profile_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Profile));
-    toolbar->addAction(profile_action);
     toolbar->addSeparator();
     toolbar->addAction(surface_action);
+
+    measurement_toolbar_ = new QToolBar(tr("测量工具栏"), this);
+    measurement_toolbar_->setObjectName(QStringLiteral("MeasurementToolbar"));
+    measurement_toolbar_->setMovable(false);
+    measurement_toolbar_->setIconSize(QSize(24, 24));
+    measurement_toolbar_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    addToolBar(Qt::TopToolBarArea, measurement_toolbar_);
+    insertToolBarBreak(measurement_toolbar_);
+
+    auto* measurement_actions = new QActionGroup(measurement_toolbar_);
+    measurement_actions->setExclusive(true);
+    auto add_canvas_action = [this, measurement_actions](
+        MeasurementToolGlyph glyph,
+        CanvasTool tool,
+        const QString& text,
+        const QString& status,
+        const QKeySequence& shortcut = {}) {
+        QAction* action = measurement_toolbar_->addAction(measurementToolIcon(glyph), text);
+        action->setCheckable(true);
+        action->setData(static_cast<int>(tool));
+        action->setToolTip(status);
+        action->setStatusTip(status);
+        if (!shortcut.isEmpty()) action->setShortcut(shortcut);
+        measurement_actions->addAction(action);
+        connect(action, &QAction::triggered, this, [this, tool, status] {
+            setMeasurementTool(tool, status);
+        });
+        return action;
+    };
+    add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
+        tr("标定"), tr("在图像上选择标定线的两个端点"));
+    add_canvas_action(MeasurementToolGlyph::Point, CanvasTool::Point,
+        tr("点"), tr("记录图像中一个点的坐标"));
+    add_canvas_action(MeasurementToolGlyph::Length, CanvasTool::Length,
+        tr("长度"), tr("选择两个端点测量直线长度"), QKeySequence(Qt::Key_L));
+    add_canvas_action(MeasurementToolGlyph::Polyline, CanvasTool::Polyline,
+        tr("折线"), tr("依次选择节点，双击完成折线长度测量"));
+    add_canvas_action(MeasurementToolGlyph::Angle, CanvasTool::Angle,
+        tr("角度"), tr("依次选择端点、顶点和端点"));
+    add_canvas_action(MeasurementToolGlyph::Rectangle, CanvasTool::Rectangle,
+        tr("矩形"), tr("选择两个对角点测量矩形"));
+    add_canvas_action(MeasurementToolGlyph::Polygon, CanvasTool::Polygon,
+        tr("多边形"), tr("依次选择顶点，双击完成多边形测量"));
+    add_canvas_action(MeasurementToolGlyph::Circle, CanvasTool::Circle,
+        tr("圆"), tr("选择圆心和圆周上一点"));
+    add_canvas_action(MeasurementToolGlyph::Ellipse, CanvasTool::Ellipse,
+        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"));
+
+    profile_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Profile));
+    profile_action->setCheckable(true);
+    profile_action->setData(static_cast<int>(CanvasTool::ProfileLine));
+    profile_action->setToolTip(tr("选择两个端点分析亮度与 RGB 强度曲线"));
+    measurement_actions->addAction(profile_action);
+    measurement_toolbar_->addAction(profile_action);
+
+    QAction* smart_sample_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"));
+    smart_sample_action->setCheckable(true);
+    smart_sample_action->setData(static_cast<int>(CanvasTool::SmartCountSample));
+    smart_sample_action->setToolTip(tr("连续框选典型目标作为自动计数样本"));
+    measurement_actions->addAction(smart_sample_action);
+    connect(smart_sample_action, &QAction::triggered,
+        this, &CameraMainWindow::startSmartTargetSampleSelection);
+
+    connect(canvas_, &ImageCanvas::toolChanged, measurement_toolbar_,
+        [measurement_actions](CanvasTool tool) {
+            measurement_actions->setExclusive(false);
+            for (QAction* action : measurement_actions->actions()) {
+                action->setChecked(action->data().toInt() == static_cast<int>(tool));
+            }
+            measurement_actions->setExclusive(true);
+        });
+
+    measurement_toolbar_->addSeparator();
+    QAction* smart_run_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"));
+    smart_run_action->setToolTip(tr("根据已框选样本自动查找并统计目标"));
+    connect(smart_run_action, &QAction::triggered, this, &CameraMainWindow::runSmartTargetCounting);
+
+    QAction* edge_snap_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"));
+    edge_snap_action->setCheckable(true);
+    edge_snap_action->setToolTip(tr("将测量落点吸附到附近最清晰的边缘"));
+    connect(edge_snap_action, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
+    connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action, &QAction::setChecked);
+
+    measurement_toolbar_->addSeparator();
+    QAction* delete_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除"));
+    delete_action->setToolTip(tr("删除当前选中的测量结果"));
+    connect(delete_action, &QAction::triggered, this, &CameraMainWindow::deleteSelectedMeasurement);
+    QAction* clear_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空"));
+    clear_action->setToolTip(tr("清空全部测量结果"));
+    connect(clear_action, &QAction::triggered, this, &CameraMainWindow::clearMeasurements);
+    QAction* export_measurements_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"));
+    export_measurements_action->setToolTip(tr("导出全部测量结果为 CSV"));
+    connect(export_measurements_action, &QAction::triggered, this, &CameraMainWindow::exportMeasurements);
 }
 
 QWidget* CameraMainWindow::buildCameraPage()
@@ -514,6 +640,52 @@ QWidget* CameraMainWindow::buildImagePage()
         level_slider_->setValue(128);
         width_slider_->setValue(256);
     });
+
+    auto* filter_group = new QGroupBox(tr("快速图像处理"));
+    auto* filter_layout = new QVBoxLayout(filter_group);
+    auto* filter_form = new QFormLayout;
+    image_filter_combo_ = new QComboBox;
+    image_filter_combo_->setObjectName(QStringLiteral("ImageFilterCombo"));
+    const std::array<ImageFilterKind, 9> filter_kinds{
+        ImageFilterKind::Grayscale,
+        ImageFilterKind::Invert,
+        ImageFilterKind::AutoContrast,
+        ImageFilterKind::HistogramEqualization,
+        ImageFilterKind::GaussianBlur,
+        ImageFilterKind::MedianDenoise,
+        ImageFilterKind::Sharpen,
+        ImageFilterKind::EdgeDetection,
+        ImageFilterKind::BinaryThreshold};
+    for (const ImageFilterKind kind : filter_kinds) {
+        image_filter_combo_->addItem(imageFilterName(kind), static_cast<int>(kind));
+    }
+    image_filter_parameter_spin_ = new QSpinBox;
+    image_filter_parameter_spin_->setObjectName(QStringLiteral("ImageFilterParameterSpin"));
+    image_filter_parameter_label_ = new QLabel(tr("参数"));
+    filter_form->addRow(tr("处理功能"), image_filter_combo_);
+    filter_form->addRow(image_filter_parameter_label_, image_filter_parameter_spin_);
+    filter_layout->addLayout(filter_form);
+    auto* apply_filter = new QPushButton(tr("添加到处理链"));
+    apply_filter->setObjectName(QStringLiteral("ApplyImageFilterButton"));
+    setButtonRole(apply_filter, "primary");
+    auto* undo_filter = new QPushButton(tr("撤销一步"));
+    auto* clear_filters = new QPushButton(tr("恢复原图"));
+    filter_layout->addWidget(buttonRow({apply_filter, undo_filter, clear_filters}));
+    image_filter_pipeline_label_ = new QLabel;
+    image_filter_pipeline_label_->setObjectName(QStringLiteral("ImageFilterPipelineLabel"));
+    image_filter_pipeline_label_->setWordWrap(true);
+    image_filter_pipeline_label_->setProperty("role", QStringLiteral("summary"));
+    filter_layout->addWidget(image_filter_pipeline_label_);
+    layout->addWidget(filter_group);
+
+    connect(image_filter_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, &CameraMainWindow::updateImageFilterControls);
+    connect(apply_filter, &QPushButton::clicked, this, &CameraMainWindow::applySelectedImageFilter);
+    connect(undo_filter, &QPushButton::clicked, this, &CameraMainWindow::undoImageFilter);
+    connect(clear_filters, &QPushButton::clicked, this, &CameraMainWindow::clearImageFilters);
+    updateImageFilterControls();
+    updateImageFilterPipelineUi();
+
     connect(palette_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &CameraMainWindow::updateImagePresentation);
     connect(histogram_channel_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &CameraMainWindow::updateImagePresentation);
     histogram_ = new HistogramWidget;
@@ -977,11 +1149,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     });
     connect(edge_snap_radius_spin_, qOverload<int>(&QSpinBox::valueChanged),
         canvas_, &ImageCanvas::setEdgeSnapRadius);
-    connect(smart_select_button_, &QPushButton::clicked, this, [this] {
-        smart_count_session_active_ = true;
-        setMeasurementTool(CanvasTool::SmartCountSample,
-            tr("请选择目标外接矩形的两个对角点；可连续框选多个，按 Esc 结束"));
-    });
+    connect(smart_select_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::startSmartTargetSampleSelection);
     connect(remove_smart_sample, &QPushButton::clicked, this, [this] {
         if (smart_count_running_) {
             statusBar()->showMessage(tr("请先取消当前智能计数，再修改样本"), 3000);
@@ -1257,6 +1426,8 @@ void CameraMainWindow::setCurrentFrame(
     const QString new_identity = sourceIdentity.isEmpty() ? source : sourceIdentity;
     if (!current_source_identity_.isEmpty() && current_source_identity_ != new_identity) {
         profile_line_points_.clear();
+        image_filter_pipeline_.clear();
+        updateImageFilterPipelineUi();
         if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
         smart_target_samples_.clear();
         smart_target_result_ = {};
@@ -1276,6 +1447,124 @@ void CameraMainWindow::setCurrentFrame(
     updateImagePresentation();
 }
 
+void CameraMainWindow::updateImageFilterControls()
+{
+    if (!image_filter_combo_ || !image_filter_parameter_spin_ || !image_filter_parameter_label_) return;
+    const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
+    image_filter_parameter_spin_->setSuffix({});
+    switch (kind) {
+    case ImageFilterKind::GaussianBlur:
+        image_filter_parameter_label_->setText(tr("模糊半径"));
+        image_filter_parameter_spin_->setRange(1, 10);
+        image_filter_parameter_spin_->setValue(2);
+        image_filter_parameter_spin_->setSuffix(tr(" px"));
+        image_filter_parameter_spin_->setEnabled(true);
+        break;
+    case ImageFilterKind::MedianDenoise:
+        image_filter_parameter_label_->setText(tr("降噪半径"));
+        image_filter_parameter_spin_->setRange(1, 3);
+        image_filter_parameter_spin_->setValue(1);
+        image_filter_parameter_spin_->setSuffix(tr(" px"));
+        image_filter_parameter_spin_->setEnabled(true);
+        break;
+    case ImageFilterKind::Sharpen:
+        image_filter_parameter_label_->setText(tr("增强强度"));
+        image_filter_parameter_spin_->setRange(10, 300);
+        image_filter_parameter_spin_->setValue(100);
+        image_filter_parameter_spin_->setSuffix(tr(" %"));
+        image_filter_parameter_spin_->setEnabled(true);
+        break;
+    case ImageFilterKind::EdgeDetection:
+        image_filter_parameter_label_->setText(tr("边缘阈值（0 为连续灰度）"));
+        image_filter_parameter_spin_->setRange(0, 255);
+        image_filter_parameter_spin_->setValue(40);
+        image_filter_parameter_spin_->setEnabled(true);
+        break;
+    case ImageFilterKind::BinaryThreshold:
+        image_filter_parameter_label_->setText(tr("二值阈值"));
+        image_filter_parameter_spin_->setRange(0, 255);
+        image_filter_parameter_spin_->setValue(128);
+        image_filter_parameter_spin_->setEnabled(true);
+        break;
+    default:
+        image_filter_parameter_label_->setText(tr("参数（当前功能无需设置）"));
+        image_filter_parameter_spin_->setRange(0, 0);
+        image_filter_parameter_spin_->setValue(0);
+        image_filter_parameter_spin_->setEnabled(false);
+        break;
+    }
+}
+
+void CameraMainWindow::updateImageFilterPipelineUi()
+{
+    if (!image_filter_pipeline_label_) return;
+    if (image_filter_pipeline_.empty()) {
+        image_filter_pipeline_label_->setText(tr("处理链：无（处理为非破坏性，可随时恢复原图）"));
+        return;
+    }
+    QStringList descriptions;
+    descriptions.reserve(static_cast<qsizetype>(image_filter_pipeline_.size()));
+    for (const ImageFilterStep& step : image_filter_pipeline_) {
+        descriptions.push_back(imageFilterStepDescription(step));
+    }
+    image_filter_pipeline_label_->setText(tr("处理链（%1/12）：%2")
+        .arg(static_cast<int>(image_filter_pipeline_.size()))
+        .arg(descriptions.join(tr(" → "))));
+}
+
+void CameraMainWindow::applySelectedImageFilter()
+{
+    if (!currentVisibleFrame().IsValid()) {
+        QMessageBox::information(this, tr("图像处理"), tr("请先打开图像或连接相机。"));
+        return;
+    }
+    if (image_filter_pipeline_.size() >= 12) {
+        QMessageBox::information(this, tr("图像处理"), tr("处理链最多包含 12 个步骤，请先撤销或恢复原图。"));
+        return;
+    }
+    const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
+    image_filter_pipeline_.push_back({kind, image_filter_parameter_spin_->value()});
+    if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+    smart_target_result_ = {};
+    ++image_generation_;
+    updateImageFilterPipelineUi();
+    updateSmartTargetUi();
+    updateImagePresentation();
+    statusBar()->showMessage(tr("已添加图像处理：%1").arg(imageFilterName(kind)), 3500);
+}
+
+void CameraMainWindow::undoImageFilter()
+{
+    if (image_filter_pipeline_.empty()) {
+        statusBar()->showMessage(tr("当前没有可撤销的图像处理"), 2500);
+        return;
+    }
+    image_filter_pipeline_.pop_back();
+    if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+    smart_target_result_ = {};
+    ++image_generation_;
+    updateImageFilterPipelineUi();
+    updateSmartTargetUi();
+    updateImagePresentation();
+    statusBar()->showMessage(tr("已撤销上一步图像处理"), 2500);
+}
+
+void CameraMainWindow::clearImageFilters()
+{
+    if (image_filter_pipeline_.empty()) {
+        statusBar()->showMessage(tr("当前已经是未滤镜处理状态"), 2500);
+        return;
+    }
+    image_filter_pipeline_.clear();
+    if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+    smart_target_result_ = {};
+    ++image_generation_;
+    updateImageFilterPipelineUi();
+    updateSmartTargetUi();
+    updateImagePresentation();
+    statusBar()->showMessage(tr("已清除处理链并恢复原图"), 3000);
+}
+
 void CameraMainWindow::updateImagePresentation()
 {
     adjustments_.brightness = brightness_slider_ ? brightness_slider_->value() : 0;
@@ -1290,11 +1579,14 @@ void CameraMainWindow::updateImagePresentation()
         histogram_channel_ = static_cast<HistogramChannel>(histogram_channel_combo_->currentIndex());
     }
 
-    if (fusion_enabled_ && !channels_.empty()) {
-        display_frame_ = ChannelFusionEngine::Fuse(channels_);
-    } else if (current_frame_.IsValid()) {
-        ImageFrame adjusted = ApplyAdjustments(current_frame_, adjustments_);
-        display_frame_ = PseudoColorMapper::Apply(adjusted, palette_);
+    const bool showing_fusion = fusion_enabled_ && !channels_.empty();
+    ImageFrame presentation_source = showing_fusion
+        ? ChannelFusionEngine::Fuse(channels_) : current_frame_;
+    if (presentation_source.IsValid()) {
+        ImageFrame adjusted = showing_fusion
+            ? std::move(presentation_source) : ApplyAdjustments(presentation_source, adjustments_);
+        ImageFrame filtered = ImageFilterProcessor::ApplyPipeline(adjusted, image_filter_pipeline_);
+        display_frame_ = showing_fusion ? std::move(filtered) : PseudoColorMapper::Apply(filtered, palette_);
     } else {
         display_frame_ = {};
     }
@@ -1711,6 +2003,18 @@ void CameraMainWindow::updateSmartTargetUi()
     if (smart_similarity_spin_) smart_similarity_spin_->setEnabled(!smart_count_running_);
     if (smart_scale_tolerance_spin_) smart_scale_tolerance_spin_->setEnabled(!smart_count_running_);
     if (smart_count_progress_) smart_count_progress_->setVisible(smart_count_running_);
+}
+
+void CameraMainWindow::startSmartTargetSampleSelection()
+{
+    if (!currentVisibleFrame().IsValid()) {
+        setMeasurementTool(CanvasTool::SmartCountSample,
+            tr("请选择目标外接矩形的两个对角点"));
+        return;
+    }
+    smart_count_session_active_ = true;
+    setMeasurementTool(CanvasTool::SmartCountSample,
+        tr("请选择目标外接矩形的两个对角点；可连续框选多个，按 Esc 结束"));
 }
 
 void CameraMainWindow::runSmartTargetCounting()

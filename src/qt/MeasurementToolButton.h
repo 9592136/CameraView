@@ -14,7 +14,12 @@ enum class MeasurementToolGlyph {
     Polyline,
     Circle,
     Ellipse,
-    SmartCount
+    SmartCount,
+    SmartCountRun,
+    EdgeSnap,
+    DeleteMeasurement,
+    ClearMeasurements,
+    ExportCsv
 };
 
 QIcon measurementToolIcon(MeasurementToolGlyph glyph);

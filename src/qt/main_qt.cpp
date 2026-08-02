@@ -17,6 +17,7 @@
 #include <QScrollArea>
 #include <QTabWidget>
 #include <QTimer>
+#include <QToolBar>
 
 namespace {
 
@@ -129,11 +130,15 @@ int main(int argc, char* argv[])
         QStringLiteral("focus-widget"),
         QStringLiteral("Scroll a named widget into view before rendering a UI snapshot."),
         QStringLiteral("object-name"));
+    const QCommandLineOption verify_measurement_toolbar(
+        QStringLiteral("verify-measurement-toolbar"),
+        QStringLiteral("Verify that every measurement function is represented in the toolbar."));
     parser.addOption(smoke_test);
     parser.addOption(import_yolo_manifest);
     parser.addOption(ui_snapshot);
     parser.addOption(workspace_tab);
     parser.addOption(focus_widget);
+    parser.addOption(verify_measurement_toolbar);
     parser.process(application);
 
     if (parser.isSet(import_yolo_manifest)) {
@@ -141,6 +146,35 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
+    if (parser.isSet(verify_measurement_toolbar)) {
+        const QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
+        const QStringList required{
+            QStringLiteral("标定"), QStringLiteral("点"), QStringLiteral("长度"), QStringLiteral("折线"),
+            QStringLiteral("角度"), QStringLiteral("矩形"), QStringLiteral("多边形"), QStringLiteral("圆"),
+            QStringLiteral("椭圆"), QStringLiteral("剖线测量"), QStringLiteral("智能框选"),
+            QStringLiteral("开始计数"), QStringLiteral("自动寻边"), QStringLiteral("删除"),
+            QStringLiteral("清空"), QStringLiteral("导出 CSV")};
+        QStringList actual;
+        bool icons_complete = toolbar != nullptr;
+        if (toolbar) {
+            for (const QAction* action : toolbar->actions()) {
+                if (action->isSeparator()) continue;
+                actual.push_back(action->text());
+                icons_complete = icons_complete && !action->icon().isNull();
+            }
+        }
+        for (const QString& name : required) {
+            if (!actual.contains(name)) {
+                qCritical().noquote() << QStringLiteral("Measurement toolbar is missing: %1").arg(name);
+                return 5;
+            }
+        }
+        if (!icons_complete || actual.size() != required.size()) {
+            qCritical() << "Measurement toolbar action or icon coverage is incomplete.";
+            return 5;
+        }
+        return 0;
+    }
     if (parser.isSet(workspace_tab)) {
         bool valid = false;
         const int index = parser.value(workspace_tab).toInt(&valid);

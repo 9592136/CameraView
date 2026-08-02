@@ -122,6 +122,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/HistogramCalculator.cpp
     src/imaging/HistogramCalculator.h
     src/imaging/ImageAdjuster.h
+    src/imaging/ImageFilterProcessor.cpp
+    src/imaging/ImageFilterProcessor.h
     src/imaging/StitchTileListActions.cpp
     src/imaging/StitchTileListActions.h
     src/imaging/StitchTilePlacementPlanner.cpp
@@ -226,6 +228,8 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/FluorescenceFormatter.h
     src/imaging/HistogramCalculator.cpp
     src/imaging/HistogramCalculator.h
+    src/imaging/ImageFilterProcessor.cpp
+    src/imaging/ImageFilterProcessor.h
     src/imaging/ImageRegistration.cpp
     src/imaging/ImageRegistration.h
     src/imaging/ImageProfileSampler.cpp
@@ -474,8 +478,31 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_link_libraries(CameraViewMeasurementToolIconTests PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
     add_test(NAME CameraViewMeasurementToolIconTests COMMAND CameraViewMeasurementToolIconTests)
 
+    add_executable(CameraViewImageFilterTests
+        tests/image_filter_processor_tests.cpp
+        src/imaging/ImageFilterProcessor.cpp
+        src/imaging/ImageFilterProcessor.h
+    )
+    target_include_directories(CameraViewImageFilterTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewImageFilterTests PRIVATE cxx_std_17)
+    if(CAMERAVIEW_OPENCV_AVAILABLE)
+        target_compile_definitions(CameraViewImageFilterTests PRIVATE CAMERAVIEW_WITH_OPENCV)
+        target_include_directories(CameraViewImageFilterTests PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(CameraViewImageFilterTests PRIVATE ${OpenCV_LIBS})
+        if(WIN32 AND CAMERAVIEW_OPENCV_RUNTIME_DLLS)
+            add_custom_command(TARGET CameraViewImageFilterTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${CAMERAVIEW_OPENCV_RUNTIME_DLLS}
+                    "$<TARGET_FILE_DIR:CameraViewImageFilterTests>")
+        endif()
+    endif()
+    add_test(NAME CameraViewImageFilterTests COMMAND CameraViewImageFilterTests)
+
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewMeasurementToolbarCoverage
+        COMMAND CameraView --verify-measurement-toolbar)
+    set_tests_properties(CameraViewMeasurementToolbarCoverage PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtUiSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"
@@ -486,6 +513,12 @@ if(CAMERAVIEW_BUILD_TESTS)
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-measurement-ui.png"
             --workspace-tab 4)
     set_tests_properties(CameraViewQtMeasurementUiSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtImageFilterUiSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-image-filter-ui.png"
+            --workspace-tab 1
+            --focus-widget ImageFilterPipelineLabel)
+    set_tests_properties(CameraViewQtImageFilterUiSnapshot PROPERTIES TIMEOUT 20)
     add_test(NAME CameraViewQtSmartCountUiSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-smart-count-ui.png"

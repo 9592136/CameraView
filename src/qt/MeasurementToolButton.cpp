@@ -144,6 +144,54 @@ public:
             painter->drawLine(QPointF(30, 23), QPointF(30, 29));
             painter->drawLine(QPointF(30, 29), QPointF(24, 29));
             break;
+        case MeasurementToolGlyph::SmartCountRun:
+            painter->drawEllipse(QRectF(4, 5, 7, 7));
+            painter->drawEllipse(QRectF(13, 5, 7, 7));
+            painter->drawEllipse(QRectF(8, 15, 7, 7));
+            painter->drawLine(QPointF(21, 18), QPointF(28, 18));
+            painter->drawLine(QPointF(21, 23), QPointF(28, 23));
+            painter->drawLine(QPointF(23, 15), QPointF(23, 26));
+            painter->drawLine(QPointF(27, 15), QPointF(27, 26));
+            break;
+        case MeasurementToolGlyph::EdgeSnap:
+            {
+                const QPolygonF edge{{3, 25}, {9, 15}, {15, 21}, {22, 8}, {29, 13}};
+                painter->drawPolyline(edge);
+                painter->drawArc(QRectF(7, 4, 13, 13), 200 * 16, 140 * 16);
+                painter->drawLine(QPointF(9, 6), QPointF(9, 12));
+                painter->drawLine(QPointF(18, 6), QPointF(18, 12));
+            }
+            break;
+        case MeasurementToolGlyph::DeleteMeasurement:
+            painter->drawRect(QRectF(9, 9, 14, 18));
+            painter->drawLine(QPointF(7, 7), QPointF(25, 7));
+            painter->drawLine(QPointF(12, 4), QPointF(20, 4));
+            painter->drawLine(QPointF(13, 13), QPointF(13, 23));
+            painter->drawLine(QPointF(19, 13), QPointF(19, 23));
+            break;
+        case MeasurementToolGlyph::ClearMeasurements:
+            {
+                QPainterPath eraser;
+                eraser.moveTo(5, 21);
+                eraser.lineTo(17, 6);
+                eraser.lineTo(27, 14);
+                eraser.lineTo(15, 28);
+                eraser.closeSubpath();
+                painter->drawPath(eraser);
+                painter->drawLine(QPointF(10, 15), QPointF(21, 23));
+                painter->drawLine(QPointF(4, 28), QPointF(28, 28));
+            }
+            break;
+        case MeasurementToolGlyph::ExportCsv:
+            painter->drawRect(QRectF(4, 3, 18, 24));
+            painter->drawLine(QPointF(4, 10), QPointF(22, 10));
+            painter->drawLine(QPointF(4, 17), QPointF(22, 17));
+            painter->drawLine(QPointF(10, 3), QPointF(10, 27));
+            painter->drawLine(QPointF(16, 3), QPointF(16, 27));
+            painter->drawLine(QPointF(26, 8), QPointF(26, 25));
+            painter->drawLine(QPointF(22, 21), QPointF(26, 25));
+            painter->drawLine(QPointF(30, 21), QPointF(26, 25));
+            break;
         }
         painter->restore();
     }

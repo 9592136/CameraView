@@ -47,7 +47,12 @@ int main(int argc, char* argv[])
         MeasurementToolGlyph::Polyline,
         MeasurementToolGlyph::Circle,
         MeasurementToolGlyph::Ellipse,
-        MeasurementToolGlyph::SmartCount};
+        MeasurementToolGlyph::SmartCount,
+        MeasurementToolGlyph::SmartCountRun,
+        MeasurementToolGlyph::EdgeSnap,
+        MeasurementToolGlyph::DeleteMeasurement,
+        MeasurementToolGlyph::ClearMeasurements,
+        MeasurementToolGlyph::ExportCsv};
 
     std::set<std::uint64_t> signatures;
     for (const MeasurementToolGlyph glyph : glyphs) {
