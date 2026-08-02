@@ -1,5 +1,9 @@
 # CameraView - MUCam 工业相机预览
 
+<p align="center">
+  <img src="assets/icons/CameraView.png" alt="CameraView 应用图标" width="128" height="128">
+</p>
+
 这是一个按 `MUCam API.pdf` 和 `MUCamSDK` 真实头文件实现的工业相机预览、图像处理与显微测量程序。默认桌面应用已经迁移到 **Qt 6 Widgets**；程序使用 Qt 后台线程加载 Motic MUCam SDK、枚举/打开相机并持续显示采集帧。
 
 ## Qt 版本构建

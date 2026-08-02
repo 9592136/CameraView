@@ -52,6 +52,13 @@ if (-not $compiler) {
 }
 
 $compilerBin = Split-Path -Parent $compiler
+$resourceCompiler = Join-Path $compilerBin "windres.exe"
+if (-not (Test-Path $resourceCompiler)) {
+    throw "The MinGW Windows resource compiler was not found next to the C++ compiler."
+}
+# windres invokes the matching gcc preprocessor by name. Keep the selected
+# Qt-compatible MinGW toolchain first for both configure and build steps.
+$env:PATH = "$compilerBin;$env:PATH"
 $ninjaCandidates = @()
 $ninjaCandidates += Join-Path $compilerBin "ninja.exe"
 $ninjaCandidates += @(Get-Command ninja.exe -ErrorAction SilentlyContinue |
@@ -92,6 +99,7 @@ $configureArguments = @(
     "-DCMAKE_BUILD_TYPE=Release",
     "-DCMAKE_PREFIX_PATH=$QtRoot",
     "-DCMAKE_CXX_COMPILER=$compiler",
+    "-DCMAKE_RC_COMPILER=$resourceCompiler",
     "-DCMAKE_MAKE_PROGRAM=$ninja"
 ) + $opencvArguments
 & $cmake @configureArguments

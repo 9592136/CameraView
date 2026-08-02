@@ -12,6 +12,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QDebug>
+#include <QIcon>
 #include <QPixmap>
 #include <QTabWidget>
 #include <QTimer>
@@ -97,6 +98,12 @@ int main(int argc, char* argv[])
     application.setApplicationName(QStringLiteral("CameraView"));
     application.setApplicationDisplayName(QStringLiteral("CameraView · Qt"));
     application.setOrganizationName(QStringLiteral("CameraView"));
+    const QIcon application_icon(QStringLiteral(":/icons/CameraView.png"));
+    if (application_icon.isNull()) {
+        qCritical() << "CameraView application icon resource is missing.";
+        return 4;
+    }
+    application.setWindowIcon(application_icon);
     applyCameraViewTheme(application);
 
     QCommandLineParser parser;

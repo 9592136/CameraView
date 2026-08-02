@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(CameraView LANGUAGES CXX)
 
+if(WIN32)
+    enable_language(RC)
+endif()
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGLWidgets)
 qt_standard_project_setup()
 
@@ -290,6 +294,16 @@ qt_add_executable(CameraView WIN32
     src/domain/ImageFrame.h
     ${CAMERAVIEW_QT_CORE_SOURCES}
 )
+
+qt_add_resources(CameraView "cameraview_icons"
+    PREFIX "/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/CameraView.png"
+)
+
+if(WIN32)
+    target_sources(CameraView PRIVATE assets/icons/CameraView.rc)
+endif()
 
 target_include_directories(CameraView PRIVATE "${CMAKE_SOURCE_DIR}/src")
 target_compile_features(CameraView PRIVATE cxx_std_17)
