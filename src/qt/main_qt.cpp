@@ -147,7 +147,7 @@ int main(int argc, char* argv[])
 
     CameraMainWindow window;
     if (parser.isSet(verify_measurement_toolbar)) {
-        const QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
+        QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
         const QStringList required{
             QStringLiteral("标定"), QStringLiteral("点"), QStringLiteral("长度"), QStringLiteral("折线"),
             QStringLiteral("角度"), QStringLiteral("矩形"), QStringLiteral("多边形"), QStringLiteral("圆"),
@@ -171,6 +171,10 @@ int main(int argc, char* argv[])
         }
         if (!icons_complete || actual.size() != required.size()) {
             qCritical() << "Measurement toolbar action or icon coverage is incomplete.";
+            return 5;
+        }
+        if (window.toolBarBreak(toolbar)) {
+            qCritical() << "Measurement toolbar must share one row with the main toolbar.";
             return 5;
         }
         return 0;

@@ -2,6 +2,8 @@
 
 #include <QString>
 
+#include <utility>
+
 CameraWorker::CameraWorker(QObject* parent) : QObject(parent) {}
 
 void CameraWorker::initialize()
@@ -49,6 +51,7 @@ void CameraWorker::openCamera(int deviceIndex, double exposureMs)
         return;
     }
     sequence_ = 0;
+    frame_delivery_pending_ = false;
     timer_->start();
     const CameraOpenInfo info = driver_.OpenInfo();
     emit cameraStateChanged(
@@ -61,6 +64,7 @@ void CameraWorker::stopCamera()
     if (timer_) {
         timer_->stop();
     }
+    frame_delivery_pending_ = false;
     const bool was_open = driver_.IsOpen();
     driver_.Close();
     if (was_open) {
@@ -94,6 +98,11 @@ void CameraWorker::whiteBalance()
     emit operationFinished(ok ? tr("白平衡已执行") : tr("白平衡不可用"), ok);
 }
 
+void CameraWorker::frameConsumed()
+{
+    frame_delivery_pending_ = false;
+}
+
 void CameraWorker::shutdown()
 {
     stopCamera();
@@ -101,6 +110,13 @@ void CameraWorker::shutdown()
 
 void CameraWorker::captureOne()
 {
+    // A queued QImage owns roughly width * height * 3 bytes. Do not queue a
+    // second full-resolution frame while the UI is presenting the previous
+    // one, otherwise a fast camera can grow the event queue without bound.
+    if (frame_delivery_pending_) {
+        return;
+    }
+
     ImageFrame frame;
     if (!driver_.GrabFrame(++sequence_, frame)) {
         if (!driver_.IsConnected()) {
@@ -118,5 +134,10 @@ void CameraWorker::captureOne()
         frame.height,
         frame.stride,
         QImage::Format_BGR888);
-    emit frameReady(view.copy(), frame.sequence, frame.timestamp);
+    QImage owned_view = view.copy();
+    if (owned_view.isNull()) {
+        return;
+    }
+    frame_delivery_pending_ = true;
+    emit frameReady(std::move(owned_view), frame.sequence, frame.timestamp);
 }

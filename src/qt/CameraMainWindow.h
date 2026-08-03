@@ -15,6 +15,7 @@
 #include "imaging/SmartTargetCounter.h"
 
 #include <QMainWindow>
+#include <QElapsedTimer>
 #include <QStringList>
 #include <QThread>
 
@@ -130,6 +131,7 @@ private:
     QLabel* source_label_ = nullptr;
     QLabel* coordinate_label_ = nullptr;
     QLabel* zoom_label_ = nullptr;
+    QLabel* preview_fps_label_ = nullptr;
     QLabel* camera_state_label_ = nullptr;
     QComboBox* device_combo_ = nullptr;
     QDoubleSpinBox* exposure_spin_ = nullptr;
@@ -195,6 +197,8 @@ private:
     CameraWorker* camera_worker_ = nullptr;
     QVector<int> camera_indices_;
     bool camera_open_ = false;
+    QElapsedTimer preview_fps_timer_;
+    int preview_frames_since_sample_ = 0;
     bool busy_ = false;
     bool ai_annotation_active_ = false;
 

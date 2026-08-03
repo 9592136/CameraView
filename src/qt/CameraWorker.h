@@ -23,6 +23,7 @@ public slots:
     void autoExposure();
     void setGain(double value);
     void whiteBalance();
+    void frameConsumed();
     void shutdown();
 
 signals:
@@ -40,4 +41,5 @@ private:
     MUCamCameraDriver driver_;
     QTimer* timer_ = nullptr;
     quint64 sequence_ = 0;
+    bool frame_delivery_pending_ = false;
 };

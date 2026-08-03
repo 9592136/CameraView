@@ -181,7 +181,7 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("state")).toByteArray());
     settings.endGroup();
-    if (measurement_toolbar_) insertToolBarBreak(measurement_toolbar_);
+    if (measurement_toolbar_) removeToolBarBreak(measurement_toolbar_);
     setAcceptDrops(true);
 
     camera_worker_ = new CameraWorker;
@@ -194,8 +194,12 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
         [this](bool opened, const QString& message) {
             camera_open_ = opened;
             if (!opened && live_stitch_active_) stopLiveStitch(false);
-            camera_state_label_->setText(message);
-            statusBar()->showMessage(message, 5000);
+            preview_fps_timer_.invalidate();
+            preview_frames_since_sample_ = 0;
+            const QString display_message = opened ? tr("%1 · -- FPS").arg(message) : message;
+            camera_state_label_->setText(display_message);
+            preview_fps_label_->setText(opened ? tr("FPS --") : tr("FPS —"));
+            statusBar()->showMessage(display_message, 5000);
         });
     connect(camera_worker_, &CameraWorker::operationFinished, this,
         [this](const QString& message, bool success) {
@@ -331,7 +335,10 @@ void CameraMainWindow::setupUi()
     source_label_->setObjectName(QStringLiteral("SourceStatus"));
     coordinate_label_ = new QLabel(tr("X —  Y —"));
     zoom_label_ = new QLabel(tr("缩放 100%"));
+    preview_fps_label_ = new QLabel(tr("FPS —"));
+    preview_fps_label_->setObjectName(QStringLiteral("PreviewFpsStatus"));
     statusBar()->addWidget(source_label_, 1);
+    statusBar()->addPermanentWidget(preview_fps_label_);
     statusBar()->addPermanentWidget(coordinate_label_);
     statusBar()->addPermanentWidget(zoom_label_);
     statusBar()->showMessage(tr("就绪"));
@@ -455,7 +462,7 @@ void CameraMainWindow::setupMenusAndToolbar()
     measurement_toolbar_->setIconSize(QSize(24, 24));
     measurement_toolbar_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     addToolBar(Qt::TopToolBarArea, measurement_toolbar_);
-    insertToolBarBreak(measurement_toolbar_);
+    removeToolBarBreak(measurement_toolbar_);
 
     auto* measurement_actions = new QActionGroup(measurement_toolbar_);
     measurement_actions->setExclusive(true);
@@ -1416,6 +1423,25 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
     if (!busy_ && !live_stitch_active_ && !smart_count_session_active_) {
         setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
     }
+    if (camera_open_) {
+        if (!preview_fps_timer_.isValid()) {
+            preview_fps_timer_.start();
+        }
+        ++preview_frames_since_sample_;
+        const qint64 elapsed_ms = preview_fps_timer_.elapsed();
+        if (elapsed_ms >= 500) {
+            const double fps = static_cast<double>(preview_frames_since_sample_) * 1000.0 /
+                static_cast<double>(elapsed_ms);
+            camera_state_label_->setText(tr("相机已连接 · %1 × %2 · %3 FPS")
+                .arg(image.width())
+                .arg(image.height())
+                .arg(fps, 0, 'f', 1));
+            preview_fps_label_->setText(tr("FPS %1").arg(fps, 0, 'f', 1));
+            preview_frames_since_sample_ = 0;
+            preview_fps_timer_.restart();
+        }
+    }
+    QMetaObject::invokeMethod(camera_worker_, "frameConsumed", Qt::QueuedConnection);
 }
 
 void CameraMainWindow::setCurrentFrame(
