@@ -11,6 +11,14 @@ struct ProjectProcessingSettings {
     int edf_focus_radius = 1;
     int stitch_search_percent = 85;
     bool stitch_use_orb_registration = true;
+    int stitch_overlap_percent = 25;
+    int stitch_layout_mode = 0;
+    int stitch_grid_rows = 3;
+    int stitch_grid_cols = 4;
+    int stitch_registration_method = 4;
+    int stitch_transform_model = 1;
+    int stitch_blend_mode = 0;
+    int live_stitch_interval_ms = 1200;
 };
 
 struct ObjectiveCalibrationDocument {

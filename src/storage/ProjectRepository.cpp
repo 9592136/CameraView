@@ -1,7 +1,10 @@
 #include "ProjectRepository.h"
 
+#include "../imaging/ProcessingParameterRules.h"
+
 #include <windows.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <cmath>
@@ -170,6 +173,18 @@ bool TryParseByte(const std::string& text, unsigned char& value)
         return false;
     } catch (...) {
         OutputDebugStringA(("TryParseByte failed for input '" + text + "': unknown exception\n").c_str());
+        value = 0;
+        return false;
+    }
+}
+
+bool TryParseInt(const std::string& text, int& value)
+{
+    try {
+        std::size_t parsed = 0;
+        value = std::stoi(text, &parsed);
+        return parsed == text.size();
+    } catch (...) {
         value = 0;
         return false;
     }
@@ -374,7 +389,15 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
     output << "    \"edf_focus_radius\": " << document.processing_settings.edf_focus_radius << ",\n";
     output << "    \"stitch_search_percent\": " << document.processing_settings.stitch_search_percent << ",\n";
     output << "    \"stitch_use_orb_registration\": "
-           << (document.processing_settings.stitch_use_orb_registration ? "true" : "false") << "\n";
+           << (document.processing_settings.stitch_use_orb_registration ? "true" : "false") << ",\n";
+    output << "    \"stitch_overlap_percent\": " << document.processing_settings.stitch_overlap_percent << ",\n";
+    output << "    \"stitch_layout_mode\": " << document.processing_settings.stitch_layout_mode << ",\n";
+    output << "    \"stitch_grid_rows\": " << document.processing_settings.stitch_grid_rows << ",\n";
+    output << "    \"stitch_grid_cols\": " << document.processing_settings.stitch_grid_cols << ",\n";
+    output << "    \"stitch_registration_method\": " << document.processing_settings.stitch_registration_method << ",\n";
+    output << "    \"stitch_transform_model\": " << document.processing_settings.stitch_transform_model << ",\n";
+    output << "    \"stitch_blend_mode\": " << document.processing_settings.stitch_blend_mode << ",\n";
+    output << "    \"live_stitch_interval_ms\": " << document.processing_settings.live_stitch_interval_ms << "\n";
     output << "  }\n";
     output << "}\n";
 
@@ -716,12 +739,50 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
             return false;
         }
         loaded.processing_settings.stitch_search_percent = search_percent;
+        loaded.processing_settings.stitch_overlap_percent =
+            ProcessingParameterRules::OverlapPercentFromSearch(search_percent);
     }
 
     const std::regex stitch_orb_pattern(R"("stitch_use_orb_registration"\s*:\s*(true|false))");
     std::smatch stitch_orb_match;
     if (std::regex_search(text, stitch_orb_match, stitch_orb_pattern)) {
         loaded.processing_settings.stitch_use_orb_registration = stitch_orb_match[1].str() == "true";
+        loaded.processing_settings.stitch_registration_method =
+            loaded.processing_settings.stitch_use_orb_registration ? 4 : 0;
+    }
+
+    const auto read_integer_setting = [&text, &error](
+        const char* name, int minimum, int maximum, int& target) {
+        const std::regex pattern(std::string("\"") + name + "\"\\s*:\\s*([0-9]+)");
+        std::smatch match;
+        if (!std::regex_search(text, match, pattern)) return true;
+        int value = 0;
+        if (!TryParseInt(match[1].str(), value) || value < minimum || value > maximum) {
+            error = L"Invalid extended stitch setting in project file.";
+            return false;
+        }
+        target = value;
+        return true;
+    };
+    if (!read_integer_setting("stitch_overlap_percent",
+            ProcessingParameterRules::MinStitchOverlapPercent(),
+            ProcessingParameterRules::MaxStitchOverlapPercent(),
+            loaded.processing_settings.stitch_overlap_percent) ||
+        !read_integer_setting("stitch_layout_mode", 0, 1,
+            loaded.processing_settings.stitch_layout_mode) ||
+        !read_integer_setting("stitch_grid_rows", 1, 50,
+            loaded.processing_settings.stitch_grid_rows) ||
+        !read_integer_setting("stitch_grid_cols", 1, 50,
+            loaded.processing_settings.stitch_grid_cols) ||
+        !read_integer_setting("stitch_registration_method", 0, 4,
+            loaded.processing_settings.stitch_registration_method) ||
+        !read_integer_setting("stitch_transform_model", 0, 2,
+            loaded.processing_settings.stitch_transform_model) ||
+        !read_integer_setting("stitch_blend_mode", 0, 1,
+            loaded.processing_settings.stitch_blend_mode) ||
+        !read_integer_setting("live_stitch_interval_ms", 250, 10000,
+            loaded.processing_settings.live_stitch_interval_ms)) {
+        return false;
     }
 
     document = std::move(loaded);

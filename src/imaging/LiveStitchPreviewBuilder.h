@@ -27,6 +27,9 @@ struct LiveStitchPreviewResult {
 
 class LiveStitchPreviewBuilder {
 public:
+    static int DownsampleScaleFor(const ImageFrame& source, int max_edge);
+    static ImageFrame DownsampleFrame(const ImageFrame& source, int scale);
+
     static LiveStitchPreviewResult Build(
         const std::vector<LiveStitchPreviewTile>& tiles,
         LiveStitchPreviewOptions options = {});

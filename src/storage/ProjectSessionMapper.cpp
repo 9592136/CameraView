@@ -73,6 +73,9 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     document.processing_settings.edf_focus_radius = edf_options.focus_radius;
     document.processing_settings.stitch_search_percent = stitch_search_percent;
     document.processing_settings.stitch_use_orb_registration = stitch_use_orb_registration;
+    document.processing_settings.stitch_overlap_percent =
+        ProcessingParameterRules::OverlapPercentFromSearch(stitch_search_percent);
+    document.processing_settings.stitch_registration_method = stitch_use_orb_registration ? 4 : 0;
 
     const bool has_objective_calibrations = !objective_calibrations.empty();
     document.objective_calibrations.reserve(objectives.size());
@@ -163,6 +166,16 @@ ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
     state.stitch_search_percent =
         ProcessingParameterRules::ClampStitchSearchPercent(document.processing_settings.stitch_search_percent);
     state.stitch_use_orb_registration = document.processing_settings.stitch_use_orb_registration;
+    state.stitch_overlap_percent =
+        ProcessingParameterRules::ClampStitchOverlapPercent(
+            document.processing_settings.stitch_overlap_percent);
+    state.stitch_layout_mode = std::clamp(document.processing_settings.stitch_layout_mode, 0, 1);
+    state.stitch_grid_rows = std::clamp(document.processing_settings.stitch_grid_rows, 1, 50);
+    state.stitch_grid_cols = std::clamp(document.processing_settings.stitch_grid_cols, 1, 50);
+    state.stitch_registration_method = std::clamp(document.processing_settings.stitch_registration_method, 0, 4);
+    state.stitch_transform_model = std::clamp(document.processing_settings.stitch_transform_model, 0, 2);
+    state.stitch_blend_mode = std::clamp(document.processing_settings.stitch_blend_mode, 0, 1);
+    state.live_stitch_interval_ms = std::clamp(document.processing_settings.live_stitch_interval_ms, 250, 10000);
     state.restored_channel_settings = !document.fluorescence_channels.empty();
 
     state.fluorescence_channels.reserve(document.fluorescence_channels.size());

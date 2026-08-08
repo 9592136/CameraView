@@ -38,6 +38,7 @@ public:
     explicit ImageCanvas(QWidget* parent = nullptr);
 
     void setImage(const QImage& image);
+    void setLivePreviewOverlay(const QImage& image);
     void setOverlays(QVector<CanvasOverlay> overlays);
     void setTool(CanvasTool tool);
     CanvasTool tool() const { return tool_; }
@@ -49,6 +50,10 @@ public:
     bool focusOnImageRect(const QRectF& imageRegion);
     double zoom() const { return zoom_; }
     QPointF viewportCenterInImage() const;
+    qint64 imageCacheKey() const { return image_.cacheKey(); }
+    QSize imageSize() const { return image_.size(); }
+    bool hasGrayscaleCache() const { return !grayscale_image_.isNull(); }
+    bool hasLivePreviewOverlay() const { return !live_preview_overlay_.isNull(); }
 
 signals:
     void pointsCommitted(CanvasTool tool, QVector<QPointF> points);
@@ -78,6 +83,7 @@ private:
 
     QImage image_;
     QImage grayscale_image_;
+    QImage live_preview_overlay_;
     QVector<CanvasOverlay> overlays_;
     QVector<QPointF> pending_points_;
     CanvasTool tool_ = CanvasTool::None;

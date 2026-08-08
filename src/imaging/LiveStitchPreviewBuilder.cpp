@@ -402,6 +402,19 @@ std::vector<LiveStitchPreviewTile> BuildTileRefs(const std::vector<StitchTile>& 
 
 } // namespace
 
+int LiveStitchPreviewBuilder::DownsampleScaleFor(const ImageFrame& source, int max_edge)
+{
+    if (!HasReadablePixels(source)) return 1;
+    const int capped_edge = std::max(64, max_edge);
+    const int source_edge = std::max(source.width, source.height);
+    return std::max(1, (source_edge + capped_edge - 1) / capped_edge);
+}
+
+ImageFrame LiveStitchPreviewBuilder::DownsampleFrame(const ImageFrame& source, int scale)
+{
+    return DownsampleAverage(source, std::max(1, scale));
+}
+
 LiveStitchPreviewResult LiveStitchPreviewBuilder::Build(
     const std::vector<LiveStitchPreviewTile>& tiles,
     LiveStitchPreviewOptions options)

@@ -53,7 +53,7 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 支持 BGR、RGB、单色显示
 - Bayer 图像会优先调用 `MUCamEx_getBayerFormat`、`MUCamEx_getBayer`、`MUCamEx_bayer2RGB` 转 RGB；如果 DLL 不导出相关函数，则以灰度预览
 - 支持打开、停止、曝光时间设置
-- 实时预览采用复用后台缓冲和当前显示帧缓存，降低图像刷新闪烁并减少大图重复拷贝/重复伪彩计算
+- 实时预览采用三槽复用帧池、带所有权的共享 `QImage` 直达画布和“消费后立即取下一帧”的单帧背压；移除了固定 15 ms 轮询上限，默认显示不再逐帧分配/复制大图或生成灰度/直方图，AI 预览只在 AI 页激活时刷新
 - 状态栏右侧显示 SDK 加载诊断和真实预览遥测，包括 DLL、接口类型、可选能力、设备、相机类型、分辨率、FPS 和帧时间戳；预览遥测文本由 `CameraTelemetryFormatter` 统一生成，相机断开时会保留断开提示，便于现场验证
 - 相机控制区的设备刷新、设备选择、曝光输入校验、曝光夹取和状态结果由 `CameraPanelActions` 统一封装，设备列表显示由 `CameraDeviceListFormatter` 生成，枚举、选择、打开和曝光设置提示由 `CameraControlStatusFormatter` 生成
 - 支持鼠标滚轮按光标位置实时缩放图像，缩放输入由 `ViewportInteractionActions` 校验和转发，状态栏会显示当前缩放倍率
@@ -74,12 +74,12 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 支持通过 `Open Image` 打开未压缩 8 位灰度/调色板 BMP、24 位 BMP 或 32 位 BGRA BMP，作为当前帧进行测量、伪彩、融合、拼接和 EDF 离线验证；打开离线图像时会取消并忽略旧后台处理结果，状态栏和遥测区会显示载入图像尺寸
 - 支持测量结果重命名，并可在预览图上拖拽端点/顶点编辑测量位置
 - 支持删除选中的测量结果，并通过 `ExportActions` 和 `MeasurementCsvExporter` 将长度、角度、面积测量表导出为 CSV
-- 支持通过 `ProjectActions` 保存和打开项目文件，恢复标定比例、全部八类测量列表、荧光染料资料、荧光通道配置以及拼接/EDF 处理参数；会话与项目文档互转由 `ProjectSessionMapper` 维护，打开项目后的运行态应用和旧处理队列清理由 `ProjectSessionRestorer` 统一维护
+- 支持通过 `ProjectActions` 保存和打开项目文件，恢复标定比例、全部八类测量列表、荧光染料资料、荧光通道配置，以及拼接的排列、网格、重叠率、配准、变换、融合和实时采集间隔；打开项目时会清理旧拼接/EDF 运行态
 - 支持导出带全部测量类型叠加的图像；测量 CSV 同时记录点位、原始像素值、标定单位和各形状的详细指标
 - 支持通过 `DiagnosticReportActions` 收集现场诊断状态，并由 `DiagnosticReportBuilder` 生成诊断报告文本，记录 SDK、设备列表和选中设备、当前帧来源、视口缩放、当前预览显示模式、帧信息、标定、测量、处理队列以及拼接/EDF 结果类型、当前显示来源和尺寸信息
 - 支持实时图像伪彩显示，伪彩下拉显示、选择状态、预览模式标签和状态栏文本由 `PreviewDisplayActions` 统一封装，伪彩映射由 `PseudoColorMapper` 提供，并通过 `PreviewFrameComposer` 与融合/处理结果统一生成当前预览帧
 - 支持默认荧光染料资料、自定义染料新增/更新/删除、当前帧添加为荧光通道、多通道融合预览、通道可见性/黑白范围调节和融合效果导出；染料输入解析由 `DyeProfileFormParser` 统一维护，染料资料表单显示文本由 `DyeProfileFormPresenter` 统一维护，染料资料保存/删除动作、状态文本和删除后选择项由 `DyeLibraryActions` 统一维护，染料库的同名更新、删除后选择项和默认空通道染料由 `DyeLibrary` 统一维护，染料下拉文本、当前染料选择、通道列表文本和通道选中索引由 `FluorescenceDisplayActions` 统一维护，按染料和当前帧创建默认通道由 `FluorescenceChannelFactory` 统一维护，通道设置表单显示文本由 `FluorescenceChannelFormPresenter` 统一维护，添加/清空通道后的融合预览和列表选中规则由 `FluorescenceChannelListActions` 统一维护，通道可见性、黑白范围和列表索引规则由 `FluorescenceChannelSettings` 统一维护，通道设置应用和错误状态由 `FluorescenceChannelUpdater` 统一维护，荧光通道默认名称、染料和通道列表文本由 `FluorescenceFormatter` 统一生成
-- 支持当前帧加入拼接队列、调节拼接搜索范围、相邻图自动平移配准、多图全局位姿优化并在后台生成拼接预览，支持当前帧加入 EDF 队列、调节 EDF 清晰度半径，并在后台生成景深扩展预览和焦点图；拼接搜索百分比、EDF 半径、配准搜索半径和拼接优化半径由 `ProcessingParameterRules` 统一维护，当前帧加入拼接队列、无图像拒绝和入队状态文本由 `StitchTileListActions` 统一维护，拼接 tile 放置和配准失败回退由 `StitchTilePlacementPlanner` 统一维护，当前帧加入 EDF 堆栈、无图像拒绝和帧数状态文本由 `EdfStackListActions` 统一维护，拼接/EDF 入队编排、成功入队后的旧处理结果清理和预览刷新请求由 `ProcessingQueueActions` 统一维护，拼接/EDF 构建前输入校验和启动请求组装由 `ProcessingBuildActions` 统一维护，拼接搜索和 EDF 半径文本输入由 `ProcessingBuildInputActions` 统一解析并转成构建动作，后台作业启动前运行状态检查、旧 worker 回收回调、重试快照记录和启动作业编号由 `ProcessingStartActions` 统一维护，后台 worker 线程创建、进度回调接线和结果发布回调由 `ProcessingWorkerActions` 统一维护
+- 支持当前帧、多文件、目录和多文件拖放加入拼接队列；目录按自然数字顺序导入并跳过 `_` 临时文件。支持网格/线性排列、五种配准、三种变换、融合模式、后台进度/取消、重试上次拼接，以及随结果导出的 `.stitch.txt` 位姿元数据；实时拼接提供相机小窗、连续失配告警和缩略 tile 缓存；同时保留 EDF 景深扩展和焦点图工作流
 - 已新增 `ProcessingJobState`，统一管理后台拼接/EDF 作业编号、取消令牌、运行状态和待发布结果
 - 已新增 `ProcessingResultFrames`，统一管理拼接结果、EDF 合成图、EDF 焦点图、当前处理结果显示状态和显示来源标签，并可在 `EDF Image` 与 `Focus Map` 之间切换
 - 已新增 `ProcessingRetryState`，统一管理拼接/EDF 后台任务的重试快照和有效性判断

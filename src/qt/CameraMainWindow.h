@@ -11,7 +11,9 @@
 #include "imaging/ImageAdjuster.h"
 #include "imaging/ImageFilterProcessor.h"
 #include "imaging/ImageStitcher.h"
+#include "imaging/LiveStitchPreviewBuilder.h"
 #include "imaging/PseudoColorMapper.h"
+#include "imaging/ProcessingJobState.h"
 #include "imaging/SmartTargetCounter.h"
 
 #include <QMainWindow>
@@ -67,7 +69,9 @@ private slots:
     void clearFluorescenceChannels();
     void toggleFusion(bool enabled);
     void addStitchTile();
+    void importStitchFiles(QStringList files);
     void buildStitch();
+    void retryStitch();
     void addEdfFrame();
     void buildEdf();
     void showEdfFocusMap();
@@ -97,6 +101,11 @@ private:
     QWidget* buildMeasurementPage();
     QWidget* buildProjectPage();
     void setCurrentFrame(ImageFrame frame, const QString& source, const QString& sourceIdentity = {});
+    void presentLiveCameraImage();
+    bool hasNeutralPresentation() const;
+    ImageFrame sourceFrame() const;
+    ImageFrame latestCameraFrame() const;
+    void updateLiveHistogram();
     bool loadImageFile(const QString& fileName);
     ImageFrame currentVisibleFrame() const;
     QVector<CanvasOverlay> measurementOverlays() const;
@@ -112,10 +121,18 @@ private:
     void refreshStitchTileList(int selectedRow = -1);
     void deleteSelectedStitchTile();
     StitchProcessingOptions stitchOptionsFromUi() const;
+    void startStitchJob(
+        std::vector<StitchTile> tiles,
+        StitchProcessingOptions options,
+        bool rememberForRetry);
     void startLiveStitch();
     void stopLiveStitch(bool showStatus = true);
     void evaluateLiveStitch();
     void refreshLiveStitchPreview();
+    void clearLiveStitchPreviewCache();
+    void ensureLiveStitchPreviewCache();
+    void rebuildLiveStitchPreviewCache(int scale);
+    static quint64 stitchTileFingerprint(const StitchTile& tile);
     void importStitchFiles(const QStringList& files, const QString& sourceDescription);
     void saveStitchResult();
     void invalidateStitchResult();
@@ -166,6 +183,7 @@ private:
     QProgressBar* stitch_progress_ = nullptr;
     QPushButton* stitch_start_button_ = nullptr;
     QPushButton* stitch_cancel_button_ = nullptr;
+    QPushButton* stitch_retry_button_ = nullptr;
     QPushButton* stitch_save_button_ = nullptr;
     QSpinBox* live_stitch_interval_spin_ = nullptr;
     QPushButton* live_stitch_start_button_ = nullptr;
@@ -198,13 +216,16 @@ private:
     QVector<int> camera_indices_;
     bool camera_open_ = false;
     QElapsedTimer preview_fps_timer_;
+    QElapsedTimer live_histogram_timer_;
     int preview_frames_since_sample_ = 0;
     bool busy_ = false;
     bool ai_annotation_active_ = false;
 
     ImageFrame current_frame_;
-    ImageFrame latest_camera_frame_;
     ImageFrame display_frame_;
+    QImage latest_camera_image_;
+    quint64 latest_camera_sequence_ = 0;
+    quint32 latest_camera_timestamp_ = 0;
     std::vector<ImageFilterStep> image_filter_pipeline_;
     QString current_source_;
     QString current_source_identity_;
@@ -228,11 +249,23 @@ private:
     QStringList stitch_tile_sources_;
     std::shared_ptr<std::atomic_bool> stitch_cancel_token_;
     ImageFrame stitch_result_;
+    StitchResultMetadata stitch_result_metadata_;
+    std::vector<StitchTile> stitch_retry_tiles_;
+    QStringList stitch_retry_sources_;
+    StitchProcessingOptions stitch_retry_options_;
+    bool stitch_retry_available_ = false;
     bool live_stitch_active_ = false;
     bool live_stitch_evaluating_ = false;
     bool live_stitch_preview_running_ = false;
     bool live_stitch_preview_pending_ = false;
     quint64 live_stitch_generation_ = 0;
+    std::vector<LiveStitchPreviewTile> live_stitch_preview_cache_;
+    std::vector<quint64> live_stitch_preview_cache_keys_;
+    int live_stitch_preview_cache_scale_ = 0;
+    int live_stitch_out_of_range_candidate_count_ = 0;
+    int live_stitch_missing_match_count_ = 0;
+    bool live_stitch_out_of_range_warning_ = false;
+    QElapsedTimer live_stitch_warning_timer_;
     std::vector<ImageFrame> edf_stack_;
     EdfResult edf_result_;
     bool fusion_enabled_ = false;

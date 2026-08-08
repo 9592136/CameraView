@@ -3175,6 +3175,14 @@ int main()
     document.processing_settings.edf_focus_radius = 4;
     document.processing_settings.stitch_search_percent = 35;
     document.processing_settings.stitch_use_orb_registration = false;
+    document.processing_settings.stitch_overlap_percent = 42;
+    document.processing_settings.stitch_layout_mode = 1;
+    document.processing_settings.stitch_grid_rows = 7;
+    document.processing_settings.stitch_grid_cols = 8;
+    document.processing_settings.stitch_registration_method = 3;
+    document.processing_settings.stitch_transform_model = 2;
+    document.processing_settings.stitch_blend_mode = 1;
+    document.processing_settings.live_stitch_interval_ms = 1350;
     FluorescenceChannelRecipe channel_recipe;
     channel_recipe.name = L"FITC 1";
     channel_recipe.color = RgbColor{80, 255, 80};
@@ -3232,6 +3240,14 @@ int main()
         loaded_document.processing_settings.edf_focus_radius != 4 ||
         loaded_document.processing_settings.stitch_search_percent != 35 ||
         loaded_document.processing_settings.stitch_use_orb_registration ||
+        loaded_document.processing_settings.stitch_overlap_percent != 42 ||
+        loaded_document.processing_settings.stitch_layout_mode != 1 ||
+        loaded_document.processing_settings.stitch_grid_rows != 7 ||
+        loaded_document.processing_settings.stitch_grid_cols != 8 ||
+        loaded_document.processing_settings.stitch_registration_method != 3 ||
+        loaded_document.processing_settings.stitch_transform_model != 2 ||
+        loaded_document.processing_settings.stitch_blend_mode != 1 ||
+        loaded_document.processing_settings.live_stitch_interval_ms != 1350 ||
         loaded_document.fluorescence_channels[0].name != L"FITC 1" ||
         loaded_document.fluorescence_channels[0].visible ||
         loaded_document.fluorescence_channels[0].black_level != 12 ||
@@ -3315,6 +3331,31 @@ int main()
         !std::filesystem::exists(action_project_path)) {
         return Fail("ProjectActions did not save a project file.");
     }
+    const std::filesystem::path legacy_action_project_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsLegacyAction.cvproj";
+    {
+        std::ifstream source(action_project_path);
+        std::ofstream legacy(legacy_action_project_path, std::ios::trunc);
+        const std::vector<std::string> extended_stitch_names{
+            "stitch_overlap_percent", "stitch_layout_mode", "stitch_grid_rows",
+            "stitch_grid_cols", "stitch_registration_method", "stitch_transform_model",
+            "stitch_blend_mode", "live_stitch_interval_ms"};
+        std::string line;
+        while (source && std::getline(source, line)) {
+            const bool extended = std::any_of(
+                extended_stitch_names.begin(), extended_stitch_names.end(),
+                [&line](const std::string& name) { return line.find(name) != std::string::npos; });
+            if (extended) continue;
+            if (line.find("stitch_use_orb_registration") != std::string::npos) {
+                const std::size_t last = line.find_last_not_of("\r\t ");
+                if (last != std::string::npos && line[last] == ',') line.erase(last, 1);
+            }
+            legacy << line << '\n';
+        }
+        if (!source.eof() || !legacy) {
+            return Fail("Could not create a legacy project compatibility fixture.");
+        }
+    }
     ProjectActionResult project_load = ProjectActions::LoadProject(action_project_path);
     std::filesystem::remove(action_project_path);
     if (!project_load.succeeded ||
@@ -3339,6 +3380,27 @@ int main()
         project_load.session_state.stitch_use_orb_registration ||
         !project_load.session_state.restored_channel_settings) {
         return Fail("ProjectActions did not load a project into session state.");
+    }
+    if (project_load.session_state.stitch_overlap_percent !=
+            ProcessingParameterRules::OverlapPercentFromSearch(44) ||
+        project_load.session_state.stitch_registration_method != 0 ||
+        project_load.session_state.stitch_layout_mode != 0 ||
+        project_load.session_state.stitch_transform_model != 1 ||
+        project_load.session_state.stitch_blend_mode != 0 ||
+        project_load.session_state.live_stitch_interval_ms != 1200) {
+        return Fail("ProjectActions did not preserve the migrated stitch settings.");
+    }
+    ProjectActionResult legacy_project_load = ProjectActions::LoadProject(legacy_action_project_path);
+    std::filesystem::remove(legacy_action_project_path);
+    if (!legacy_project_load.succeeded ||
+        legacy_project_load.session_state.stitch_overlap_percent !=
+            ProcessingParameterRules::OverlapPercentFromSearch(44) ||
+        legacy_project_load.session_state.stitch_registration_method != 0 ||
+        legacy_project_load.session_state.stitch_layout_mode != 0 ||
+        legacy_project_load.session_state.stitch_transform_model != 1 ||
+        legacy_project_load.session_state.stitch_blend_mode != 0 ||
+        legacy_project_load.session_state.live_stitch_interval_ms != 1200) {
+        return Fail("Legacy projects did not map old stitch settings to the complete Qt workflow.");
     }
 
     ProjectDocument sparse_document;
@@ -4274,6 +4336,14 @@ int main()
     LiveStitchPreviewOptions live_preview_options;
     live_preview_options.max_preview_edge = 512;
     live_preview_options.overlap_percent = 25;
+    const int live_tile_cache_scale =
+        LiveStitchPreviewBuilder::DownsampleScaleFor(live_preview_left.frame, 320);
+    const ImageFrame live_tile_cache_frame =
+        LiveStitchPreviewBuilder::DownsampleFrame(live_preview_left.frame, live_tile_cache_scale);
+    if (live_tile_cache_scale != 2 || !live_tile_cache_frame.IsValid() ||
+        live_tile_cache_frame.width != 320 || live_tile_cache_frame.height != 160) {
+        return Fail("LiveStitchPreviewBuilder did not build the reusable live tile cache frame.");
+    }
     const LiveStitchPreviewResult live_preview =
         LiveStitchPreviewBuilder::Build({live_preview_left, live_preview_right}, live_preview_options);
     if (!live_preview.image.IsValid() ||

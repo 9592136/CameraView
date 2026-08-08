@@ -47,16 +47,29 @@ void ImageCanvas::setImage(const QImage& image)
 {
     const bool size_changed = image_.size() != image.size();
     image_ = image;
-    grayscale_image_ = image_.convertToFormat(QImage::Format_Grayscale8);
+    // Grayscale conversion touches every pixel and is only needed by edge
+    // snapping. Keep the normal live-preview path as an implicit QImage share.
+    grayscale_image_ = edge_snapping_enabled_
+        ? image_.convertToFormat(QImage::Format_Grayscale8)
+        : QImage{};
     if (size_changed) {
         fitToView();
     }
     update();
 }
 
+void ImageCanvas::setLivePreviewOverlay(const QImage& image)
+{
+    live_preview_overlay_ = image;
+    update();
+}
+
 void ImageCanvas::setEdgeSnappingEnabled(bool enabled)
 {
     edge_snapping_enabled_ = enabled;
+    grayscale_image_ = enabled && !image_.isNull()
+        ? image_.convertToFormat(QImage::Format_Grayscale8)
+        : QImage{};
 }
 
 void ImageCanvas::setEdgeSnapRadius(int radius)
@@ -231,6 +244,27 @@ void ImageCanvas::paintEvent(QPaintEvent*)
         }
         CanvasOverlay pending{tool_, preview, tr("进行中"), QColor(255, 193, 7)};
         drawOverlay(painter, pending);
+    }
+    painter.setClipping(false);
+    if (!live_preview_overlay_.isNull()) {
+        const QSize maximum(std::min(420, std::max(120, width() / 3)),
+            std::min(300, std::max(90, height() / 3)));
+        const QSize preview_size = live_preview_overlay_.size().scaled(
+            maximum, Qt::KeepAspectRatio);
+        const QRectF preview_rect(
+            width() - preview_size.width() - 18.0,
+            height() - preview_size.height() - 18.0,
+            preview_size.width(), preview_size.height());
+        painter.fillRect(preview_rect.adjusted(-7.0, -28.0, 7.0, 7.0), QColor(8, 12, 18, 225));
+        painter.drawImage(preview_rect, live_preview_overlay_);
+        painter.setPen(QPen(QColor(96, 165, 250), 2.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(preview_rect);
+        painter.setPen(QColor(219, 234, 254));
+        painter.drawText(
+            preview_rect.adjusted(0.0, -25.0, 0.0, 0.0),
+            Qt::AlignLeft | Qt::AlignTop,
+            tr("实时相机"));
     }
 }
 

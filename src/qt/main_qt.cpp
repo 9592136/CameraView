@@ -1,10 +1,12 @@
 #include "CameraMainWindow.h"
 #include "CameraViewTheme.h"
 #include "ai/YoloModelRegistry.h"
+#include "imaging/ProcessingParameterRules.h"
 
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
+#include <QComboBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -12,12 +14,22 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QIcon>
+#include <QLabel>
+#include <QListWidget>
+#include <QPainter>
 #include <QPixmap>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QTabWidget>
+#include <QSpinBox>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
+#include <QVariant>
 
 namespace {
 
@@ -133,12 +145,29 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_measurement_toolbar(
         QStringLiteral("verify-measurement-toolbar"),
         QStringLiteral("Verify that every measurement function is represented in the toolbar."));
+    const QCommandLineOption verify_preview_pipeline(
+        QStringLiteral("verify-preview-pipeline"),
+        QStringLiteral("Verify the zero-copy neutral camera preview path."));
+    const QCommandLineOption verify_stitch_workflow(
+        QStringLiteral("verify-stitch-workflow"),
+        QStringLiteral("Verify complete Qt stitching workflow controls and options."));
+    const QCommandLineOption verify_stitch_execution(
+        QStringLiteral("verify-stitch-execution"),
+        QStringLiteral("Run an end-to-end Qt stitching workflow with synthetic overlapping images."));
+    const QCommandLineOption live_camera_report(
+        QStringLiteral("live-camera-report"),
+        QStringLiteral("Open the first camera, exercise the live Qt preview, and write a JSON report."),
+        QStringLiteral("path"));
     parser.addOption(smoke_test);
     parser.addOption(import_yolo_manifest);
     parser.addOption(ui_snapshot);
     parser.addOption(workspace_tab);
     parser.addOption(focus_widget);
     parser.addOption(verify_measurement_toolbar);
+    parser.addOption(verify_preview_pipeline);
+    parser.addOption(verify_stitch_workflow);
+    parser.addOption(verify_stitch_execution);
+    parser.addOption(live_camera_report);
     parser.process(application);
 
     if (parser.isSet(import_yolo_manifest)) {
@@ -146,6 +175,203 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
+    if (parser.isSet(verify_preview_pipeline)) {
+        QImage frame(3072, 2048, QImage::Format_BGR888);
+        frame.fill(Qt::black);
+        QElapsedTimer timer;
+        timer.start();
+        for (quint64 sequence = 1; sequence <= 120; ++sequence) {
+            if (!QMetaObject::invokeMethod(&window, "onCameraFrame", Qt::DirectConnection,
+                    Q_ARG(QImage, frame), Q_ARG(quint64, sequence), Q_ARG(quint32, 0))) {
+                qCritical() << "Could not inject a synthetic camera frame.";
+                return 6;
+            }
+        }
+        ImageCanvas* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
+        if (!canvas || !canvas->property("directCameraPreview").toBool() ||
+            canvas->property("cameraPreviewSequence").toULongLong() != 120 ||
+            timer.elapsed() > 2000) {
+            qCritical() << "Neutral camera preview did not use the direct high-throughput path."
+                        << "elapsed_ms=" << timer.elapsed();
+            return 6;
+        }
+        return 0;
+    }
+    if (parser.isSet(verify_stitch_workflow)) {
+        const QStringList required_controls{
+            QStringLiteral("LiveStitchStartButton"), QStringLiteral("LiveStitchStopButton"),
+            QStringLiteral("LiveStitchIntervalSpin"),
+            QStringLiteral("StitchAddCurrentButton"), QStringLiteral("StitchImportFilesButton"),
+            QStringLiteral("StitchImportDirectoryButton"), QStringLiteral("StitchMoveUpButton"),
+            QStringLiteral("StitchMoveDownButton"), QStringLiteral("StitchDeleteButton"),
+            QStringLiteral("StitchClearButton"), QStringLiteral("StitchBuildButton"),
+            QStringLiteral("StitchCancelButton"), QStringLiteral("StitchRetryButton"),
+            QStringLiteral("StitchSaveButton"), QStringLiteral("StitchTileList"),
+            QStringLiteral("StitchProgress")};
+        for (const QString& object_name : required_controls) {
+            if (!window.findChild<QWidget*>(object_name)) {
+                qCritical().noquote() << QStringLiteral("Stitch workflow control is missing: %1").arg(object_name);
+                return 7;
+            }
+        }
+        const auto* layout = window.findChild<QComboBox*>(QStringLiteral("StitchLayoutCombo"));
+        const auto* registration = window.findChild<QComboBox*>(QStringLiteral("StitchRegistrationCombo"));
+        const auto* transform = window.findChild<QComboBox*>(QStringLiteral("StitchTransformCombo"));
+        const auto* blend = window.findChild<QComboBox*>(QStringLiteral("StitchBlendCombo"));
+        const auto* overlap = window.findChild<QSpinBox*>(QStringLiteral("StitchOverlapSpin"));
+        const auto* interval = window.findChild<QSpinBox*>(QStringLiteral("LiveStitchIntervalSpin"));
+        const auto* retry = window.findChild<QPushButton*>(QStringLiteral("StitchRetryButton"));
+        const auto* save = window.findChild<QPushButton*>(QStringLiteral("StitchSaveButton"));
+        if (!layout || layout->count() != 2 || !registration || registration->count() != 5 ||
+            !transform || transform->count() != 3 || !blend || blend->count() != 2 ||
+            !overlap || overlap->minimum() != ProcessingParameterRules::MinStitchOverlapPercent() ||
+            overlap->maximum() != ProcessingParameterRules::MaxStitchOverlapPercent() ||
+            !interval || interval->minimum() != 250 || interval->maximum() != 10000 ||
+            interval->value() != 1200 ||
+            !retry || retry->isEnabled() || !save || save->isEnabled()) {
+            qCritical() << "Stitch workflow options or initial action state are incomplete.";
+            return 7;
+        }
+        return 0;
+    }
+    if (parser.isSet(verify_stitch_execution)) {
+        QTemporaryDir directory;
+        if (!directory.isValid()) return 80;
+
+        QImage source(960, 480, QImage::Format_BGR888);
+        source.fill(QColor(24, 30, 38));
+        {
+            QPainter painter(&source);
+            painter.setRenderHint(QPainter::Antialiasing);
+            for (int y = 20; y < source.height(); y += 55) {
+                for (int x = 20; x < source.width(); x += 65) {
+                    const QColor color((x * 7 + y * 3) % 220 + 25,
+                        (x * 5 + y * 11) % 220 + 25,
+                        (x * 13 + y * 2) % 220 + 25);
+                    painter.setBrush(color);
+                    painter.setPen(Qt::white);
+                    painter.drawEllipse(QPointF(x, y), 8 + (x % 17), 7 + (y % 13));
+                }
+            }
+            painter.setPen(QPen(Qt::yellow, 4));
+            painter.drawLine(15, 70, 940, 410);
+            painter.drawText(QRect(40, 180, 880, 80), Qt::AlignCenter,
+                QStringLiteral("CameraView stitching migration verification"));
+        }
+        const QString left_path = directory.filePath(QStringLiteral("tile-01.png"));
+        const QString right_path = directory.filePath(QStringLiteral("tile-02.png"));
+        if (!source.copy(0, 0, 640, 480).save(left_path) ||
+            !source.copy(320, 0, 640, 480).save(right_path)) {
+            return 81;
+        }
+
+        auto* layout = window.findChild<QComboBox*>(QStringLiteral("StitchLayoutCombo"));
+        auto* registration = window.findChild<QComboBox*>(QStringLiteral("StitchRegistrationCombo"));
+        auto* transform = window.findChild<QComboBox*>(QStringLiteral("StitchTransformCombo"));
+        auto* overlap = window.findChild<QSpinBox*>(QStringLiteral("StitchOverlapSpin"));
+        auto* tile_list = window.findChild<QListWidget*>(QStringLiteral("StitchTileList"));
+        auto* build = window.findChild<QPushButton*>(QStringLiteral("StitchBuildButton"));
+        auto* retry = window.findChild<QPushButton*>(QStringLiteral("StitchRetryButton"));
+        auto* save = window.findChild<QPushButton*>(QStringLiteral("StitchSaveButton"));
+        auto* progress = window.findChild<QProgressBar*>(QStringLiteral("StitchProgress"));
+        if (!layout || !registration || !transform || !overlap || !tile_list ||
+            !build || !retry || !save || !progress) {
+            return 82;
+        }
+        layout->setCurrentIndex(layout->findData(static_cast<int>(StitchLayoutMode::Linear)));
+        registration->setCurrentIndex(
+            registration->findData(static_cast<int>(StitchRegistrationMethod::Phase)));
+        transform->setCurrentIndex(
+            transform->findData(static_cast<int>(StitchTransformModel::Translation)));
+        overlap->setValue(50);
+
+        const QStringList files{left_path, right_path};
+        if (!QMetaObject::invokeMethod(&window, "importStitchFiles", Qt::DirectConnection,
+                Q_ARG(QStringList, files))) {
+            return 83;
+        }
+        if (tile_list->count() != 2) return 83;
+
+        build->click();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QTimer watchdog;
+        watchdog.setInterval(50);
+        QObject::connect(&watchdog, &QTimer::timeout, &application,
+            [&application, &watchdog, &elapsed, retry, save, progress] {
+                if (save->isEnabled() && retry->isEnabled() && progress->value() == 100) {
+                    watchdog.stop();
+                    application.exit(0);
+                } else if (elapsed.elapsed() > 20000) {
+                    watchdog.stop();
+                    application.exit(84);
+                }
+            });
+        watchdog.start();
+        return application.exec();
+    }
+    if (parser.isSet(live_camera_report)) {
+        const QString report_path = parser.value(live_camera_report);
+        auto* device = window.findChild<QComboBox*>(QStringLiteral("CameraDeviceCombo"));
+        auto* state = window.findChild<QLabel*>(QStringLiteral("CameraStateLabel"));
+        auto* fps = window.findChild<QLabel*>(QStringLiteral("PreviewFpsStatus"));
+        auto* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
+        if (!device || !state || !fps || !canvas || report_path.isEmpty()) return 9;
+
+        window.show();
+        QTimer::singleShot(750, &window, [&window] {
+            QMetaObject::invokeMethod(&window, "refreshDevices", Qt::QueuedConnection);
+        });
+        QElapsedTimer discovery_elapsed;
+        discovery_elapsed.start();
+        QTimer discovery_timer;
+        discovery_timer.setInterval(250);
+        QObject::connect(&discovery_timer, &QTimer::timeout, &window,
+            [&application, &window, &discovery_timer, &discovery_elapsed,
+             report_path, device, state] {
+                if (device->count() > 0) {
+                    discovery_timer.stop();
+                    device->setCurrentIndex(0);
+                    QMetaObject::invokeMethod(&window, "openSelectedCamera", Qt::QueuedConnection);
+                    return;
+                }
+                if (discovery_elapsed.elapsed() > 8000) {
+                    QJsonObject report;
+                    report.insert(QStringLiteral("camera_state"), state->text());
+                    report.insert(QStringLiteral("device_count"), device->count());
+                    QFile output(report_path);
+                    if (output.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                        output.write(QJsonDocument(report).toJson(QJsonDocument::Indented));
+                    }
+                    discovery_timer.stop();
+                    application.exit(9);
+                }
+            });
+        discovery_timer.start();
+        QTimer::singleShot(20000, &application,
+            [&application, &window, report_path, state, fps, canvas] {
+                QJsonObject report;
+                report.insert(QStringLiteral("camera_state"), state->text());
+                report.insert(QStringLiteral("fps_label"), fps->text());
+                report.insert(QStringLiteral("preview_sequence"),
+                    static_cast<qint64>(canvas->property("cameraPreviewSequence").toULongLong()));
+                report.insert(QStringLiteral("direct_camera_preview"),
+                    canvas->property("directCameraPreview").toBool());
+                report.insert(QStringLiteral("image_width"), canvas->imageSize().width());
+                report.insert(QStringLiteral("image_height"), canvas->imageSize().height());
+                QFile output(report_path);
+                const bool saved = output.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                    output.write(QJsonDocument(report).toJson(QJsonDocument::Indented)) >= 0;
+                output.close();
+                const bool valid = saved &&
+                    report.value(QStringLiteral("preview_sequence")).toInteger() > 0 &&
+                    report.value(QStringLiteral("direct_camera_preview")).toBool() &&
+                    QRegularExpression(QStringLiteral("\\d")).match(fps->text()).hasMatch();
+                QMetaObject::invokeMethod(&window, "stopCamera", Qt::QueuedConnection);
+                application.exit(valid ? 0 : 9);
+            });
+        return application.exec();
+    }
     if (parser.isSet(verify_measurement_toolbar)) {
         QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
         const QStringList required{

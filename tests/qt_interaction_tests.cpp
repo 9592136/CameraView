@@ -44,7 +44,19 @@ int main(int argc, char* argv[])
     if (canvas.focusOnImageRect(QRectF(10.0, 10.0, 20.0, 20.0))) {
         return fail("ImageCanvas accepted a focus request without an image.");
     }
-    canvas.setImage(QImage(1000, 500, QImage::Format_RGB32));
+    const QImage shared_canvas_image(1000, 500, QImage::Format_RGB32);
+    canvas.setImage(shared_canvas_image);
+    if (canvas.imageCacheKey() != shared_canvas_image.cacheKey() || canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas copied or grayscale-converted an image on the normal preview path.");
+    }
+    canvas.setLivePreviewOverlay(QImage(320, 240, QImage::Format_RGB32));
+    if (!canvas.hasLivePreviewOverlay()) {
+        return fail("ImageCanvas did not retain the live-camera inset used by live stitching.");
+    }
+    canvas.setLivePreviewOverlay({});
+    if (canvas.hasLivePreviewOverlay()) {
+        return fail("ImageCanvas did not clear the live-camera inset.");
+    }
     if (!canvas.focusOnImageRect(QRectF(100.0, 100.0, 200.0, 100.0))) {
         return fail("ImageCanvas rejected a valid image target.");
     }
@@ -97,6 +109,9 @@ int main(int argc, char* argv[])
     canvas.setImage(edge_image);
     canvas.fitToView();
     canvas.setEdgeSnappingEnabled(true);
+    if (!canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas did not build the grayscale cache when edge snapping was enabled.");
+    }
     canvas.setEdgeSnapRadius(10);
     bool snap_reported = false;
     bool snap_succeeded = false;
@@ -118,6 +133,9 @@ int main(int argc, char* argv[])
     }
 
     canvas.setEdgeSnappingEnabled(false);
+    if (canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas retained the expensive grayscale cache after edge snapping was disabled.");
+    }
     committed_tool = CanvasTool::None;
     committed_points.clear();
     canvas.setTool(CanvasTool::Circle);
@@ -260,6 +278,10 @@ int main(int argc, char* argv[])
             QStringLiteral("Annotated cells"), YoloTask::Detection,
             {QStringLiteral("nucleus")}, &dataset, &dataset_error) ||
         !workspace.loadDatasetProject(dataset.rootDirectory(), &dataset_error)) {
+        std::cerr << "Dataset UI setup failed: "
+                  << dataset_error.toStdString()
+                  << " (temporary directory: "
+                  << dataset_directory.path().toStdString() << ")\n";
         return fail("Could not create and load a dataset project for the UI test.");
     }
     auto* tabs = workspace.findChild<QTabWidget*>(QStringLiteral("YoloWorkspaceTabs"));
