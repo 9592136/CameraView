@@ -8,6 +8,9 @@
 #include <QTimer>
 #include <QVector>
 
+#include <array>
+#include <memory>
+
 class CameraWorker final : public QObject {
     Q_OBJECT
 
@@ -37,9 +40,12 @@ private slots:
 
 private:
     QString lastError() const;
+    std::shared_ptr<ImageFrame> acquireFrameBuffer();
 
     MUCamCameraDriver driver_;
     QTimer* timer_ = nullptr;
+    std::array<std::shared_ptr<ImageFrame>, 3> frame_pool_;
+    std::size_t next_frame_pool_index_ = 0;
     quint64 sequence_ = 0;
     bool frame_delivery_pending_ = false;
 };
