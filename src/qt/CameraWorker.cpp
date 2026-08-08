@@ -2,7 +2,19 @@
 
 #include <QString>
 
+#include <memory>
 #include <utility>
+
+namespace {
+
+using SharedFrame = std::shared_ptr<ImageFrame>;
+
+void releaseSharedFrame(void* owner)
+{
+    delete static_cast<SharedFrame*>(owner);
+}
+
+} // namespace
 
 CameraWorker::CameraWorker(QObject* parent) : QObject(parent) {}
 
@@ -10,7 +22,8 @@ void CameraWorker::initialize()
 {
     timer_ = new QTimer(this);
     timer_->setTimerType(Qt::PreciseTimer);
-    timer_->setInterval(15);
+    timer_->setSingleShot(true);
+    timer_->setInterval(0);
     connect(timer_, &QTimer::timeout, this, &CameraWorker::captureOne);
     refreshDevices();
 }
@@ -52,7 +65,7 @@ void CameraWorker::openCamera(int deviceIndex, double exposureMs)
     }
     sequence_ = 0;
     frame_delivery_pending_ = false;
-    timer_->start();
+    timer_->start(0);
     const CameraOpenInfo info = driver_.OpenInfo();
     emit cameraStateChanged(
         true,
@@ -101,6 +114,7 @@ void CameraWorker::whiteBalance()
 void CameraWorker::frameConsumed()
 {
     frame_delivery_pending_ = false;
+    if (timer_ && driver_.IsOpen()) timer_->start(0);
 }
 
 void CameraWorker::shutdown()
@@ -117,27 +131,53 @@ void CameraWorker::captureOne()
         return;
     }
 
-    ImageFrame frame;
-    if (!driver_.GrabFrame(++sequence_, frame)) {
+    auto frame = acquireFrameBuffer();
+    if (!frame) {
+        timer_->start(1);
+        return;
+    }
+    const quint64 requested_sequence = sequence_ + 1;
+    if (!driver_.GrabFrame(requested_sequence, *frame)) {
         if (!driver_.IsConnected()) {
             stopCamera();
             emit cameraStateChanged(false, tr("相机连接已断开"));
+        } else {
+            timer_->start(1);
         }
         return;
     }
-    if (!frame.IsValid() || frame.bgr.size() < static_cast<std::size_t>(frame.stride * frame.height)) {
+    sequence_ = frame->sequence;
+    if (!frame->IsValid() || frame->bgr.size() < static_cast<std::size_t>(frame->stride * frame->height)) {
+        timer_->start(1);
         return;
     }
-    const QImage view(
-        frame.bgr.data(),
-        frame.width,
-        frame.height,
-        frame.stride,
-        QImage::Format_BGR888);
-    QImage owned_view = view.copy();
+    auto* owner = new SharedFrame(frame);
+    QImage owned_view(
+        frame->bgr.data(),
+        frame->width,
+        frame->height,
+        frame->stride,
+        QImage::Format_BGR888,
+        releaseSharedFrame,
+        owner);
     if (owned_view.isNull()) {
+        delete owner;
         return;
     }
     frame_delivery_pending_ = true;
-    emit frameReady(std::move(owned_view), frame.sequence, frame.timestamp);
+    emit frameReady(std::move(owned_view), frame->sequence, frame->timestamp);
+}
+
+std::shared_ptr<ImageFrame> CameraWorker::acquireFrameBuffer()
+{
+    for (std::size_t offset = 0; offset < frame_pool_.size(); ++offset) {
+        const std::size_t index = (next_frame_pool_index_ + offset) % frame_pool_.size();
+        std::shared_ptr<ImageFrame>& candidate = frame_pool_[index];
+        if (!candidate) candidate = std::make_shared<ImageFrame>();
+        if (candidate.use_count() == 1) {
+            next_frame_pool_index_ = (index + 1) % frame_pool_.size();
+            return candidate;
+        }
+    }
+    return {};
 }
