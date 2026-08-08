@@ -286,10 +286,9 @@ bool MUCamCameraDriver::GrabFrame(uint64_t sequence, ImageFrame& frame)
     timestamp = static_cast<uint32_t>(sdk_timestamp);
 
     if (got_frame && IsBayerFormat(frame_format_) && sdk_.HasBayerToRgb()) {
-        rgb_.assign(
+        rgb_.resize(
             static_cast<std::size_t>(open_info_.width) *
-            static_cast<std::size_t>(open_info_.height) * 3U,
-            0);
+            static_cast<std::size_t>(open_info_.height) * 3U);
         if (sdk_.BayerToRgb(camera_, raw_.data(), bayer_format, open_info_.width, open_info_.height, 8, rgb_.data())) {
             display_source = rgb_.data();
             display_format = MUCamApi::MUCAM_FORMAT_COLOR_RGB;
@@ -341,7 +340,7 @@ bool MUCamCameraDriver::BuildDisplayFrame(
     output.timestamp = timestamp;
     output.sequence = sequence;
     output.stride = (width * 3 + 3) & ~3;
-    output.bgr.assign(static_cast<std::size_t>(output.stride) * static_cast<std::size_t>(height), 0);
+    output.bgr.resize(static_cast<std::size_t>(output.stride) * static_cast<std::size_t>(height));
 
     for (int y = 0; y < height; ++y) {
         unsigned char* dst = output.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(output.stride);
