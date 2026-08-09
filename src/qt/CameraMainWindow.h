@@ -115,6 +115,11 @@ private:
     void updateSmartTargetUi();
     void updateImageFilterPipelineUi();
     void rebuildOverlays();
+    void updateCalibrationUi();
+    void selectObjective(int index, bool rememberSelection = true);
+    void loadObjectiveCalibrationMemory();
+    void saveObjectiveCalibrationMemory() const;
+    QString currentObjectiveLabel() const;
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
     void updateProcessingLabels();
@@ -193,6 +198,7 @@ private:
     QLabel* edf_count_label_ = nullptr;
     QPushButton* focus_map_button_ = nullptr;
     QDoubleSpinBox* calibration_length_spin_ = nullptr;
+    QComboBox* objective_combo_ = nullptr;
     QComboBox* calibration_unit_combo_ = nullptr;
     QComboBox* display_unit_combo_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
@@ -233,6 +239,9 @@ private:
     HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
     ImageAdjustParams adjustments_;
     CalibrationProfile calibration_ = CalibrationProfile::Uncalibrated();
+    std::vector<std::wstring> objective_labels_;
+    std::vector<CalibrationProfile> objective_calibrations_;
+    int selected_objective_index_ = 0;
     MeasurementUnit display_unit_ = MeasurementUnit::Micrometers;
     MeasurementCollection measurements_;
     QVector<CanvasOverlay> ai_overlays_;

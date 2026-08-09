@@ -1,14 +1,19 @@
+#include "qt/CalibrationDialog.h"
 #include "qt/ImageCanvas.h"
+#include "qt/ObjectiveCalibrationSettings.h"
 #include "qt/ai/YoloWorkspaceWidget.h"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSettings>
 #include <QTabWidget>
 #include <QTemporaryDir>
 
@@ -38,6 +43,52 @@ QJsonArray point(double x, double y)
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+
+    CalibrationDialog calibration_dialog(
+        200.0, 100.0, MeasurementUnit::Micrometers);
+    auto* calibration_length = calibration_dialog.findChild<QDoubleSpinBox*>(
+        QStringLiteral("CalibrationDialogLength"));
+    auto* calibration_unit = calibration_dialog.findChild<QComboBox*>(
+        QStringLiteral("CalibrationDialogUnit"));
+    auto* calibration_preview = calibration_dialog.findChild<QLabel*>(
+        QStringLiteral("CalibrationScalePreview"));
+    if (!calibration_length || !calibration_unit || !calibration_preview ||
+        !near(calibration_dialog.profile().MicronsPerPixel(), 0.5) ||
+        !calibration_preview->text().contains(QStringLiteral("0.5"))) {
+        return fail("Calibration confirmation dialog did not preview a micrometer scale.");
+    }
+    calibration_length->setValue(0.1);
+    calibration_unit->setCurrentIndex(1);
+    if (calibration_dialog.unit() != MeasurementUnit::Millimeters ||
+        !near(calibration_dialog.profile().MicronsPerPixel(), 0.5) ||
+        !calibration_preview->text().contains(QStringLiteral("0.5"))) {
+        return fail("Calibration confirmation dialog did not convert millimeters correctly.");
+    }
+
+    QTemporaryDir calibration_settings_directory;
+    if (!calibration_settings_directory.isValid()) {
+        return fail("Could not create a temporary directory for objective calibration settings.");
+    }
+    const QString calibration_settings_path =
+        calibration_settings_directory.filePath(QStringLiteral("calibration.ini"));
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        ObjectiveCalibrationState saved = ObjectiveCalibrationSettings::Defaults();
+        saved.selected_index = 2;
+        saved.calibrations[0] = CalibrationProfile::FromMicronsPerPixel(1.25);
+        saved.calibrations[2] = CalibrationProfile::FromMicronsPerPixel(0.25);
+        ObjectiveCalibrationSettings::Save(settings, saved);
+    }
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        const ObjectiveCalibrationState restored = ObjectiveCalibrationSettings::Load(settings);
+        if (restored.labels.size() < 6 || restored.calibrations.size() != restored.labels.size() ||
+            restored.selected_index != 2 || restored.labels[2] != L"20x" ||
+            !near(restored.calibrations[0].MicronsPerPixel(), 1.25) ||
+            !near(restored.calibrations[2].MicronsPerPixel(), 0.25)) {
+            return fail("Objective-specific calibration settings were not remembered correctly.");
+        }
+    }
 
     ImageCanvas canvas;
     canvas.resize(800, 600);

@@ -1,9 +1,11 @@
 #include "CameraMainWindow.h"
 
+#include "CalibrationDialog.h"
 #include "CameraWorker.h"
 #include "HistogramWidget.h"
 #include "ImageSurface3DDialog.h"
 #include "MeasurementToolButton.h"
+#include "ObjectiveCalibrationSettings.h"
 #include "ProfileAnalysisDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
 #include "app/ExportActions.h"
@@ -60,6 +62,7 @@
 #include <QPainter>
 #include <QSaveFile>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
@@ -190,7 +193,12 @@ QString imageFilterStepDescription(const ImageFilterStep& step)
 CameraMainWindow::CameraMainWindow(QWidget* parent)
     : QMainWindow(parent), dyes_(DyeLibrary::DefaultDyes())
 {
+    const ObjectiveCalibrationState objective_state = ObjectiveCalibrationSettings::Defaults();
+    objective_labels_ = objective_state.labels;
+    objective_calibrations_ = objective_state.calibrations;
+    selected_objective_index_ = objective_state.selected_index;
     setupUi();
+    loadObjectiveCalibrationMemory();
     setupMenusAndToolbar();
     QSettings settings;
     settings.beginGroup(QStringLiteral("MainWindow"));
@@ -389,6 +397,7 @@ void CameraMainWindow::setupMenusAndToolbar()
                << "Camera: " << camera_state_label_->text() << "\n"
                << "Source: " << current_source_ << "\n"
                << "Frame: " << visible_frame.width << " x " << visible_frame.height << "\n"
+               << "Objective: " << currentObjectiveLabel() << "\n"
                << "Calibration: " << (calibration_.IsCalibrated()
                     ? QString::number(calibration_.MicronsPerPixel(), 'g', 10) + " um/px" : "none") << "\n"
                << "Measurements: " << measurements_.Count() << "\n"
@@ -1035,19 +1044,31 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* layout = panelLayout(page);
     auto* calibration_group = new QGroupBox(tr("标定"));
     auto* calibration_form = new QFormLayout(calibration_group);
+    objective_combo_ = new QComboBox;
+    objective_combo_->setObjectName(QStringLiteral("CalibrationObjective"));
+    for (const std::wstring& objective : objective_labels_) {
+        objective_combo_->addItem(QString::fromStdWString(objective));
+    }
+    calibration_form->addRow(tr("物镜倍率"), objective_combo_);
     calibration_length_spin_ = new QDoubleSpinBox;
+    calibration_length_spin_->setObjectName(QStringLiteral("CalibrationLength"));
+    calibration_length_spin_->setDecimals(6);
     calibration_length_spin_->setRange(0.001, 1000000.0);
     calibration_length_spin_->setValue(100.0);
     calibration_unit_combo_ = new QComboBox;
+    calibration_unit_combo_->setObjectName(QStringLiteral("CalibrationUnit"));
     calibration_unit_combo_->addItems({tr("µm"), tr("mm")});
     calibration_form->addRow(tr("真实长度"), calibration_length_spin_);
     calibration_form->addRow(tr("单位"), calibration_unit_combo_);
     auto* calibrate = new QPushButton(tr("两点标定"));
+    calibrate->setObjectName(QStringLiteral("CalibrationStartButton"));
     calibrate->setIcon(measurementToolIcon(MeasurementToolGlyph::Calibration));
     calibrate->setIconSize(QSize(22, 22));
     auto* clear_calibration = new QPushButton(tr("清除标定"));
+    clear_calibration->setObjectName(QStringLiteral("CalibrationClearButton"));
     calibration_form->addRow(buttonRow({calibrate, clear_calibration}));
     calibration_label_ = new QLabel(tr("未标定"));
+    calibration_label_->setObjectName(QStringLiteral("CalibrationStatus"));
     calibration_form->addRow(calibration_label_);
     layout->addWidget(calibration_group);
 
@@ -1178,10 +1199,19 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(calibrate, &QPushButton::clicked, this, [this] {
         setMeasurementTool(CanvasTool::Calibration, tr("请在图像上选择标定线的两个端点"));
     });
+    connect(objective_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this](int index) { selectObjective(index); });
     connect(clear_calibration, &QPushButton::clicked, this, [this] {
         calibration_ = CalibrationProfile::Uncalibrated();
-        calibration_label_->setText(tr("未标定"));
+        if (selected_objective_index_ >= 0 &&
+            selected_objective_index_ < static_cast<int>(objective_calibrations_.size())) {
+            objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)] = calibration_;
+        }
+        updateCalibrationUi();
         updateMeasurementList();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(
+            tr("%1 物镜标定已清除").arg(currentObjectiveLabel()), 3000);
     });
     connect(length, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Length, tr("请选择长度的两个端点")); });
     connect(profile, &QToolButton::clicked, this, &CameraMainWindow::startProfileMeasurement);
@@ -1393,7 +1423,7 @@ void CameraMainWindow::saveProject()
         ProcessingParameterRules::SearchPercentFromOverlap(stitch_options.overlap_percent);
     ProjectDocument document = ProjectSessionMapper::ToDocument(
         calibration_, measurements_, dyes_, channels_, EdfOptions{}, stitch_search_percent,
-        {L"Default"}, {calibration_}, 0,
+        objective_labels_, objective_calibrations_, selected_objective_index_,
         stitch_options.registration_method != StitchRegistrationMethod::Phase);
     document.processing_settings.stitch_overlap_percent = stitch_options.overlap_percent;
     document.processing_settings.stitch_layout_mode = static_cast<int>(stitch_options.layout_mode);
@@ -1438,7 +1468,30 @@ void CameraMainWindow::openProject()
     stitch_retry_available_ = false;
     if (stitch_retry_button_) stitch_retry_button_->setEnabled(false);
     edf_result_ = {};
-    calibration_ = state.calibration;
+    objective_labels_ = std::move(state.objective_labels);
+    objective_calibrations_ = std::move(state.objective_calibrations);
+    selected_objective_index_ = state.selected_objective_index;
+    if (objective_labels_.empty()) {
+        const ObjectiveCalibrationState defaults = ObjectiveCalibrationSettings::Defaults();
+        objective_labels_ = defaults.labels;
+        objective_calibrations_ = defaults.calibrations;
+        selected_objective_index_ = defaults.selected_index;
+    }
+    if (objective_calibrations_.size() < objective_labels_.size()) {
+        objective_calibrations_.resize(
+            objective_labels_.size(), CalibrationProfile::Uncalibrated());
+    }
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+    {
+        const QSignalBlocker blocker(objective_combo_);
+        objective_combo_->clear();
+        for (const std::wstring& objective : objective_labels_) {
+            objective_combo_->addItem(QString::fromStdWString(objective));
+        }
+        objective_combo_->setCurrentIndex(selected_objective_index_);
+    }
     measurements_ = std::move(state.measurements);
     dyes_ = std::move(state.dye_profiles);
     channels_ = std::move(state.fluorescence_channels);
@@ -1465,10 +1518,9 @@ void CameraMainWindow::openProject()
     for (const FluorescenceChannel& channel : channels_) {
         channel_list_->addItem(QString::fromStdWString(channel.name));
     }
-    calibration_label_->setText(calibration_.IsCalibrated()
-        ? tr("%1 µm / px").arg(calibration_.MicronsPerPixel(), 0, 'g', 7)
-        : tr("未标定"));
+    updateCalibrationUi();
     updateMeasurementList();
+    saveObjectiveCalibrationMemory();
     invalidateStitchResult();
     refreshStitchTileList();
     focus_map_button_->setEnabled(false);
@@ -1857,16 +1909,46 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
         return;
     }
     if (tool == CanvasTool::Calibration && points.size() == 2) {
-        const MeasurementUnit unit = calibration_unit_combo_->currentIndex() == 0
-            ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters;
-        calibration_ = CalibrationProfile::FromTwoPointCalibration(
-            imagePoint(points[0]), imagePoint(points[1]), calibration_length_spin_->value(), unit);
-        if (!calibration_.IsCalibrated()) {
-            QMessageBox::warning(this, tr("标定失败"), tr("两个标定点不能重合。"));
-        } else {
-            calibration_label_->setText(tr("%1 µm / px").arg(calibration_.MicronsPerPixel(), 0, 'g', 7));
-            statusBar()->showMessage(tr("标定已完成"), 5000);
+        const double pixel_distance = QLineF(points[0], points[1]).length();
+        if (!std::isfinite(pixel_distance) || pixel_distance < 1.0) {
+            QMessageBox::warning(this, tr("标定失败"), tr("两个标定点距离太近，请重新选择。"));
+            setMeasurementTool(CanvasTool::Calibration, tr("请重新选择距离更远的两个标定点"));
+            return;
         }
+
+        const MeasurementUnit initial_unit = CalibrationProfile::CalibrationUnitAtIndex(
+            calibration_unit_combo_->currentIndex());
+        CalibrationDialog dialog(
+            pixel_distance, calibration_length_spin_->value(), initial_unit, this);
+        dialog.setWindowTitle(tr("%1 物镜两点标定").arg(currentObjectiveLabel()));
+        if (dialog.exec() != QDialog::Accepted) {
+            canvas_->setTool(CanvasTool::None);
+            statusBar()->showMessage(tr("已取消标定，原标定未改变"), 3500);
+            return;
+        }
+
+        const CalibrationProfile candidate = dialog.profile();
+        if (!candidate.IsCalibrated()) {
+            QMessageBox::warning(this, tr("标定失败"), tr("真实长度必须大于零。"));
+            setMeasurementTool(CanvasTool::Calibration, tr("请重新选择标定线的两个端点"));
+            return;
+        }
+
+        calibration_length_spin_->setValue(dialog.realLength());
+        calibration_unit_combo_->setCurrentIndex(
+            dialog.unit() == MeasurementUnit::Millimeters ? 1 : 0);
+        calibration_ = candidate;
+        if (selected_objective_index_ >= 0 &&
+            selected_objective_index_ < static_cast<int>(objective_calibrations_.size())) {
+            objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)] = calibration_;
+        }
+        updateCalibrationUi();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(
+            tr("%1 物镜标定已完成（%2 px），已有测量结果已重新换算")
+                .arg(currentObjectiveLabel())
+                .arg(pixel_distance, 0, 'f', 2),
+            5000);
     } else if (tool == CanvasTool::ProfileLine && points.size() == 2) {
         profile_line_points_ = points;
         const ImageFrame frame = currentVisibleFrame();
@@ -1966,6 +2048,78 @@ void CameraMainWindow::updateMeasurementList()
         measurement_list_->setCurrentRow(std::clamp(previous, 0, measurement_list_->count() - 1));
     }
     rebuildOverlays();
+}
+
+void CameraMainWindow::updateCalibrationUi()
+{
+    if (!calibration_label_) {
+        return;
+    }
+    calibration_label_->setText(calibration_.IsCalibrated()
+        ? tr("%1：%2 µm / px")
+              .arg(currentObjectiveLabel())
+              .arg(calibration_.MicronsPerPixel(), 0, 'g', 10)
+        : tr("%1：未标定").arg(currentObjectiveLabel()));
+}
+
+void CameraMainWindow::selectObjective(int index, bool rememberSelection)
+{
+    if (objective_labels_.empty() || objective_calibrations_.empty()) {
+        return;
+    }
+    selected_objective_index_ = std::clamp(
+        index, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+    updateCalibrationUi();
+    updateMeasurementList();
+    if (rememberSelection) {
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(calibration_.IsCalibrated()
+            ? tr("已切换到 %1 物镜，并恢复该倍率标定").arg(currentObjectiveLabel())
+            : tr("已切换到 %1 物镜；该倍率尚未标定").arg(currentObjectiveLabel()),
+            3500);
+    }
+}
+
+void CameraMainWindow::loadObjectiveCalibrationMemory()
+{
+    QSettings settings;
+    ObjectiveCalibrationState state = ObjectiveCalibrationSettings::Load(settings);
+    objective_labels_ = std::move(state.labels);
+    objective_calibrations_ = std::move(state.calibrations);
+    selected_objective_index_ = state.selected_index;
+    if (objective_calibrations_.size() < objective_labels_.size()) {
+        objective_calibrations_.resize(
+            objective_labels_.size(), CalibrationProfile::Uncalibrated());
+    }
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+    const QSignalBlocker blocker(objective_combo_);
+    objective_combo_->clear();
+    for (const std::wstring& objective : objective_labels_) {
+        objective_combo_->addItem(QString::fromStdWString(objective));
+    }
+    objective_combo_->setCurrentIndex(selected_objective_index_);
+    updateCalibrationUi();
+    updateMeasurementList();
+}
+
+void CameraMainWindow::saveObjectiveCalibrationMemory() const
+{
+    QSettings settings;
+    ObjectiveCalibrationSettings::Save(settings, ObjectiveCalibrationState{
+        objective_labels_, objective_calibrations_, selected_objective_index_});
+}
+
+QString CameraMainWindow::currentObjectiveLabel() const
+{
+    if (selected_objective_index_ < 0 ||
+        selected_objective_index_ >= static_cast<int>(objective_labels_.size())) {
+        return tr("未知倍率");
+    }
+    return QString::fromStdWString(
+        objective_labels_[static_cast<std::size_t>(selected_objective_index_)]);
 }
 
 QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
@@ -2346,7 +2500,8 @@ void CameraMainWindow::exportMeasurements()
     }
     std::wstring error;
     if (!MeasurementCsvExporter::Save(
-            std::filesystem::path(file_name.toStdWString()), measurements_, calibration_, display_unit_, L"Default", error)) {
+            std::filesystem::path(file_name.toStdWString()), measurements_, calibration_, display_unit_,
+            currentObjectiveLabel().toStdWString(), error)) {
         QMessageBox::warning(this, tr("导出失败"), errorText(error));
         return;
     }
@@ -3080,6 +3235,7 @@ ImagePoint CameraMainWindow::imagePoint(const QPointF& point)
 void CameraMainWindow::closeEvent(QCloseEvent* event)
 {
     if (live_stitch_active_) stopLiveStitch(false);
+    saveObjectiveCalibrationMemory();
     QSettings settings;
     settings.beginGroup(QStringLiteral("MainWindow"));
     settings.setValue(QStringLiteral("geometry"), saveGeometry());

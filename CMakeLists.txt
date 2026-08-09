@@ -278,6 +278,8 @@ set(CAMERAVIEW_QT_CORE_SOURCES
 # ── CameraView executable (Qt 6 application) ──
 qt_add_executable(CameraView WIN32
     src/qt/main_qt.cpp
+    src/qt/CalibrationDialog.cpp
+    src/qt/CalibrationDialog.h
     src/qt/CameraMainWindow.cpp
     src/qt/CameraMainWindow.h
     src/qt/CameraViewTheme.cpp
@@ -290,6 +292,8 @@ qt_add_executable(CameraView WIN32
     src/qt/ImageCanvas.h
     src/qt/MeasurementToolButton.cpp
     src/qt/MeasurementToolButton.h
+    src/qt/ObjectiveCalibrationSettings.cpp
+    src/qt/ObjectiveCalibrationSettings.h
     src/qt/ImageSurface3DDialog.cpp
     src/qt/ImageSurface3DDialog.h
     src/qt/ImageSurface3DWidget.cpp
@@ -557,6 +561,10 @@ if(CAMERAVIEW_BUILD_TESTS)
 
     add_executable(CameraViewQtInteractionTests
         tests/qt_interaction_tests.cpp
+        src/qt/CalibrationDialog.cpp
+        src/qt/CalibrationDialog.h
+        src/qt/ObjectiveCalibrationSettings.cpp
+        src/qt/ObjectiveCalibrationSettings.h
         src/qt/ImageCanvas.cpp
         src/qt/ImageCanvas.h
         src/qt/ai/YoloModelRegistry.cpp
@@ -567,6 +575,9 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ai/YoloProcessController.h
         src/qt/ai/YoloWorkspaceWidget.cpp
         src/qt/ai/YoloWorkspaceWidget.h
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/domain/Geometry.h
     )
     target_include_directories(CameraViewQtInteractionTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewQtInteractionTests PRIVATE cxx_std_17)

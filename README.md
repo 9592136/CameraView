@@ -60,7 +60,7 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 支持右键或鼠标中键拖拽平移放大后的图像，平移开始、拖动和结束状态由 `ViewportInteractionActions` 维护
 - 支持工具栏 `Fit` 按钮一键恢复完整图像视图，便于放大观察后快速回到全图
 - 已开始按显微观察与测量软件设计拆分基础模块：`ImageFrame`、`CameraDevice`、`CameraPanelActions`、`CameraDeviceListFormatter`、`CameraControlStatusFormatter`、`CameraTelemetryFormatter`、`FrameBuffer`、`DiagnosticReportActions`、`ExportActions`、`ProjectActions`、`MeasurementActionApplier`、`MeasurementDisplayActions`、`MeasurementInteractionActions`、`MeasurementInteractionState`、`MeasurementHitTester`、`MeasurementEditSession`、`MeasurementListActions`、`MeasurementListSelection`、`MeasurementOverlayModelBuilder`、`MeasurementToolAvailability`、`MeasurementToolStartActions`、`MeasurementCollection`、`MeasurementFormatter`、`MeasurementNameFormatter`、`MeasurementCsvExporter`、`DiagnosticReportBuilder`、`ProjectSessionMapper`、`ProjectSessionRestorer`、`FileDialog`、`TextInputParser`、`DyeProfileFormParser`、`DyeProfileFormPresenter`、`DyeLibraryActions`、`DyeLibrary`、`FluorescenceDisplayActions`、`FluorescenceChannelFactory`、`FluorescenceChannelFormPresenter`、`FluorescenceChannelListActions`、`FluorescenceChannelSettings`、`FluorescenceChannelUpdater`、`FluorescenceFormatter`、`ProcessingParameterRules`、`ProcessingBuildActions`、`ProcessingBuildInputActions`、`ProcessingQueueActions`、`ProcessingStartActions`、`ProcessingProgressActions`、`ProcessingWorkerActions`、`ProcessingJobExecutor`、`ProcessingProgressThrottle`、`ProcessingPanelActions`、`ProcessingRetryActions`、`ProcessingResultActions`、`ProcessingStatusFormatter`、`PreviewDisplayActions`、`PreviewFrameComposer`、`ProcessingJobState`、`ProcessingResultFrames`、`ProcessingRetryState`、`StitchTileListActions`、`StitchTilePlacementPlanner`、`EdfStackListActions`、`ViewportInteractionActions`、`ControlIds`、`WindowLayout`、`WindowControlLayout`、`WindowControlDefinitions`、`ImageViewport`、`OverlayRenderer`、`ViewTransform`
-- 已加入图像坐标转换、两点标定，以及点坐标、长度、折线长度、角度、矩形、多边形、圆和椭圆测量；矩形/椭圆显示宽高、周长和面积，圆显示半径、直径、周长和面积
+- 已加入图像坐标转换、两点标定，以及点坐标、长度、折线长度、角度、矩形、多边形、圆和椭圆测量；支持为 4x、10x、20x、40x、60x、100x 物镜分别保存标定比例，切换物镜时自动恢复并重新计算测量结果，重启后仍会记忆；矩形/椭圆显示宽高、周长和面积，圆显示半径、直径、周长和面积
 - 右侧测量面板支持自动寻边吸附和搜索半径调节；绘制时可预览待完成形状，结果列表可单击高亮、双击定位，并支持 F2 重命名和 Delete 删除
 - 测量工具采用统一的图形按钮网格，点、长度、折线、角度、矩形、多边形、圆、椭圆和剖线均由 Qt 按功能动态绘制专属矢量图标，并显示当前选中状态
 - 独立测量工具栏集中提供标定、全部九种测量、智能框选/计数、自动寻边、删除、清空和 CSV 导出，侧栏仍保留带说明的完整操作区
@@ -74,8 +74,8 @@ Qt 应用的 `AI` 页签支持基于 Ultralytics YOLO 的目标检测、图像�
 - 支持通过 `Open Image` 打开未压缩 8 位灰度/调色板 BMP、24 位 BMP 或 32 位 BGRA BMP，作为当前帧进行测量、伪彩、融合、拼接和 EDF 离线验证；打开离线图像时会取消并忽略旧后台处理结果，状态栏和遥测区会显示载入图像尺寸
 - 支持测量结果重命名，并可在预览图上拖拽端点/顶点编辑测量位置
 - 支持删除选中的测量结果，并通过 `ExportActions` 和 `MeasurementCsvExporter` 将长度、角度、面积测量表导出为 CSV
-- 支持通过 `ProjectActions` 保存和打开项目文件，恢复标定比例、全部八类测量列表、荧光染料资料、荧光通道配置，以及拼接的排列、网格、重叠率、配准、变换、融合和实时采集间隔；打开项目时会清理旧拼接/EDF 运行态
-- 支持导出带全部测量类型叠加的图像；测量 CSV 同时记录点位、原始像素值、标定单位和各形状的详细指标
+- 支持通过 `ProjectActions` 保存和打开项目文件，恢复各物镜标定比例、当前选中物镜、全部八类测量列表、荧光染料资料、荧光通道配置，以及拼接的排列、网格、重叠率、配准、变换、融合和实时采集间隔；打开项目时会清理旧拼接/EDF 运行态
+- 支持导出带全部测量类型叠加的图像；测量 CSV 同时记录当前物镜倍率、点位、原始像素值、标定单位和各形状的详细指标
 - 支持通过 `DiagnosticReportActions` 收集现场诊断状态，并由 `DiagnosticReportBuilder` 生成诊断报告文本，记录 SDK、设备列表和选中设备、当前帧来源、视口缩放、当前预览显示模式、帧信息、标定、测量、处理队列以及拼接/EDF 结果类型、当前显示来源和尺寸信息
 - 支持实时图像伪彩显示，伪彩下拉显示、选择状态、预览模式标签和状态栏文本由 `PreviewDisplayActions` 统一封装，伪彩映射由 `PseudoColorMapper` 提供，并通过 `PreviewFrameComposer` 与融合/处理结果统一生成当前预览帧
 - 支持默认荧光染料资料、自定义染料新增/更新/删除、当前帧添加为荧光通道、多通道融合预览、通道可见性/黑白范围调节和融合效果导出；染料输入解析由 `DyeProfileFormParser` 统一维护，染料资料表单显示文本由 `DyeProfileFormPresenter` 统一维护，染料资料保存/删除动作、状态文本和删除后选择项由 `DyeLibraryActions` 统一维护，染料库的同名更新、删除后选择项和默认空通道染料由 `DyeLibrary` 统一维护，染料下拉文本、当前染料选择、通道列表文本和通道选中索引由 `FluorescenceDisplayActions` 统一维护，按染料和当前帧创建默认通道由 `FluorescenceChannelFactory` 统一维护，通道设置表单显示文本由 `FluorescenceChannelFormPresenter` 统一维护，添加/清空通道后的融合预览和列表选中规则由 `FluorescenceChannelListActions` 统一维护，通道可见性、黑白范围和列表索引规则由 `FluorescenceChannelSettings` 统一维护，通道设置应用和错误状态由 `FluorescenceChannelUpdater` 统一维护，荧光通道默认名称、染料和通道列表文本由 `FluorescenceFormatter` 统一生成
