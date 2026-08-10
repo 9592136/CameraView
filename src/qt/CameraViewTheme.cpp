@@ -152,6 +152,28 @@ void applyCameraViewTheme(QApplication& application)
         QPushButton[role="danger"] { color: #ffb4b4; border-color: #684044; background: #36252a; }
         QPushButton[role="danger"]:hover { background: #4a2b31; border-color: #92535b; }
 
+        QLabel[exposureState="ok"] { color: #9ee6b0; }
+        QLabel[exposureState="caution"] { color: #ffd98a; }
+        QLabel[exposureState="warning"] {
+            color: #ffb4b4;
+            background: #36252a;
+            border: 1px solid #684044;
+            border-radius: 6px;
+            padding: 7px;
+        }
+        QLabel[role="sliderValue"] {
+            color: #d8e7fb;
+            background: #111a24;
+            border: 1px solid #2f4053;
+            border-radius: 4px;
+            padding: 3px 6px;
+        }
+        QLabel[role="sliderValue"]:disabled {
+            color: #657184;
+            background: #151b23;
+            border-color: #28323e;
+        }
+
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QListWidget {
             background: #0e151d;
             border: 1px solid #354354;
@@ -186,6 +208,9 @@ void applyCameraViewTheme(QApplication& application)
         QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: #334153; }
         QSlider::sub-page:horizontal { background: #3d8cff; border-radius: 2px; }
         QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: #eef5ff; border: 2px solid #3d8cff; }
+        QSlider::groove:horizontal:disabled { background: #252f3c; }
+        QSlider::sub-page:horizontal:disabled { background: #47566a; }
+        QSlider::handle:horizontal:disabled { background: #768295; border-color: #47566a; }
 
         QProgressBar { background: #101720; border: 1px solid #344152; border-radius: 6px; text-align: center; min-height: 18px; }
         QProgressBar::chunk { background: #2f7ff7; border-radius: 5px; }

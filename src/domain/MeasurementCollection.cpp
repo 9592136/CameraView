@@ -1,6 +1,17 @@
 #include "MeasurementCollection.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
+
+namespace {
+
+ImagePoint Translated(ImagePoint point, ImagePoint delta)
+{
+    return {point.x + delta.x, point.y + delta.y};
+}
+
+} // namespace
 
 std::size_t MeasurementCollection::Count() const
 {
@@ -11,48 +22,72 @@ std::size_t MeasurementCollection::Count() const
 LengthMeasurement& MeasurementCollection::AddLength(std::wstring name, ImagePoint first, ImagePoint second)
 {
     lengths_.emplace_back(std::move(name), first, second);
+    const MeasurementReference reference{MeasurementKind::Length, lengths_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return lengths_.back();
 }
 
 AngleMeasurement& MeasurementCollection::AddAngle(std::wstring name, ImagePoint first, ImagePoint vertex, ImagePoint second)
 {
     angles_.emplace_back(std::move(name), first, vertex, second);
+    const MeasurementReference reference{MeasurementKind::Angle, angles_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return angles_.back();
 }
 
 RectangleAreaMeasurement& MeasurementCollection::AddRectangleArea(std::wstring name, ImagePoint first, ImagePoint second)
 {
     rectangles_.emplace_back(std::move(name), first, second);
+    const MeasurementReference reference{MeasurementKind::RectangleArea, rectangles_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return rectangles_.back();
 }
 
 PolygonAreaMeasurement& MeasurementCollection::AddPolygonArea(std::wstring name, std::vector<ImagePoint> points)
 {
     polygons_.emplace_back(std::move(name), std::move(points));
+    const MeasurementReference reference{MeasurementKind::PolygonArea, polygons_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return polygons_.back();
 }
 
 PointMeasurement& MeasurementCollection::AddPoint(std::wstring name, ImagePoint point)
 {
     points_.emplace_back(std::move(name), point);
+    const MeasurementReference reference{MeasurementKind::Point, points_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return points_.back();
 }
 
 PolylineMeasurement& MeasurementCollection::AddPolyline(std::wstring name, std::vector<ImagePoint> points)
 {
     polylines_.emplace_back(std::move(name), std::move(points));
+    const MeasurementReference reference{MeasurementKind::Polyline, polylines_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return polylines_.back();
 }
 
 CircleMeasurement& MeasurementCollection::AddCircle(std::wstring name, ImagePoint center, ImagePoint edge)
 {
     circles_.emplace_back(std::move(name), center, edge);
+    const MeasurementReference reference{MeasurementKind::Circle, circles_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return circles_.back();
 }
 
 EllipseMeasurement& MeasurementCollection::AddEllipse(std::wstring name, ImagePoint first, ImagePoint second)
 {
     ellipses_.emplace_back(std::move(name), first, second);
+    const MeasurementReference reference{MeasurementKind::Ellipse, ellipses_.size() - 1U};
+    styles_.insert(styles_.begin() + static_cast<std::ptrdiff_t>(FlatIndexOf(reference)),
+        DefaultStyle(reference.kind));
     return ellipses_.back();
 }
 
@@ -66,6 +101,7 @@ void MeasurementCollection::Clear()
     polylines_.clear();
     circles_.clear();
     ellipses_.clear();
+    styles_.clear();
 }
 
 void MeasurementCollection::SetAll(
@@ -86,6 +122,29 @@ void MeasurementCollection::SetAll(
     polylines_ = std::move(polylines);
     circles_ = std::move(circles);
     ellipses_ = std::move(ellipses);
+    styles_.clear();
+    styles_.reserve(Count());
+    auto append_default_styles = [this](MeasurementKind kind, std::size_t count) {
+        for (std::size_t index = 0; index < count; ++index) {
+            styles_.push_back(DefaultStyle(kind));
+        }
+    };
+    append_default_styles(MeasurementKind::Length, lengths_.size());
+    append_default_styles(MeasurementKind::Angle, angles_.size());
+    append_default_styles(MeasurementKind::RectangleArea, rectangles_.size());
+    append_default_styles(MeasurementKind::PolygonArea, polygons_.size());
+    append_default_styles(MeasurementKind::Point, points_.size());
+    append_default_styles(MeasurementKind::Polyline, polylines_.size());
+    append_default_styles(MeasurementKind::Circle, circles_.size());
+    append_default_styles(MeasurementKind::Ellipse, ellipses_.size());
+}
+
+void MeasurementCollection::SetStyles(std::vector<MeasurementOverlayStyle> styles)
+{
+    const std::size_t copy_count = std::min(styles.size(), styles_.size());
+    for (std::size_t index = 0; index < copy_count; ++index) {
+        styles_[index] = styles[index];
+    }
 }
 
 std::optional<MeasurementReference> MeasurementCollection::AtFlatIndex(std::size_t selection) const
@@ -309,8 +368,126 @@ bool MeasurementCollection::SetPoint(
     return false;
 }
 
+MeasurementOverlayStyle MeasurementCollection::Style(MeasurementReference reference) const
+{
+    const std::size_t flat_index = FlatIndexOf(reference);
+    const auto resolved = AtFlatIndex(flat_index);
+    const bool valid = resolved && resolved->kind == reference.kind &&
+        resolved->index == reference.index;
+    return valid && flat_index < styles_.size()
+        ? styles_[flat_index] : DefaultStyle(reference.kind);
+}
+
+bool MeasurementCollection::SetStyle(
+    MeasurementReference reference,
+    MeasurementOverlayStyle style)
+{
+    const std::size_t flat_index = FlatIndexOf(reference);
+    const auto resolved = AtFlatIndex(flat_index);
+    if (!resolved || resolved->kind != reference.kind || resolved->index != reference.index ||
+        flat_index >= styles_.size()) {
+        return false;
+    }
+    styles_[flat_index] = style;
+    return true;
+}
+
+bool MeasurementCollection::Translate(MeasurementReference reference, ImagePoint delta)
+{
+    if (!std::isfinite(delta.x) || !std::isfinite(delta.y)) return false;
+    switch (reference.kind) {
+    case MeasurementKind::Length:
+        if (reference.index < lengths_.size()) {
+            auto& item = lengths_[reference.index];
+            item.SetFirst(Translated(item.First(), delta));
+            item.SetSecond(Translated(item.Second(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::Angle:
+        if (reference.index < angles_.size()) {
+            auto& item = angles_[reference.index];
+            item.SetFirst(Translated(item.First(), delta));
+            item.SetVertex(Translated(item.Vertex(), delta));
+            item.SetSecond(Translated(item.Second(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::RectangleArea:
+        if (reference.index < rectangles_.size()) {
+            auto& item = rectangles_[reference.index];
+            item.SetFirst(Translated(item.First(), delta));
+            item.SetSecond(Translated(item.Second(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::PolygonArea:
+        if (reference.index < polygons_.size()) {
+            auto points = polygons_[reference.index].Points();
+            for (ImagePoint& point : points) point = Translated(point, delta);
+            polygons_[reference.index].SetPoints(std::move(points));
+            return true;
+        }
+        break;
+    case MeasurementKind::Point:
+        if (reference.index < points_.size()) {
+            auto& item = points_[reference.index];
+            item.SetPoint(Translated(item.Point(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::Polyline:
+        if (reference.index < polylines_.size()) {
+            auto points = polylines_[reference.index].Points();
+            for (ImagePoint& point : points) point = Translated(point, delta);
+            polylines_[reference.index].SetPoints(std::move(points));
+            return true;
+        }
+        break;
+    case MeasurementKind::Circle:
+        if (reference.index < circles_.size()) {
+            auto& item = circles_[reference.index];
+            item.SetCenter(Translated(item.Center(), delta));
+            item.SetEdge(Translated(item.Edge(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::Ellipse:
+        if (reference.index < ellipses_.size()) {
+            auto& item = ellipses_[reference.index];
+            item.SetFirst(Translated(item.First(), delta));
+            item.SetSecond(Translated(item.Second(), delta));
+            return true;
+        }
+        break;
+    case MeasurementKind::None:
+        break;
+    }
+    return false;
+}
+
+MeasurementOverlayStyle MeasurementCollection::DefaultStyle(MeasurementKind kind)
+{
+    switch (kind) {
+    case MeasurementKind::Length: return {76, 201, 240};
+    case MeasurementKind::Angle: return {251, 146, 60};
+    case MeasurementKind::RectangleArea: return {74, 222, 128};
+    case MeasurementKind::PolygonArea: return {192, 132, 252};
+    case MeasurementKind::Point: return {250, 204, 21};
+    case MeasurementKind::Polyline: return {45, 212, 191};
+    case MeasurementKind::Circle: return {244, 114, 182};
+    case MeasurementKind::Ellipse: return {129, 140, 248};
+    case MeasurementKind::None: return {76, 201, 240};
+    }
+    return {76, 201, 240};
+}
+
 bool MeasurementCollection::EraseAtFlatIndex(std::size_t selection)
 {
+    if (selection >= Count()) return false;
+    if (selection < styles_.size()) {
+        styles_.erase(styles_.begin() + static_cast<std::ptrdiff_t>(selection));
+    }
     if (selection < lengths_.size()) {
         lengths_.erase(lengths_.begin() + static_cast<std::ptrdiff_t>(selection));
         return true;

@@ -5,6 +5,7 @@
 #include "domain/CalibrationProfile.h"
 #include "domain/ImageFrame.h"
 #include "domain/MeasurementCollection.h"
+#include "imaging/ChannelFusionEngine.h"
 #include "imaging/EdfProcessor.h"
 #include "imaging/Fluorescence.h"
 #include "imaging/HistogramCalculator.h"
@@ -26,6 +27,7 @@
 
 class CameraWorker;
 class HistogramWidget;
+class NumericSlider;
 class YoloWorkspaceWidget;
 class QAction;
 class QCheckBox;
@@ -112,8 +114,17 @@ private:
     QVector<CanvasOverlay> smartTargetOverlays() const;
     QRectF measurementBounds(MeasurementReference reference) const;
     void focusSelectedMeasurement();
+    void chooseSelectedMeasurementColor();
+    void resetSelectedMeasurementColor();
+    void updateMeasurementStyleUi();
     void updateSmartTargetUi();
     void updateImageFilterPipelineUi();
+    void refreshFluorescenceChannelList(int selectedRow = -1);
+    void updateFluorescenceChannelUi();
+    void autoLevelSelectedFluorescenceChannel();
+    void removeSelectedFluorescenceChannel();
+    void isolateSelectedFluorescenceChannel();
+    void showAllFluorescenceChannels();
     void rebuildOverlays();
     void updateCalibrationUi();
     void selectObjective(int index, bool rememberSelection = true);
@@ -162,7 +173,7 @@ private:
     QComboBox* histogram_channel_combo_ = nullptr;
     QComboBox* image_filter_combo_ = nullptr;
     QLabel* image_filter_parameter_label_ = nullptr;
-    QSpinBox* image_filter_parameter_spin_ = nullptr;
+    NumericSlider* image_filter_parameter_slider_ = nullptr;
     QLabel* image_filter_pipeline_label_ = nullptr;
     QSlider* brightness_slider_ = nullptr;
     QSlider* contrast_slider_ = nullptr;
@@ -172,16 +183,18 @@ private:
     QComboBox* dye_combo_ = nullptr;
     QListWidget* channel_list_ = nullptr;
     QCheckBox* fusion_check_ = nullptr;
+    QComboBox* fluorescence_blend_combo_ = nullptr;
     QCheckBox* channel_visible_check_ = nullptr;
-    QSpinBox* channel_black_spin_ = nullptr;
-    QSpinBox* channel_white_spin_ = nullptr;
+    NumericSlider* channel_black_slider_ = nullptr;
+    NumericSlider* channel_white_slider_ = nullptr;
+    QLabel* fluorescence_statistics_label_ = nullptr;
     QLabel* stitch_count_label_ = nullptr;
     QLabel* stitch_backend_label_ = nullptr;
     QListWidget* stitch_tile_list_ = nullptr;
     QComboBox* stitch_layout_combo_ = nullptr;
     QSpinBox* stitch_rows_spin_ = nullptr;
     QSpinBox* stitch_cols_spin_ = nullptr;
-    QSpinBox* stitch_overlap_spin_ = nullptr;
+    NumericSlider* stitch_overlap_slider_ = nullptr;
     QComboBox* stitch_registration_combo_ = nullptr;
     QComboBox* stitch_transform_combo_ = nullptr;
     QComboBox* stitch_blend_combo_ = nullptr;
@@ -190,7 +203,7 @@ private:
     QPushButton* stitch_cancel_button_ = nullptr;
     QPushButton* stitch_retry_button_ = nullptr;
     QPushButton* stitch_save_button_ = nullptr;
-    QSpinBox* live_stitch_interval_spin_ = nullptr;
+    NumericSlider* live_stitch_interval_slider_ = nullptr;
     QPushButton* live_stitch_start_button_ = nullptr;
     QPushButton* live_stitch_stop_button_ = nullptr;
     QLabel* live_stitch_status_label_ = nullptr;
@@ -203,13 +216,15 @@ private:
     QComboBox* display_unit_combo_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
     QLabel* measurement_count_label_ = nullptr;
+    QPushButton* measurement_color_button_ = nullptr;
+    QPushButton* measurement_reset_color_button_ = nullptr;
     QCheckBox* edge_snap_check_ = nullptr;
-    QSpinBox* edge_snap_radius_spin_ = nullptr;
+    NumericSlider* edge_snap_radius_slider_ = nullptr;
     QLabel* calibration_label_ = nullptr;
     QLabel* smart_sample_label_ = nullptr;
     QLabel* smart_result_label_ = nullptr;
-    QDoubleSpinBox* smart_similarity_spin_ = nullptr;
-    QSpinBox* smart_scale_tolerance_spin_ = nullptr;
+    NumericSlider* smart_similarity_slider_ = nullptr;
+    NumericSlider* smart_scale_tolerance_slider_ = nullptr;
     QPushButton* smart_select_button_ = nullptr;
     QPushButton* smart_count_button_ = nullptr;
     QProgressBar* smart_count_progress_ = nullptr;
@@ -254,6 +269,7 @@ private:
     quint64 image_generation_ = 0;
     std::vector<DyeProfile> dyes_;
     std::vector<FluorescenceChannel> channels_;
+    FluorescenceBlendMode fluorescence_blend_mode_ = FluorescenceBlendMode::Screen;
     std::vector<StitchTile> stitch_tiles_;
     QStringList stitch_tile_sources_;
     std::shared_ptr<std::atomic_bool> stitch_cancel_token_;

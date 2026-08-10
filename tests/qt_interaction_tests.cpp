@@ -262,6 +262,39 @@ int main(int argc, char* argv[])
         return fail("Editable measurement overlay did not report a completed handle drag.");
     }
 
+    int selected_overlay = -1;
+    int translated_source = -1;
+    QPointF translated_delta;
+    bool translation_finished = false;
+    QObject::connect(&canvas, &ImageCanvas::overlaySelected,
+        [&selected_overlay](int source) { selected_overlay = source; });
+    QObject::connect(&canvas, &ImageCanvas::overlayMoved,
+        [&translated_source, &translated_delta, &translation_finished](
+            int source, const QPointF& delta, bool finished) {
+            translated_source = source;
+            if (!finished) translated_delta += delta;
+            translation_finished = finished;
+        });
+    canvas.setOverlays({CanvasOverlay{CanvasTool::Rectangle, {{20.0, 20.0}, {40.0, 40.0}},
+        QStringLiteral("movable"), QColor(12, 34, 56), true, true, 5}});
+    QMouseEvent move_overlay_press(
+        QEvent::MouseButtonPress, QPointF(150.0, 150.0), QPointF(150.0, 150.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent move_overlay_move(
+        QEvent::MouseMove, QPointF(200.0, 175.0), QPointF(200.0, 175.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent move_overlay_release(
+        QEvent::MouseButtonRelease, QPointF(200.0, 175.0), QPointF(200.0, 175.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move_overlay_press);
+    QApplication::sendEvent(&canvas, &move_overlay_move);
+    QApplication::sendEvent(&canvas, &move_overlay_release);
+    if (selected_overlay != 5 || translated_source != 5 ||
+        !near(translated_delta.x(), 10.0) || !near(translated_delta.y(), 5.0) ||
+        !translation_finished) {
+        return fail("Editable measurement overlay did not support selection and whole-shape dragging.");
+    }
+
     YoloWorkspaceWidget workspace;
     workspace.setCurrentImage(QImage(1000, 500, QImage::Format_RGB32), QStringLiteral("test"));
     QRectF requested_bounds;

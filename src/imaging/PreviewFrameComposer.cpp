@@ -14,7 +14,9 @@ void PreviewFrameComposer::ComposeInto(const PreviewFrameComposition& compositio
     if (composition.show_fusion_preview &&
         composition.fluorescence_channels &&
         !composition.fluorescence_channels->empty()) {
-        ImageFrame fused = ChannelFusionEngine::Fuse(*composition.fluorescence_channels);
+        ImageFrame fused = ChannelFusionEngine::Fuse(
+            *composition.fluorescence_channels,
+            composition.fluorescence_fusion);
         if (fused.IsValid()) {
             out = std::move(fused);
             return;

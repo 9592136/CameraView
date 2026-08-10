@@ -41,6 +41,7 @@ public:
     const std::vector<PolylineMeasurement>& Polylines() const { return polylines_; }
     const std::vector<CircleMeasurement>& Circles() const { return circles_; }
     const std::vector<EllipseMeasurement>& Ellipses() const { return ellipses_; }
+    const std::vector<MeasurementOverlayStyle>& Styles() const { return styles_; }
 
     std::size_t LengthCount() const { return lengths_.size(); }
     std::size_t AngleCount() const { return angles_.size(); }
@@ -72,13 +73,19 @@ public:
         std::vector<PolylineMeasurement> polylines = {},
         std::vector<CircleMeasurement> circles = {},
         std::vector<EllipseMeasurement> ellipses = {});
+    void SetStyles(std::vector<MeasurementOverlayStyle> styles);
 
     std::optional<MeasurementReference> AtFlatIndex(std::size_t selection) const;
     std::size_t FlatIndexOf(MeasurementReference reference) const;
     std::wstring Name(MeasurementReference reference) const;
     bool SetName(MeasurementReference reference, const std::wstring& name);
     bool SetPoint(MeasurementReference reference, EditablePoint point, std::size_t point_index, ImagePoint image_point);
+    MeasurementOverlayStyle Style(MeasurementReference reference) const;
+    bool SetStyle(MeasurementReference reference, MeasurementOverlayStyle style);
+    bool Translate(MeasurementReference reference, ImagePoint delta);
     bool EraseAtFlatIndex(std::size_t selection);
+
+    static MeasurementOverlayStyle DefaultStyle(MeasurementKind kind);
 
 private:
     std::vector<LengthMeasurement> lengths_;
@@ -89,4 +96,5 @@ private:
     std::vector<PolylineMeasurement> polylines_;
     std::vector<CircleMeasurement> circles_;
     std::vector<EllipseMeasurement> ellipses_;
+    std::vector<MeasurementOverlayStyle> styles_;
 };

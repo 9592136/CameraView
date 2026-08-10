@@ -5,6 +5,7 @@
 #include "HistogramWidget.h"
 #include "ImageSurface3DDialog.h"
 #include "MeasurementToolButton.h"
+#include "NumericSlider.h"
 #include "ObjectiveCalibrationSettings.h"
 #include "ProfileAnalysisDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
@@ -14,7 +15,10 @@
 #include "imaging/ChannelFusionEngine.h"
 #include "imaging/DyeLibrary.h"
 #include "imaging/EdfStackListActions.h"
+#include "imaging/FluorescenceChannelAnalysis.h"
 #include "imaging/FluorescenceChannelListActions.h"
+#include "imaging/FluorescenceChannelUpdater.h"
+#include "imaging/FluorescenceFormatter.h"
 #include "imaging/HistogramCalculator.h"
 #include "imaging/LiveStitchCapturePlanner.h"
 #include "imaging/LiveStitchPreviewBuilder.h"
@@ -33,6 +37,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCollator>
+#include <QColorDialog>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
@@ -698,11 +703,13 @@ QWidget* CameraMainWindow::buildImagePage()
     for (const ImageFilterKind kind : filter_kinds) {
         image_filter_combo_->addItem(imageFilterName(kind), static_cast<int>(kind));
     }
-    image_filter_parameter_spin_ = new QSpinBox;
-    image_filter_parameter_spin_->setObjectName(QStringLiteral("ImageFilterParameterSpin"));
+    image_filter_parameter_slider_ = new NumericSlider;
+    image_filter_parameter_slider_->setObjectName(QStringLiteral("ImageFilterParameterSlider"));
+    image_filter_parameter_slider_->slider()->setObjectName(
+        QStringLiteral("ImageFilterParameterSliderHandle"));
     image_filter_parameter_label_ = new QLabel(tr("参数"));
     filter_form->addRow(tr("处理功能"), image_filter_combo_);
-    filter_form->addRow(image_filter_parameter_label_, image_filter_parameter_spin_);
+    filter_form->addRow(image_filter_parameter_label_, image_filter_parameter_slider_);
     filter_layout->addLayout(filter_form);
     auto* apply_filter = new QPushButton(tr("添加到处理链"));
     apply_filter->setObjectName(QStringLiteral("ApplyImageFilterButton"));
@@ -737,56 +744,143 @@ QWidget* CameraMainWindow::buildFluorescencePage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
+    auto* workflow_hint = new QLabel(tr(
+        "按染料依次采集单通道图像。自动拉伸只改变显示范围，不修改原始像素；"
+        "曝光提示用于发现欠曝和饱和。"));
+    workflow_hint->setWordWrap(true);
+    workflow_hint->setProperty("role", QStringLiteral("summary"));
+    layout->addWidget(workflow_hint);
     dye_combo_ = new QComboBox;
+    dye_combo_->setObjectName(QStringLiteral("FluorescenceDyeCombo"));
     for (const DyeProfile& dye : dyes_) {
-        dye_combo_->addItem(QString::fromStdWString(dye.name));
+        dye_combo_->addItem(QString::fromStdWString(FluorescenceFormatter::FormatDyeLabel(dye)));
     }
-    layout->addWidget(new QLabel(tr("染料")));
+    layout->addWidget(new QLabel(tr("染料 / 激发-发射")));
     layout->addWidget(dye_combo_);
     auto* add = addButton(layout, tr("当前帧添加为通道"));
-    auto* clear = addButton(layout, tr("清空通道"));
+    add->setObjectName(QStringLiteral("FluorescenceAddChannelButton"));
     fusion_check_ = new QCheckBox(tr("显示融合预览"));
+    fusion_check_->setObjectName(QStringLiteral("FluorescencePreviewCheck"));
     layout->addWidget(fusion_check_);
+
+    auto* fusion_form = new QFormLayout;
+    fluorescence_blend_combo_ = new QComboBox;
+    fluorescence_blend_combo_->setObjectName(QStringLiteral("FluorescenceBlendCombo"));
+    fluorescence_blend_combo_->addItem(
+        tr("加法（高亮共定位）"), static_cast<int>(FluorescenceBlendMode::Additive));
+    fluorescence_blend_combo_->addItem(
+        tr("屏幕（推荐，减少硬饱和）"), static_cast<int>(FluorescenceBlendMode::Screen));
+    fluorescence_blend_combo_->addItem(
+        tr("最大值（保留主导通道）"), static_cast<int>(FluorescenceBlendMode::Maximum));
+    fluorescence_blend_combo_->setCurrentIndex(1);
+    fusion_form->addRow(tr("融合方式"), fluorescence_blend_combo_);
+    layout->addLayout(fusion_form);
+
     channel_list_ = new QListWidget;
-    layout->addWidget(channel_list_, 1);
+    channel_list_->setObjectName(QStringLiteral("FluorescenceChannelList"));
+    channel_list_->setToolTip(tr("双击通道可隔离显示；列表显示可见性、尺寸和黑白点。"));
+    channel_list_->setMinimumHeight(120);
+    channel_list_->setMaximumHeight(210);
+    layout->addWidget(channel_list_);
+    auto* remove_channel = new QPushButton(tr("删除选中"));
+    auto* isolate_channel = new QPushButton(tr("仅显示选中"));
+    auto* show_all_channels = new QPushButton(tr("显示全部"));
+    auto* clear = new QPushButton(tr("清空"));
+    remove_channel->setObjectName(QStringLiteral("FluorescenceRemoveChannelButton"));
+    isolate_channel->setObjectName(QStringLiteral("FluorescenceIsolateChannelButton"));
+    show_all_channels->setObjectName(QStringLiteral("FluorescenceShowAllButton"));
+    clear->setObjectName(QStringLiteral("FluorescenceClearButton"));
+    setButtonRole(remove_channel, "danger");
+    setButtonRole(clear, "danger");
+    layout->addWidget(buttonRow({remove_channel, isolate_channel, show_all_channels, clear}));
+
     auto* channel_form = new QFormLayout;
     channel_visible_check_ = new QCheckBox(tr("可见"));
+    channel_visible_check_->setObjectName(QStringLiteral("FluorescenceChannelVisible"));
     channel_visible_check_->setChecked(true);
-    channel_black_spin_ = new QSpinBox;
-    channel_black_spin_->setRange(0, 254);
-    channel_white_spin_ = new QSpinBox;
-    channel_white_spin_->setRange(1, 255);
-    channel_white_spin_->setValue(255);
+    channel_black_slider_ = new NumericSlider;
+    channel_black_slider_->setObjectName(QStringLiteral("FluorescenceBlackLevelSlider"));
+    channel_black_slider_->slider()->setObjectName(QStringLiteral("FluorescenceBlackLevel"));
+    channel_black_slider_->setRange(0, 254);
+    channel_white_slider_ = new NumericSlider;
+    channel_white_slider_->setObjectName(QStringLiteral("FluorescenceWhiteLevelSlider"));
+    channel_white_slider_->slider()->setObjectName(QStringLiteral("FluorescenceWhiteLevel"));
+    channel_white_slider_->setRange(1, 255);
+    channel_white_slider_->setValue(255);
     channel_form->addRow(tr("通道"), channel_visible_check_);
-    channel_form->addRow(tr("黑电平"), channel_black_spin_);
-    channel_form->addRow(tr("白电平"), channel_white_spin_);
+    channel_form->addRow(tr("黑电平"), channel_black_slider_);
+    channel_form->addRow(tr("白电平"), channel_white_slider_);
     layout->addLayout(channel_form);
-    auto* apply_channel = addButton(layout, tr("应用通道设置"));
+    auto* apply_channel = new QPushButton(tr("应用显示范围"));
+    auto* auto_level = new QPushButton(tr("稳健自动拉伸"));
+    apply_channel->setObjectName(QStringLiteral("FluorescenceApplyLevelsButton"));
+    auto_level->setObjectName(QStringLiteral("FluorescenceAutoLevelsButton"));
+    setButtonRole(auto_level, "primary");
+    layout->addWidget(buttonRow({apply_channel, auto_level}));
+    fluorescence_statistics_label_ = new QLabel(tr("选择通道后显示强度与曝光质量。"));
+    fluorescence_statistics_label_->setObjectName(QStringLiteral("FluorescenceStatisticsLabel"));
+    fluorescence_statistics_label_->setWordWrap(true);
+    fluorescence_statistics_label_->setProperty("role", QStringLiteral("summary"));
+    layout->addWidget(fluorescence_statistics_label_);
     connect(add, &QPushButton::clicked, this, &CameraMainWindow::addFluorescenceChannel);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearFluorescenceChannels);
+    connect(remove_channel, &QPushButton::clicked,
+        this, &CameraMainWindow::removeSelectedFluorescenceChannel);
+    connect(isolate_channel, &QPushButton::clicked,
+        this, &CameraMainWindow::isolateSelectedFluorescenceChannel);
+    connect(show_all_channels, &QPushButton::clicked,
+        this, &CameraMainWindow::showAllFluorescenceChannels);
+    connect(auto_level, &QPushButton::clicked,
+        this, &CameraMainWindow::autoLevelSelectedFluorescenceChannel);
     connect(fusion_check_, &QCheckBox::toggled, this, &CameraMainWindow::toggleFusion);
-    connect(channel_list_, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (row < 0 || row >= static_cast<int>(channels_.size())) {
-            return;
+    connect(fluorescence_blend_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this] {
+            fluorescence_blend_mode_ = static_cast<FluorescenceBlendMode>(
+                fluorescence_blend_combo_->currentData().toInt());
+            updateImagePresentation();
+        });
+    connect(canvas_, &ImageCanvas::overlaySelected, this, [this](int sourceIndex) {
+        if (!measurement_list_) return;
+        if (sourceIndex >= 0 && sourceIndex < measurement_list_->count()) {
+            measurement_list_->setCurrentRow(sourceIndex);
+        } else {
+            measurement_list_->setCurrentRow(-1);
         }
-        const FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
-        channel_visible_check_->setChecked(channel.visible);
-        channel_black_spin_->setValue(channel.black_level);
-        channel_white_spin_->setValue(channel.white_level);
+        updateMeasurementStyleUi();
     });
+    connect(canvas_, &ImageCanvas::overlayMoved, this,
+        [this](int sourceIndex, const QPointF& delta, bool finished) {
+            if (sourceIndex < 0) return;
+            const auto reference = measurements_.AtFlatIndex(
+                static_cast<std::size_t>(sourceIndex));
+            if (!reference) return;
+            const bool has_delta = !qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y());
+            if (has_delta && !measurements_.Translate(*reference, imagePoint(delta))) return;
+            if (measurement_list_ && measurement_list_->currentRow() != sourceIndex) {
+                measurement_list_->setCurrentRow(sourceIndex);
+            }
+            if (finished) {
+                updateMeasurementList();
+                statusBar()->showMessage(tr("测量覆盖层位置已更新"), 2500);
+            }
+        });
+    connect(channel_list_, &QListWidget::currentRowChanged,
+        this, [this](int) { updateFluorescenceChannelUi(); });
+    connect(channel_list_, &QListWidget::itemDoubleClicked,
+        this, [this](QListWidgetItem*) { isolateSelectedFluorescenceChannel(); });
     connect(apply_channel, &QPushButton::clicked, this, [this] {
         const int row = channel_list_->currentRow();
-        if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        const FluorescenceChannelUpdateResult result = FluorescenceChannelUpdater::Apply(
+            channels_,
+            row,
+            channel_visible_check_->isChecked(),
+            channel_black_slider_->integerValue(),
+            channel_white_slider_->integerValue());
+        if (!result.applied) {
+            QMessageBox::warning(this, tr("通道设置"), QString::fromStdWString(result.message));
             return;
         }
-        if (channel_black_spin_->value() >= channel_white_spin_->value()) {
-            QMessageBox::warning(this, tr("通道设置"), tr("黑电平必须小于白电平。"));
-            return;
-        }
-        FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
-        channel.visible = channel_visible_check_->isChecked();
-        channel.black_level = static_cast<unsigned char>(channel_black_spin_->value());
-        channel.white_level = static_cast<unsigned char>(channel_white_spin_->value());
+        refreshFluorescenceChannelList(row);
         updateImagePresentation();
     });
     return page;
@@ -805,12 +899,13 @@ QWidget* CameraMainWindow::buildProcessingPage()
     auto* live_group = new QGroupBox(tr("相机实时拼接"));
     auto* live_layout = new QVBoxLayout(live_group);
     auto* live_form = new QFormLayout;
-    live_stitch_interval_spin_ = new QSpinBox;
-    live_stitch_interval_spin_->setObjectName(QStringLiteral("LiveStitchIntervalSpin"));
-    live_stitch_interval_spin_->setRange(250, 10000);
-    live_stitch_interval_spin_->setValue(1200);
-    live_stitch_interval_spin_->setSuffix(tr(" ms"));
-    live_form->addRow(tr("检测间隔"), live_stitch_interval_spin_);
+    live_stitch_interval_slider_ = new NumericSlider;
+    live_stitch_interval_slider_->setObjectName(QStringLiteral("LiveStitchIntervalSlider"));
+    live_stitch_interval_slider_->slider()->setObjectName(QStringLiteral("LiveStitchIntervalSpin"));
+    live_stitch_interval_slider_->setRange(250, 10000);
+    live_stitch_interval_slider_->setValue(1200);
+    live_stitch_interval_slider_->setSuffix(tr(" ms"));
+    live_form->addRow(tr("检测间隔"), live_stitch_interval_slider_);
     live_layout->addLayout(live_form);
     live_stitch_start_button_ = new QPushButton(tr("开始实时拼接"));
     live_stitch_stop_button_ = new QPushButton(tr("停止"));
@@ -845,13 +940,14 @@ QWidget* CameraMainWindow::buildProcessingPage()
     grid_size_layout->addWidget(stitch_rows_spin_);
     grid_size_layout->addWidget(new QLabel(QStringLiteral("×")));
     grid_size_layout->addWidget(stitch_cols_spin_);
-    stitch_overlap_spin_ = new QSpinBox;
-    stitch_overlap_spin_->setObjectName(QStringLiteral("StitchOverlapSpin"));
-    stitch_overlap_spin_->setRange(
+    stitch_overlap_slider_ = new NumericSlider;
+    stitch_overlap_slider_->setObjectName(QStringLiteral("StitchOverlapSlider"));
+    stitch_overlap_slider_->slider()->setObjectName(QStringLiteral("StitchOverlapSpin"));
+    stitch_overlap_slider_->setRange(
         ProcessingParameterRules::MinStitchOverlapPercent(),
         ProcessingParameterRules::MaxStitchOverlapPercent());
-    stitch_overlap_spin_->setValue(ProcessingParameterRules::DefaultStitchOverlapPercent());
-    stitch_overlap_spin_->setSuffix(QStringLiteral(" %"));
+    stitch_overlap_slider_->setValue(ProcessingParameterRules::DefaultStitchOverlapPercent());
+    stitch_overlap_slider_->setSuffix(QStringLiteral(" %"));
     stitch_registration_combo_ = new QComboBox;
     stitch_registration_combo_->setObjectName(QStringLiteral("StitchRegistrationCombo"));
     stitch_registration_combo_->addItem(tr("显微图像（推荐）"), static_cast<int>(StitchRegistrationMethod::Micro));
@@ -871,7 +967,7 @@ QWidget* CameraMainWindow::buildProcessingPage()
     stitch_blend_combo_->addItem(tr("不融合"), static_cast<int>(StitchBlendMode::None));
     settings_form->addRow(tr("排列方式"), stitch_layout_combo_);
     settings_form->addRow(tr("网格行 × 列"), grid_size);
-    settings_form->addRow(tr("预计重叠"), stitch_overlap_spin_);
+    settings_form->addRow(tr("预计重叠"), stitch_overlap_slider_);
     settings_form->addRow(tr("配准方法"), stitch_registration_combo_);
     settings_form->addRow(tr("变换模型"), stitch_transform_combo_);
     settings_form->addRow(tr("接缝融合"), stitch_blend_combo_);
@@ -1124,12 +1220,13 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* edge_group = new QGroupBox(tr("自动寻边"));
     auto* edge_form = new QFormLayout(edge_group);
     edge_snap_check_ = new QCheckBox(tr("落点吸附到附近最清晰的边缘"));
-    edge_snap_radius_spin_ = new QSpinBox;
-    edge_snap_radius_spin_->setRange(2, 40);
-    edge_snap_radius_spin_->setValue(12);
-    edge_snap_radius_spin_->setSuffix(tr(" px"));
+    edge_snap_radius_slider_ = new NumericSlider;
+    edge_snap_radius_slider_->setObjectName(QStringLiteral("EdgeSnapRadiusSlider"));
+    edge_snap_radius_slider_->setRange(2, 40);
+    edge_snap_radius_slider_->setValue(12);
+    edge_snap_radius_slider_->setSuffix(tr(" px"));
     edge_form->addRow(edge_snap_check_);
-    edge_form->addRow(tr("搜索半径"), edge_snap_radius_spin_);
+    edge_form->addRow(tr("搜索半径"), edge_snap_radius_slider_);
     layout->addWidget(edge_group);
 
     auto* smart_group = new QGroupBox(tr("智能目标计数"));
@@ -1145,18 +1242,19 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* clear_smart = new QPushButton(tr("清除"));
     smart_layout->addWidget(buttonRow({smart_select_button_, remove_smart_sample, clear_smart}));
     auto* smart_form = new QFormLayout;
-    smart_similarity_spin_ = new QDoubleSpinBox;
-    smart_similarity_spin_->setObjectName(QStringLiteral("SmartCountSimilaritySpin"));
-    smart_similarity_spin_->setRange(0.40, 0.99);
-    smart_similarity_spin_->setSingleStep(0.01);
-    smart_similarity_spin_->setDecimals(2);
-    smart_similarity_spin_->setValue(0.78);
-    smart_scale_tolerance_spin_ = new QSpinBox;
-    smart_scale_tolerance_spin_->setRange(0, 40);
-    smart_scale_tolerance_spin_->setValue(15);
-    smart_scale_tolerance_spin_->setSuffix(tr(" %"));
-    smart_form->addRow(tr("相似度阈值"), smart_similarity_spin_);
-    smart_form->addRow(tr("尺寸变化范围"), smart_scale_tolerance_spin_);
+    smart_similarity_slider_ = new NumericSlider;
+    smart_similarity_slider_->setObjectName(QStringLiteral("SmartCountSimilaritySlider"));
+    smart_similarity_slider_->setRange(0.40, 0.99);
+    smart_similarity_slider_->setSingleStep(0.01);
+    smart_similarity_slider_->setDecimals(2);
+    smart_similarity_slider_->setValue(0.78);
+    smart_scale_tolerance_slider_ = new NumericSlider;
+    smart_scale_tolerance_slider_->setObjectName(QStringLiteral("SmartCountScaleToleranceSlider"));
+    smart_scale_tolerance_slider_->setRange(0, 40);
+    smart_scale_tolerance_slider_->setValue(15);
+    smart_scale_tolerance_slider_->setSuffix(tr(" %"));
+    smart_form->addRow(tr("相似度阈值"), smart_similarity_slider_);
+    smart_form->addRow(tr("尺寸变化范围"), smart_scale_tolerance_slider_);
     smart_layout->addLayout(smart_form);
     smart_sample_label_ = new QLabel(tr("已框选 0 个样本"));
     smart_layout->addWidget(smart_sample_label_);
@@ -1186,8 +1284,28 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     layout->addWidget(measurement_count_label_);
     measurement_list_ = new QListWidget;
     measurement_list_->setAlternatingRowColors(true);
+    measurement_list_->setObjectName(QStringLiteral("MeasurementResultList"));
     measurement_list_->setToolTip(tr("单击高亮，双击在图像中定位；F2 重命名，Delete 删除"));
     layout->addWidget(measurement_list_, 1);
+
+    auto* overlay_edit_group = new QGroupBox(tr("覆盖层编辑"));
+    overlay_edit_group->setObjectName(QStringLiteral("MeasurementOverlayEditGroup"));
+    auto* overlay_edit_layout = new QVBoxLayout(overlay_edit_group);
+    auto* overlay_edit_hint = new QLabel(
+        tr("选中测量后，拖动白边控制点修改形状；拖动线条或图形内部可整体移动。"));
+    overlay_edit_hint->setWordWrap(true);
+    overlay_edit_layout->addWidget(overlay_edit_hint);
+    auto* edit_overlay = new QPushButton(tr("进入编辑/拖动"));
+    edit_overlay->setObjectName(QStringLiteral("MeasurementOverlayEditButton"));
+    measurement_color_button_ = new QPushButton(tr("设置颜色…"));
+    measurement_color_button_->setObjectName(QStringLiteral("MeasurementOverlayColorButton"));
+    measurement_reset_color_button_ = new QPushButton(tr("恢复默认颜色"));
+    measurement_reset_color_button_->setObjectName(
+        QStringLiteral("MeasurementOverlayResetColorButton"));
+    overlay_edit_layout->addWidget(buttonRow(
+        {edit_overlay, measurement_color_button_, measurement_reset_color_button_}));
+    layout->addWidget(overlay_edit_group);
+
     auto* rename_selected = new QPushButton(tr("重命名"));
     auto* delete_selected = new QPushButton(tr("删除选中"));
     auto* clear = new QPushButton(tr("清空"));
@@ -1233,8 +1351,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         canvas_->setEdgeSnappingEnabled(enabled);
         statusBar()->showMessage(enabled ? tr("自动寻边已开启") : tr("自动寻边已关闭"), 2500);
     });
-    connect(edge_snap_radius_spin_, qOverload<int>(&QSpinBox::valueChanged),
-        canvas_, &ImageCanvas::setEdgeSnapRadius);
+    connect(edge_snap_radius_slider_, &NumericSlider::valueChanged,
+        this, [this](double value) { canvas_->setEdgeSnapRadius(qRound(value)); });
     connect(smart_select_button_, &QPushButton::clicked,
         this, &CameraMainWindow::startSmartTargetSampleSelection);
     connect(remove_smart_sample, &QPushButton::clicked, this, [this] {
@@ -1281,7 +1399,10 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     };
     connect(rename_selected, &QPushButton::clicked, this, rename_current);
     connect(measurement_list_, &QListWidget::currentRowChanged, this,
-        [this](int) { rebuildOverlays(); });
+        [this](int) {
+            rebuildOverlays();
+            updateMeasurementStyleUi();
+        });
     connect(measurement_list_, &QListWidget::itemDoubleClicked, this,
         [this](QListWidgetItem*) { focusSelectedMeasurement(); });
     auto* rename_shortcut = new QShortcut(QKeySequence(Qt::Key_F2), measurement_list_);
@@ -1291,6 +1412,17 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(delete_selected, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearMeasurements);
     connect(export_csv, &QPushButton::clicked, this, &CameraMainWindow::exportMeasurements);
+    connect(edit_overlay, &QPushButton::clicked, this, [this] {
+        canvas_->setTool(CanvasTool::None);
+        canvas_->setFocus(Qt::OtherFocusReason);
+        statusBar()->showMessage(
+            tr("覆盖层编辑：拖动控制点修改形状，拖动线条或图形内部整体移动"), 5000);
+    });
+    connect(measurement_color_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::chooseSelectedMeasurementColor);
+    connect(measurement_reset_color_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::resetSelectedMeasurementColor);
+    updateMeasurementStyleUi();
     updateSmartTargetUi();
     return page;
 }
@@ -1434,7 +1566,10 @@ void CameraMainWindow::saveProject()
     document.processing_settings.stitch_transform_model =
         static_cast<int>(stitch_options.transform_model);
     document.processing_settings.stitch_blend_mode = static_cast<int>(stitch_options.blend_mode);
-    document.processing_settings.live_stitch_interval_ms = live_stitch_interval_spin_->value();
+    document.processing_settings.live_stitch_interval_ms =
+        live_stitch_interval_slider_->integerValue();
+    document.processing_settings.fluorescence_blend_mode =
+        static_cast<int>(fluorescence_blend_mode_);
     std::wstring error;
     if (!ProjectRepository::Save(std::filesystem::path(file_name.toStdWString()), document, error)) {
         QMessageBox::warning(this, tr("保存失败"), errorText(error));
@@ -1502,22 +1637,20 @@ void CameraMainWindow::openProject()
     restore_combo(stitch_layout_combo_, state.stitch_layout_mode);
     stitch_rows_spin_->setValue(state.stitch_grid_rows);
     stitch_cols_spin_->setValue(state.stitch_grid_cols);
-    stitch_overlap_spin_->setValue(state.stitch_overlap_percent);
+    stitch_overlap_slider_->setValue(state.stitch_overlap_percent);
     restore_combo(stitch_registration_combo_, state.stitch_registration_method);
     restore_combo(stitch_transform_combo_, state.stitch_transform_model);
     restore_combo(stitch_blend_combo_, state.stitch_blend_mode);
-    live_stitch_interval_spin_->setValue(state.live_stitch_interval_ms);
+    live_stitch_interval_slider_->setValue(state.live_stitch_interval_ms);
+    restore_combo(fluorescence_blend_combo_, state.fluorescence_blend_mode);
     if (dyes_.empty()) {
         dyes_ = DyeLibrary::DefaultDyes();
     }
     dye_combo_->clear();
     for (const DyeProfile& dye : dyes_) {
-        dye_combo_->addItem(QString::fromStdWString(dye.name));
+        dye_combo_->addItem(QString::fromStdWString(FluorescenceFormatter::FormatDyeLabel(dye)));
     }
-    channel_list_->clear();
-    for (const FluorescenceChannel& channel : channels_) {
-        channel_list_->addItem(QString::fromStdWString(channel.name));
-    }
+    refreshFluorescenceChannelList(channels_.empty() ? -1 : 0);
     updateCalibrationUi();
     updateMeasurementList();
     saveObjectiveCalibrationMemory();
@@ -1706,48 +1839,48 @@ void CameraMainWindow::setCurrentFrame(
 
 void CameraMainWindow::updateImageFilterControls()
 {
-    if (!image_filter_combo_ || !image_filter_parameter_spin_ || !image_filter_parameter_label_) return;
+    if (!image_filter_combo_ || !image_filter_parameter_slider_ || !image_filter_parameter_label_) return;
     const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
-    image_filter_parameter_spin_->setSuffix({});
+    image_filter_parameter_slider_->setSuffix({});
     switch (kind) {
     case ImageFilterKind::GaussianBlur:
         image_filter_parameter_label_->setText(tr("模糊半径"));
-        image_filter_parameter_spin_->setRange(1, 10);
-        image_filter_parameter_spin_->setValue(2);
-        image_filter_parameter_spin_->setSuffix(tr(" px"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(1, 10);
+        image_filter_parameter_slider_->setValue(2);
+        image_filter_parameter_slider_->setSuffix(tr(" px"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::MedianDenoise:
         image_filter_parameter_label_->setText(tr("降噪半径"));
-        image_filter_parameter_spin_->setRange(1, 3);
-        image_filter_parameter_spin_->setValue(1);
-        image_filter_parameter_spin_->setSuffix(tr(" px"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(1, 3);
+        image_filter_parameter_slider_->setValue(1);
+        image_filter_parameter_slider_->setSuffix(tr(" px"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::Sharpen:
         image_filter_parameter_label_->setText(tr("增强强度"));
-        image_filter_parameter_spin_->setRange(10, 300);
-        image_filter_parameter_spin_->setValue(100);
-        image_filter_parameter_spin_->setSuffix(tr(" %"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(10, 300);
+        image_filter_parameter_slider_->setValue(100);
+        image_filter_parameter_slider_->setSuffix(tr(" %"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::EdgeDetection:
         image_filter_parameter_label_->setText(tr("边缘阈值（0 为连续灰度）"));
-        image_filter_parameter_spin_->setRange(0, 255);
-        image_filter_parameter_spin_->setValue(40);
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(0, 255);
+        image_filter_parameter_slider_->setValue(40);
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::BinaryThreshold:
         image_filter_parameter_label_->setText(tr("二值阈值"));
-        image_filter_parameter_spin_->setRange(0, 255);
-        image_filter_parameter_spin_->setValue(128);
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(0, 255);
+        image_filter_parameter_slider_->setValue(128);
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     default:
         image_filter_parameter_label_->setText(tr("参数（当前功能无需设置）"));
-        image_filter_parameter_spin_->setRange(0, 0);
-        image_filter_parameter_spin_->setValue(0);
-        image_filter_parameter_spin_->setEnabled(false);
+        image_filter_parameter_slider_->setRange(0, 0);
+        image_filter_parameter_slider_->setValue(0);
+        image_filter_parameter_slider_->setEnabled(false);
         break;
     }
 }
@@ -1780,7 +1913,7 @@ void CameraMainWindow::applySelectedImageFilter()
         return;
     }
     const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
-    image_filter_pipeline_.push_back({kind, image_filter_parameter_spin_->value()});
+    image_filter_pipeline_.push_back({kind, image_filter_parameter_slider_->integerValue()});
     if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
     smart_target_result_ = {};
     ++image_generation_;
@@ -1836,14 +1969,24 @@ void CameraMainWindow::updateImagePresentation()
         histogram_channel_ = static_cast<HistogramChannel>(histogram_channel_combo_->currentIndex());
     }
 
-    const bool showing_fusion = fusion_enabled_ && !channels_.empty();
+    bool showing_fusion = fusion_enabled_ && !channels_.empty();
     if (!showing_fusion && current_source_identity_ == QStringLiteral("camera-live") &&
         !latest_camera_image_.isNull() && hasNeutralPresentation()) {
         presentLiveCameraImage();
         return;
     }
-    ImageFrame presentation_source = showing_fusion
-        ? ChannelFusionEngine::Fuse(channels_) : sourceFrame();
+    ImageFrame presentation_source;
+    if (showing_fusion) {
+        FluorescenceFusionOptions fusion_options;
+        fusion_options.blend_mode = fluorescence_blend_mode_;
+        presentation_source = ChannelFusionEngine::Fuse(channels_, fusion_options);
+        if (!presentation_source.IsValid()) {
+            showing_fusion = false;
+            presentation_source = sourceFrame();
+        }
+    } else {
+        presentation_source = sourceFrame();
+    }
     if (presentation_source.IsValid()) {
         ImageFrame adjusted = showing_fusion
             ? std::move(presentation_source) : ApplyAdjustments(presentation_source, adjustments_);
@@ -2047,6 +2190,7 @@ void CameraMainWindow::updateMeasurementList()
     if (measurement_list_->count() > 0) {
         measurement_list_->setCurrentRow(std::clamp(previous, 0, measurement_list_->count() - 1));
     }
+    updateMeasurementStyleUi();
     rebuildOverlays();
 }
 
@@ -2126,7 +2270,13 @@ QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
 {
     QVector<CanvasOverlay> overlays;
     const int selected = measurement_list_ ? measurement_list_->currentRow() : -1;
-    auto append = [&overlays, selected](CanvasOverlay overlay) {
+    auto append = [this, &overlays, selected](CanvasOverlay overlay) {
+        const auto reference = measurements_.AtFlatIndex(
+            static_cast<std::size_t>(overlays.size()));
+        if (reference) {
+            const MeasurementOverlayStyle style = measurements_.Style(*reference);
+            overlay.color = QColor(style.red, style.green, style.blue);
+        }
         overlay.highlighted = overlays.size() == selected;
         overlay.editable = true;
         overlay.source_index = overlays.size();
@@ -2283,6 +2433,65 @@ void CameraMainWindow::focusSelectedMeasurement()
     }
 }
 
+void CameraMainWindow::chooseSelectedMeasurementColor()
+{
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const auto reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    if (!reference) return;
+    const MeasurementOverlayStyle current_style = measurements_.Style(*reference);
+    const QColor current(current_style.red, current_style.green, current_style.blue);
+    const QColor selected = QColorDialog::getColor(
+        current, this, tr("设置测量覆盖层颜色"), QColorDialog::DontUseNativeDialog);
+    if (!selected.isValid()) return;
+    if (measurements_.SetStyle(*reference, {
+            static_cast<std::uint8_t>(selected.red()),
+            static_cast<std::uint8_t>(selected.green()),
+            static_cast<std::uint8_t>(selected.blue())})) {
+        updateMeasurementStyleUi();
+        rebuildOverlays();
+        statusBar()->showMessage(tr("测量覆盖层颜色已更新"), 2500);
+    }
+}
+
+void CameraMainWindow::resetSelectedMeasurementColor()
+{
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const auto reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    if (!reference) return;
+    if (measurements_.SetStyle(*reference,
+            MeasurementCollection::DefaultStyle(reference->kind))) {
+        updateMeasurementStyleUi();
+        rebuildOverlays();
+        statusBar()->showMessage(tr("已恢复该测量类型的默认颜色"), 2500);
+    }
+}
+
+void CameraMainWindow::updateMeasurementStyleUi()
+{
+    if (!measurement_color_button_) return;
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const auto reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    measurement_color_button_->setEnabled(reference.has_value());
+    if (measurement_reset_color_button_) {
+        measurement_reset_color_button_->setEnabled(reference.has_value());
+    }
+    if (!reference) {
+        measurement_color_button_->setIcon({});
+        measurement_color_button_->setText(tr("设置颜色…"));
+        return;
+    }
+    const MeasurementOverlayStyle style = measurements_.Style(*reference);
+    const QColor color(style.red, style.green, style.blue);
+    QPixmap swatch(22, 22);
+    swatch.fill(color);
+    measurement_color_button_->setIcon(QIcon(swatch));
+    measurement_color_button_->setIconSize(swatch.size());
+    measurement_color_button_->setText(tr("颜色 %1").arg(color.name(QColor::HexRgb).toUpper()));
+}
+
 QVector<CanvasOverlay> CameraMainWindow::smartTargetOverlays() const
 {
     QVector<CanvasOverlay> overlays;
@@ -2369,8 +2578,8 @@ void CameraMainWindow::updateSmartTargetUi()
             (SmartTargetCounter::IsAvailable() && !smart_target_samples_.empty() && currentVisibleFrame().IsValid()));
     }
     if (smart_select_button_) smart_select_button_->setEnabled(!smart_count_running_);
-    if (smart_similarity_spin_) smart_similarity_spin_->setEnabled(!smart_count_running_);
-    if (smart_scale_tolerance_spin_) smart_scale_tolerance_spin_->setEnabled(!smart_count_running_);
+    if (smart_similarity_slider_) smart_similarity_slider_->setEnabled(!smart_count_running_);
+    if (smart_scale_tolerance_slider_) smart_scale_tolerance_slider_->setEnabled(!smart_count_running_);
     if (smart_count_progress_) smart_count_progress_->setVisible(smart_count_running_);
 }
 
@@ -2411,8 +2620,8 @@ void CameraMainWindow::runSmartTargetCounting()
 
     canvas_->setTool(CanvasTool::None);
     SmartTargetCountOptions options;
-    options.similarity_threshold = smart_similarity_spin_->value();
-    options.scale_tolerance = smart_scale_tolerance_spin_->value() / 100.0;
+    options.similarity_threshold = smart_similarity_slider_->value();
+    options.scale_tolerance = smart_scale_tolerance_slider_->value() / 100.0;
     options.scale_steps = options.scale_tolerance > 0.0 ? 5 : 1;
     const std::vector<SmartTargetRegion> samples = smart_target_samples_;
     const quint64 generation = image_generation_;
@@ -2538,9 +2747,7 @@ void CameraMainWindow::addFluorescenceChannel()
     const FluorescenceChannelListActionResult result =
         FluorescenceChannelListActions::AddCurrentFrame(channels_, frame, dye);
     if (result.changed) {
-        const FluorescenceChannel& channel = channels_.back();
-        channel_list_->addItem(QString::fromStdWString(channel.name));
-        channel_list_->setCurrentRow(channel_list_->count() - 1);
+        refreshFluorescenceChannelList(static_cast<int>(channels_.size()) - 1);
         fusion_check_->setChecked(true);
     }
     statusBar()->showMessage(QString::fromStdWString(result.message), 4000);
@@ -2549,9 +2756,157 @@ void CameraMainWindow::addFluorescenceChannel()
 void CameraMainWindow::clearFluorescenceChannels()
 {
     FluorescenceChannelListActions::Clear(channels_);
-    channel_list_->clear();
+    refreshFluorescenceChannelList();
     fusion_check_->setChecked(false);
     updateImagePresentation();
+}
+
+void CameraMainWindow::refreshFluorescenceChannelList(int selectedRow)
+{
+    if (!channel_list_) {
+        return;
+    }
+    if (selectedRow < 0) {
+        selectedRow = channel_list_->currentRow();
+    }
+    const QSignalBlocker blocker(channel_list_);
+    channel_list_->clear();
+    for (const FluorescenceChannel& channel : channels_) {
+        channel_list_->addItem(
+            QString::fromStdWString(FluorescenceFormatter::FormatChannelLine(channel)));
+    }
+    if (!channels_.empty()) {
+        selectedRow = std::clamp(selectedRow, 0, static_cast<int>(channels_.size()) - 1);
+        channel_list_->setCurrentRow(selectedRow);
+    }
+    updateFluorescenceChannelUi();
+}
+
+void CameraMainWindow::updateFluorescenceChannelUi()
+{
+    if (!channel_list_ || !channel_visible_check_ || !channel_black_slider_ ||
+        !channel_white_slider_ || !fluorescence_statistics_label_) {
+        return;
+    }
+    const int row = channel_list_->currentRow();
+    if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        channel_visible_check_->setChecked(false);
+        channel_black_slider_->setValue(0);
+        channel_white_slider_->setValue(255);
+        fluorescence_statistics_label_->setText(
+            tr("选择通道后显示强度与曝光质量。"));
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        return;
+    }
+
+    const FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
+    channel_visible_check_->setChecked(channel.visible);
+    channel_black_slider_->setValue(channel.black_level);
+    channel_white_slider_->setValue(channel.white_level);
+    const FluorescenceChannelStatistics statistics =
+        FluorescenceChannelAnalysis::Analyze(channel.frame);
+    if (!statistics.IsValid()) {
+        fluorescence_statistics_label_->setText(tr("该通道尚无图像数据。"));
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        return;
+    }
+
+    QString state;
+    switch (statistics.exposure) {
+    case FluorescenceExposureState::Saturated:
+        state = tr("饱和：建议降低曝光或增益");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("warning"));
+        break;
+    case FluorescenceExposureState::Underexposed:
+        state = tr("欠曝：建议提高曝光或增益");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("warning"));
+        break;
+    case FluorescenceExposureState::LowContrast:
+        state = tr("低对比度：检查背景、焦点和染色");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("caution"));
+        break;
+    case FluorescenceExposureState::Balanced:
+        state = tr("曝光范围正常");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("ok"));
+        break;
+    case FluorescenceExposureState::NoData:
+    default:
+        state = tr("无数据");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        break;
+    }
+    fluorescence_statistics_label_->setText(
+        tr("%1\n原始范围 %2–%3，均值 %4；255 饱和像素 %5%\n建议显示范围 %6–%7")
+            .arg(state)
+            .arg(static_cast<int>(statistics.minimum))
+            .arg(static_cast<int>(statistics.maximum))
+            .arg(statistics.mean, 0, 'f', 1)
+            .arg(statistics.clipped_fraction * 100.0, 0, 'f', 2)
+            .arg(static_cast<int>(statistics.suggested_black_level))
+            .arg(static_cast<int>(statistics.suggested_white_level)));
+    fluorescence_statistics_label_->style()->unpolish(fluorescence_statistics_label_);
+    fluorescence_statistics_label_->style()->polish(fluorescence_statistics_label_);
+}
+
+void CameraMainWindow::autoLevelSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        statusBar()->showMessage(tr("请先选择荧光通道。"), 3000);
+        return;
+    }
+    FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
+    const FluorescenceChannelStatistics statistics =
+        FluorescenceChannelAnalysis::Analyze(channel.frame);
+    if (!FluorescenceChannelAnalysis::ApplySuggestedLevels(channel, statistics)) {
+        statusBar()->showMessage(tr("该通道没有可用于自动拉伸的图像数据。"), 3500);
+        return;
+    }
+    refreshFluorescenceChannelList(row);
+    updateImagePresentation();
+    statusBar()->showMessage(
+        tr("已按 1%–99.8% 分位设置显示范围；原始像素未修改。"), 4000);
+}
+
+void CameraMainWindow::removeSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::RemoveSelected(channels_, row);
+    refreshFluorescenceChannelList(
+        result.selected_index ? static_cast<int>(*result.selected_index) : -1);
+    if (!result.show_fusion_preview && fusion_check_) {
+        fusion_check_->setChecked(false);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
+}
+
+void CameraMainWindow::isolateSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::ShowOnlySelected(channels_, row);
+    refreshFluorescenceChannelList(
+        result.selected_index ? static_cast<int>(*result.selected_index) : row);
+    if (result.changed && fusion_check_) {
+        fusion_check_->setChecked(true);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
+}
+
+void CameraMainWindow::showAllFluorescenceChannels()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::ShowAll(channels_);
+    refreshFluorescenceChannelList(row);
+    if (result.changed && fusion_check_) {
+        fusion_check_->setChecked(true);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
 }
 
 void CameraMainWindow::toggleFusion(bool enabled)
@@ -2569,7 +2924,8 @@ void CameraMainWindow::addStitchTile()
         QMessageBox::information(this, tr("图像拼接"), tr("当前没有可添加的图像帧。"));
         return;
     }
-    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(
+        stitch_overlap_slider_->integerValue());
     const StitchTileListActionResult result = StitchTileListActions::AddCurrentFrame(
         stitch_tiles_, frame, search_percent);
     if (result.changed) {
@@ -2685,7 +3041,7 @@ StitchProcessingOptions CameraMainWindow::stitchOptionsFromUi() const
     options.layout_mode = static_cast<StitchLayoutMode>(stitch_layout_combo_->currentData().toInt());
     options.grid_rows = stitch_rows_spin_->value();
     options.grid_cols = stitch_cols_spin_->value();
-    options.overlap_percent = stitch_overlap_spin_->value();
+    options.overlap_percent = stitch_overlap_slider_->integerValue();
     options.registration_method = static_cast<StitchRegistrationMethod>(
         stitch_registration_combo_->currentData().toInt());
     options.transform_model = static_cast<StitchTransformModel>(
@@ -2740,7 +3096,8 @@ void CameraMainWindow::importStitchFiles(const QStringList& files, const QString
 {
     if (busy_ || live_stitch_active_ || files.isEmpty()) return;
     const int previous_count = static_cast<int>(stitch_tiles_.size());
-    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(
+        stitch_overlap_slider_->integerValue());
     int failed = 0;
     for (const QString& file : files) {
         QImageReader reader(file);
@@ -2783,9 +3140,9 @@ void CameraMainWindow::startLiveStitch()
     canvas_->setLivePreviewOverlay(latest_camera_image_);
     live_stitch_start_button_->setEnabled(false);
     live_stitch_stop_button_->setEnabled(true);
-    live_stitch_interval_spin_->setEnabled(false);
+    live_stitch_interval_slider_->setEnabled(false);
     live_stitch_status_label_->setText(tr("实时拼接已启动，请缓慢移动载物台并保持视野重叠。"));
-    live_stitch_timer_->start(live_stitch_interval_spin_->value());
+    live_stitch_timer_->start(live_stitch_interval_slider_->integerValue());
     if (!stitch_tiles_.empty()) refreshLiveStitchPreview();
     evaluateLiveStitch();
 }
@@ -2803,7 +3160,7 @@ void CameraMainWindow::stopLiveStitch(bool showStatus)
     live_stitch_out_of_range_warning_ = false;
     live_stitch_start_button_->setEnabled(true);
     live_stitch_stop_button_->setEnabled(false);
-    live_stitch_interval_spin_->setEnabled(true);
+    live_stitch_interval_slider_->setEnabled(true);
     live_stitch_status_label_->setText(tr("实时拼接已停止，共保留 %1 张源图。").arg(stitch_tiles_.size()));
     if (!latest_camera_image_.isNull()) {
         if (hasNeutralPresentation()) presentLiveCameraImage();
@@ -2839,7 +3196,8 @@ void CameraMainWindow::evaluateLiveStitch()
     options.min_movement_percent = kLiveStitchMinMovementPercent;
     options.min_overlap_percent = kLiveStitchMinOverlapPercent;
     options.search_percent = std::max(
-        ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value()),
+        ProcessingParameterRules::SearchPercentFromOverlap(
+            stitch_overlap_slider_->integerValue()),
         100 - kLiveStitchMinOverlapPercent);
     options.fast_mode = true;
     options.reference_tile_count = kLiveStitchReferenceTileCount;
@@ -2976,7 +3334,7 @@ void CameraMainWindow::refreshLiveStitchPreview()
     const quint64 generation = live_stitch_generation_;
     LiveStitchPreviewOptions options;
     options.max_preview_edge = kLiveStitchPreviewMaxEdge;
-    options.overlap_percent = stitch_overlap_spin_->value();
+    options.overlap_percent = stitch_overlap_slider_->integerValue();
     options.blend_mode = static_cast<StitchBlendMode>(stitch_blend_combo_->currentData().toInt());
     auto* watcher = new QFutureWatcher<LiveStitchPreviewResult>(this);
     connect(watcher, &QFutureWatcher<LiveStitchPreviewResult>::finished, this, [this, watcher, generation] {

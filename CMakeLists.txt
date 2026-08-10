@@ -59,6 +59,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/EdfStackListActions.cpp
     src/imaging/EdfStackListActions.h
     src/imaging/Fluorescence.h
+    src/imaging/FluorescenceChannelAnalysis.cpp
+    src/imaging/FluorescenceChannelAnalysis.h
     src/imaging/FluorescenceChannelFactory.cpp
     src/imaging/FluorescenceChannelFactory.h
     src/imaging/FluorescenceChannelListActions.cpp
@@ -228,12 +230,16 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/EdfStackListActions.cpp
     src/imaging/EdfStackListActions.h
     src/imaging/Fluorescence.h
+    src/imaging/FluorescenceChannelAnalysis.cpp
+    src/imaging/FluorescenceChannelAnalysis.h
     src/imaging/FluorescenceChannelFactory.cpp
     src/imaging/FluorescenceChannelFactory.h
     src/imaging/FluorescenceChannelListActions.cpp
     src/imaging/FluorescenceChannelListActions.h
     src/imaging/FluorescenceChannelSettings.cpp
     src/imaging/FluorescenceChannelSettings.h
+    src/imaging/FluorescenceChannelUpdater.cpp
+    src/imaging/FluorescenceChannelUpdater.h
     src/imaging/FluorescenceFormatter.cpp
     src/imaging/FluorescenceFormatter.h
     src/imaging/HistogramCalculator.cpp
@@ -292,6 +298,8 @@ qt_add_executable(CameraView WIN32
     src/qt/ImageCanvas.h
     src/qt/MeasurementToolButton.cpp
     src/qt/MeasurementToolButton.h
+    src/qt/NumericSlider.cpp
+    src/qt/NumericSlider.h
     src/qt/ObjectiveCalibrationSettings.cpp
     src/qt/ObjectiveCalibrationSettings.h
     src/qt/ImageSurface3DDialog.cpp
@@ -517,9 +525,18 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewMeasurementToolbarCoverage
         COMMAND CameraView --verify-measurement-toolbar)
     set_tests_properties(CameraViewMeasurementToolbarCoverage PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewMeasurementOverlayEditor
+        COMMAND CameraView --verify-measurement-overlay-editor)
+    set_tests_properties(CameraViewMeasurementOverlayEditor PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewPreviewPipelinePerformance
         COMMAND CameraView --verify-preview-pipeline)
     set_tests_properties(CameraViewPreviewPipelinePerformance PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtFluorescenceWorkflow
+        COMMAND CameraView --verify-fluorescence-workflow)
+    set_tests_properties(CameraViewQtFluorescenceWorkflow PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtNumericSliderControls
+        COMMAND CameraView --verify-numeric-sliders)
+    set_tests_properties(CameraViewQtNumericSliderControls PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtStitchWorkflowCoverage
         COMMAND CameraView --verify-stitch-workflow)
     set_tests_properties(CameraViewQtStitchWorkflowCoverage PROPERTIES TIMEOUT 15)
@@ -567,6 +584,8 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ObjectiveCalibrationSettings.h
         src/qt/ImageCanvas.cpp
         src/qt/ImageCanvas.h
+        src/qt/NumericSlider.cpp
+        src/qt/NumericSlider.h
         src/qt/ai/YoloModelRegistry.cpp
         src/qt/ai/YoloModelRegistry.h
         src/qt/ai/YoloDatasetProject.cpp

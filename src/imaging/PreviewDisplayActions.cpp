@@ -40,7 +40,8 @@ ImageFrame PreviewDisplayActions::BuildPreviewFrame(
     const ProcessingResultFrames& processing_frames,
     const std::vector<FluorescenceChannel>& fluorescence_channels,
     bool show_fusion_preview,
-    PseudoColorPalette pseudo_color_palette)
+    PseudoColorPalette pseudo_color_palette,
+    FluorescenceBlendMode blend_mode)
 {
     PreviewFrameComposition composition;
     composition.source = &source;
@@ -48,6 +49,7 @@ ImageFrame PreviewDisplayActions::BuildPreviewFrame(
     composition.fluorescence_channels = &fluorescence_channels;
     composition.show_processing_result = processing_frames.IsProcessingResultVisible();
     composition.show_fusion_preview = show_fusion_preview;
+    composition.fluorescence_fusion.blend_mode = blend_mode;
     composition.pseudo_color_palette = pseudo_color_palette;
     return PreviewFrameComposer::Compose(composition);
 }

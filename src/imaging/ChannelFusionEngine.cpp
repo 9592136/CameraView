@@ -30,10 +30,33 @@ unsigned char ScaleIntensity(unsigned char value, unsigned char black_level, uns
     return static_cast<unsigned char>((adjusted * 255 + range / 2) / range);
 }
 
-unsigned char AddClamped(unsigned char current, unsigned char intensity, unsigned char color)
+unsigned char ColorContribution(unsigned char intensity, unsigned char color)
 {
-    const int contribution = (static_cast<int>(intensity) * static_cast<int>(color) + 127) / 255;
-    return static_cast<unsigned char>(std::min(255, static_cast<int>(current) + contribution));
+    return static_cast<unsigned char>(
+        (static_cast<int>(intensity) * static_cast<int>(color) + 127) / 255);
+}
+
+unsigned char Blend(
+    unsigned char current,
+    unsigned char intensity,
+    unsigned char color,
+    FluorescenceBlendMode mode)
+{
+    const unsigned char contribution = ColorContribution(intensity, color);
+    switch (mode) {
+    case FluorescenceBlendMode::Screen: {
+        const int inverse =
+            ((255 - static_cast<int>(current)) *
+             (255 - static_cast<int>(contribution)) + 127) / 255;
+        return static_cast<unsigned char>(255 - inverse);
+    }
+    case FluorescenceBlendMode::Maximum:
+        return std::max(current, contribution);
+    case FluorescenceBlendMode::Additive:
+    default:
+        return static_cast<unsigned char>(
+            std::min(255, static_cast<int>(current) + static_cast<int>(contribution)));
+    }
 }
 
 const FluorescenceChannel* FirstUsableChannel(const std::vector<FluorescenceChannel>& channels)
@@ -48,7 +71,9 @@ const FluorescenceChannel* FirstUsableChannel(const std::vector<FluorescenceChan
 
 } // namespace
 
-ImageFrame ChannelFusionEngine::Fuse(const std::vector<FluorescenceChannel>& channels)
+ImageFrame ChannelFusionEngine::Fuse(
+    const std::vector<FluorescenceChannel>& channels,
+    const FluorescenceFusionOptions& options)
 {
     const FluorescenceChannel* base_channel = FirstUsableChannel(channels);
     if (!base_channel) {
@@ -78,9 +103,12 @@ ImageFrame ChannelFusionEngine::Fuse(const std::vector<FluorescenceChannel>& cha
                     Luminance(src + x * 3),
                     channel.black_level,
                     channel.white_level);
-                dst[x * 3 + 0] = AddClamped(dst[x * 3 + 0], value, channel.color.b);
-                dst[x * 3 + 1] = AddClamped(dst[x * 3 + 1], value, channel.color.g);
-                dst[x * 3 + 2] = AddClamped(dst[x * 3 + 2], value, channel.color.r);
+                dst[x * 3 + 0] = Blend(
+                    dst[x * 3 + 0], value, channel.color.b, options.blend_mode);
+                dst[x * 3 + 1] = Blend(
+                    dst[x * 3 + 1], value, channel.color.g, options.blend_mode);
+                dst[x * 3 + 2] = Blend(
+                    dst[x * 3 + 2], value, channel.color.r, options.blend_mode);
             }
         }
     }

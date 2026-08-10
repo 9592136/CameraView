@@ -1,5 +1,6 @@
 #include "CameraMainWindow.h"
 #include "CameraViewTheme.h"
+#include "NumericSlider.h"
 #include "ai/YoloModelRegistry.h"
 #include "imaging/ProcessingParameterRules.h"
 
@@ -7,6 +8,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QComboBox>
+#include <QColorDialog>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -25,7 +27,6 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QTabWidget>
-#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolBar>
@@ -145,9 +146,18 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_measurement_toolbar(
         QStringLiteral("verify-measurement-toolbar"),
         QStringLiteral("Verify that every measurement function is represented in the toolbar."));
+    const QCommandLineOption verify_measurement_overlay_editor(
+        QStringLiteral("verify-measurement-overlay-editor"),
+        QStringLiteral("Verify measurement overlay editing, dragging, and color controls."));
     const QCommandLineOption verify_preview_pipeline(
         QStringLiteral("verify-preview-pipeline"),
         QStringLiteral("Verify the zero-copy neutral camera preview path."));
+    const QCommandLineOption verify_fluorescence_workflow(
+        QStringLiteral("verify-fluorescence-workflow"),
+        QStringLiteral("Verify microscopy fluorescence display and exposure controls."));
+    const QCommandLineOption verify_numeric_sliders(
+        QStringLiteral("verify-numeric-sliders"),
+        QStringLiteral("Verify drag-based numeric setting controls and value readouts."));
     const QCommandLineOption verify_stitch_workflow(
         QStringLiteral("verify-stitch-workflow"),
         QStringLiteral("Verify complete Qt stitching workflow controls and options."));
@@ -164,7 +174,10 @@ int main(int argc, char* argv[])
     parser.addOption(workspace_tab);
     parser.addOption(focus_widget);
     parser.addOption(verify_measurement_toolbar);
+    parser.addOption(verify_measurement_overlay_editor);
     parser.addOption(verify_preview_pipeline);
+    parser.addOption(verify_fluorescence_workflow);
+    parser.addOption(verify_numeric_sliders);
     parser.addOption(verify_stitch_workflow);
     parser.addOption(verify_stitch_execution);
     parser.addOption(live_camera_report);
@@ -197,6 +210,141 @@ int main(int argc, char* argv[])
         }
         return 0;
     }
+    if (parser.isSet(verify_measurement_overlay_editor)) {
+        const QStringList required_controls{
+            QStringLiteral("MeasurementResultList"),
+            QStringLiteral("MeasurementOverlayEditGroup"),
+            QStringLiteral("MeasurementOverlayEditButton"),
+            QStringLiteral("MeasurementOverlayColorButton"),
+            QStringLiteral("MeasurementOverlayResetColorButton")};
+        for (const QString& object_name : required_controls) {
+            if (!window.findChild<QWidget*>(object_name)) {
+                qCritical().noquote() << QStringLiteral(
+                    "Measurement overlay editor control is missing: %1").arg(object_name);
+                return 11;
+            }
+        }
+        auto* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
+        auto* list = window.findChild<QListWidget*>(QStringLiteral("MeasurementResultList"));
+        auto* color = window.findChild<QPushButton*>(
+            QStringLiteral("MeasurementOverlayColorButton"));
+        auto* reset_color = window.findChild<QPushButton*>(
+            QStringLiteral("MeasurementOverlayResetColorButton"));
+        QImage frame(100, 100, QImage::Format_RGB32);
+        frame.fill(Qt::black);
+        const QVector<QPointF> measurement_points{{20.0, 20.0}, {40.0, 20.0}};
+        if (!canvas || !list || !color || !reset_color || color->isEnabled() ||
+            reset_color->isEnabled() ||
+            !QMetaObject::invokeMethod(&window, "onCameraFrame", Qt::DirectConnection,
+                Q_ARG(QImage, frame), Q_ARG(quint64, 1), Q_ARG(quint32, 0)) ||
+            !QMetaObject::invokeMethod(&window, "onCanvasPoints", Qt::DirectConnection,
+                Q_ARG(CanvasTool, CanvasTool::Length),
+                Q_ARG(QVector<QPointF>, measurement_points)) ||
+            list->count() != 1 || list->currentRow() != 0 || !color->isEnabled() ||
+            !color->text().contains(QLatin1Char('#'))) {
+            qCritical() << "Measurement overlay editor did not bind to the selected measurement.";
+            return 11;
+        }
+        const QColor custom_color(12, 34, 56);
+        QTimer::singleShot(0, &window, [custom_color] {
+            auto* dialog = qobject_cast<QColorDialog*>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            dialog->setCurrentColor(custom_color);
+            dialog->accept();
+        });
+        color->click();
+        if (canvas->overlays().isEmpty() || canvas->overlays().first().color != custom_color ||
+            !color->text().contains(QStringLiteral("#0C2238"))) {
+            qCritical() << "Custom measurement overlay color did not reach the canvas.";
+            return 11;
+        }
+        reset_color->click();
+        if (canvas->overlays().isEmpty() ||
+            canvas->overlays().first().color != QColor(76, 201, 240)) {
+            qCritical() << "Measurement overlay default color was not restored.";
+            return 11;
+        }
+        return 0;
+    }
+    if (parser.isSet(verify_fluorescence_workflow)) {
+        const QStringList required_controls{
+            QStringLiteral("FluorescenceDyeCombo"),
+            QStringLiteral("FluorescenceAddChannelButton"),
+            QStringLiteral("FluorescencePreviewCheck"),
+            QStringLiteral("FluorescenceBlendCombo"),
+            QStringLiteral("FluorescenceChannelList"),
+            QStringLiteral("FluorescenceRemoveChannelButton"),
+            QStringLiteral("FluorescenceIsolateChannelButton"),
+            QStringLiteral("FluorescenceShowAllButton"),
+            QStringLiteral("FluorescenceClearButton"),
+            QStringLiteral("FluorescenceChannelVisible"),
+            QStringLiteral("FluorescenceBlackLevel"),
+            QStringLiteral("FluorescenceWhiteLevel"),
+            QStringLiteral("FluorescenceApplyLevelsButton"),
+            QStringLiteral("FluorescenceAutoLevelsButton"),
+            QStringLiteral("FluorescenceStatisticsLabel")};
+        for (const QString& object_name : required_controls) {
+            if (!window.findChild<QWidget*>(object_name)) {
+                qCritical().noquote() << QStringLiteral(
+                    "Fluorescence workflow control is missing: %1").arg(object_name);
+                return 9;
+            }
+        }
+        const auto* blend = window.findChild<QComboBox*>(
+            QStringLiteral("FluorescenceBlendCombo"));
+        const auto* black = window.findChild<NumericSlider*>(
+            QStringLiteral("FluorescenceBlackLevelSlider"));
+        const auto* white = window.findChild<NumericSlider*>(
+            QStringLiteral("FluorescenceWhiteLevelSlider"));
+        if (!blend || blend->count() != 3 || blend->currentData().toInt() !=
+                static_cast<int>(FluorescenceBlendMode::Screen) ||
+            !black || black->minimum() != 0 || black->maximum() != 254 ||
+            !white || white->minimum() != 1 || white->maximum() != 255) {
+            qCritical() << "Fluorescence workflow defaults are incomplete.";
+            return 9;
+        }
+        return 0;
+    }
+    if (parser.isSet(verify_numeric_sliders)) {
+        const QStringList slider_names{
+            QStringLiteral("ImageFilterParameterSlider"),
+            QStringLiteral("FluorescenceBlackLevelSlider"),
+            QStringLiteral("FluorescenceWhiteLevelSlider"),
+            QStringLiteral("LiveStitchIntervalSlider"),
+            QStringLiteral("StitchOverlapSlider"),
+            QStringLiteral("EdgeSnapRadiusSlider"),
+            QStringLiteral("SmartCountSimilaritySlider"),
+            QStringLiteral("SmartCountScaleToleranceSlider"),
+            QStringLiteral("YoloConfidenceSlider"),
+            QStringLiteral("YoloIouSlider")};
+        for (const QString& slider_name : slider_names) {
+            auto* control = window.findChild<NumericSlider*>(slider_name);
+            if (!control || !control->slider() || !control->valueLabel() ||
+                control->valueLabel()->text().isEmpty()) {
+                qCritical().noquote() << QStringLiteral(
+                    "Numeric slider is missing or has no value readout: %1").arg(slider_name);
+                return 10;
+            }
+        }
+        auto* black = window.findChild<NumericSlider*>(
+            QStringLiteral("FluorescenceBlackLevelSlider"));
+        auto* similarity = window.findChild<NumericSlider*>(
+            QStringLiteral("SmartCountSimilaritySlider"));
+        auto* confidence = window.findChild<NumericSlider*>(
+            QStringLiteral("YoloConfidenceSlider"));
+        black->setValue(42);
+        similarity->setValue(0.83);
+        confidence->setValue(0.37);
+        if (black->integerValue() != 42 || black->valueLabel()->text() != QStringLiteral("42") ||
+            qAbs(similarity->value() - 0.83) > 0.0001 ||
+            similarity->valueLabel()->text() != QStringLiteral("0.83") ||
+            qAbs(confidence->value() - 0.37) > 0.0001 ||
+            confidence->valueLabel()->text() != QStringLiteral("0.37")) {
+            qCritical() << "Numeric slider mapping or readout formatting is incorrect.";
+            return 10;
+        }
+        return 0;
+    }
     if (parser.isSet(verify_stitch_workflow)) {
         const QStringList required_controls{
             QStringLiteral("LiveStitchStartButton"), QStringLiteral("LiveStitchStopButton"),
@@ -218,8 +366,8 @@ int main(int argc, char* argv[])
         const auto* registration = window.findChild<QComboBox*>(QStringLiteral("StitchRegistrationCombo"));
         const auto* transform = window.findChild<QComboBox*>(QStringLiteral("StitchTransformCombo"));
         const auto* blend = window.findChild<QComboBox*>(QStringLiteral("StitchBlendCombo"));
-        const auto* overlap = window.findChild<QSpinBox*>(QStringLiteral("StitchOverlapSpin"));
-        const auto* interval = window.findChild<QSpinBox*>(QStringLiteral("LiveStitchIntervalSpin"));
+        const auto* overlap = window.findChild<NumericSlider*>(QStringLiteral("StitchOverlapSlider"));
+        const auto* interval = window.findChild<NumericSlider*>(QStringLiteral("LiveStitchIntervalSlider"));
         const auto* retry = window.findChild<QPushButton*>(QStringLiteral("StitchRetryButton"));
         const auto* save = window.findChild<QPushButton*>(QStringLiteral("StitchSaveButton"));
         if (!layout || layout->count() != 2 || !registration || registration->count() != 5 ||
@@ -268,7 +416,7 @@ int main(int argc, char* argv[])
         auto* layout = window.findChild<QComboBox*>(QStringLiteral("StitchLayoutCombo"));
         auto* registration = window.findChild<QComboBox*>(QStringLiteral("StitchRegistrationCombo"));
         auto* transform = window.findChild<QComboBox*>(QStringLiteral("StitchTransformCombo"));
-        auto* overlap = window.findChild<QSpinBox*>(QStringLiteral("StitchOverlapSpin"));
+        auto* overlap = window.findChild<NumericSlider*>(QStringLiteral("StitchOverlapSlider"));
         auto* tile_list = window.findChild<QListWidget*>(QStringLiteral("StitchTileList"));
         auto* build = window.findChild<QPushButton*>(QStringLiteral("StitchBuildButton"));
         auto* retry = window.findChild<QPushButton*>(QStringLiteral("StitchRetryButton"));

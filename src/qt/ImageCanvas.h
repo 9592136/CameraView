@@ -54,6 +54,7 @@ public:
     QSize imageSize() const { return image_.size(); }
     bool hasGrayscaleCache() const { return !grayscale_image_.isNull(); }
     bool hasLivePreviewOverlay() const { return !live_preview_overlay_.isNull(); }
+    const QVector<CanvasOverlay>& overlays() const { return overlays_; }
 
 signals:
     void pointsCommitted(CanvasTool tool, QVector<QPointF> points);
@@ -61,7 +62,9 @@ signals:
     void zoomChanged(double zoom);
     void toolChanged(CanvasTool tool);
     void edgeSnapEvaluated(bool snapped, QPointF original, QPointF result, double strength);
+    void overlaySelected(int sourceIndex);
     void overlayPointMoved(int sourceIndex, int pointIndex, QPointF point, bool finished);
+    void overlayMoved(int sourceIndex, QPointF delta, bool finished);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -77,6 +80,12 @@ private:
     QPointF widgetToImage(const QPointF& point) const;
     QPointF imageToWidget(const QPointF& point) const;
     bool containsImagePoint(const QPointF& point) const;
+    bool findEditableHandle(
+        const QPointF& widgetPoint,
+        int& overlayIndex,
+        int& pointIndex) const;
+    int findEditableOverlayBody(const QPointF& widgetPoint) const;
+    bool overlayBodyContains(const CanvasOverlay& overlay, const QPointF& widgetPoint) const;
     QPointF snapToNearestEdge(const QPointF& point, bool* snapped, double* strength) const;
     void commitIfComplete();
     void drawOverlay(QPainter& painter, const CanvasOverlay& overlay) const;
@@ -95,6 +104,8 @@ private:
     bool panning_ = false;
     int dragged_overlay_index_ = -1;
     int dragged_point_index_ = -1;
+    bool dragging_overlay_body_ = false;
+    QPointF drag_last_image_point_;
     bool edge_snapping_enabled_ = false;
     int edge_snap_radius_ = 12;
 };

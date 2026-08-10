@@ -26,6 +26,7 @@ struct ProjectSessionState {
     int stitch_transform_model = 1;
     int stitch_blend_mode = 0;
     int live_stitch_interval_ms = 1200;
+    int fluorescence_blend_mode = 1;
     bool restored_channel_settings = false;
 };
 

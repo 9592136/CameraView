@@ -202,7 +202,7 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
 
     output << "{\n";
     output << "  \"format\": \"CameraViewProject\",\n";
-    output << "  \"version\": 9,\n";
+    output << "  \"version\": 10,\n";
     output << "  \"calibration\": {\n";
     output << "    \"microns_per_pixel\": " << std::fixed << std::setprecision(10)
            << document.calibration.MicronsPerPixel() << "\n";
@@ -346,6 +346,16 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
         output << "\n";
     }
     output << "  ],\n";
+    output << "  \"measurement_styles\": [\n";
+    for (std::size_t index = 0; index < document.measurement_styles.size(); ++index) {
+        if (index > 0) output << ",\n";
+        const MeasurementOverlayStyle& style = document.measurement_styles[index];
+        output << "    {\"r\": " << static_cast<int>(style.red)
+               << ", \"g\": " << static_cast<int>(style.green)
+               << ", \"b\": " << static_cast<int>(style.blue) << "}";
+    }
+    if (!document.measurement_styles.empty()) output << "\n";
+    output << "  ],\n";
     output << "  \"dye_profiles\": [\n";
     for (std::size_t index = 0; index < document.dye_profiles.size(); ++index) {
         const DyeProfile& dye = document.dye_profiles[index];
@@ -397,7 +407,8 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
     output << "    \"stitch_registration_method\": " << document.processing_settings.stitch_registration_method << ",\n";
     output << "    \"stitch_transform_model\": " << document.processing_settings.stitch_transform_model << ",\n";
     output << "    \"stitch_blend_mode\": " << document.processing_settings.stitch_blend_mode << ",\n";
-    output << "    \"live_stitch_interval_ms\": " << document.processing_settings.live_stitch_interval_ms << "\n";
+    output << "    \"live_stitch_interval_ms\": " << document.processing_settings.live_stitch_interval_ms << ",\n";
+    output << "    \"fluorescence_blend_mode\": " << document.processing_settings.fluorescence_blend_mode << "\n";
     output << "  }\n";
     output << "}\n";
 
@@ -653,6 +664,29 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
             JsonUnescape(match[1].str()), ImagePoint{x1, y1}, ImagePoint{x2, y2});
     }
 
+    const std::regex measurement_styles_section_pattern(
+        R"project("measurement_styles"\s*:\s*\[([\s\S]*?)\]\s*,\s*"dye_profiles")project");
+    std::smatch measurement_styles_section;
+    if (std::regex_search(text, measurement_styles_section, measurement_styles_section_pattern)) {
+        const std::string styles_text = measurement_styles_section[1].str();
+        const std::regex style_pattern(
+            R"project(\{\s*"r"\s*:\s*([-+0-9]+)\s*,\s*"g"\s*:\s*([-+0-9]+)\s*,\s*"b"\s*:\s*([-+0-9]+)\s*\})project");
+        auto style_begin = std::sregex_iterator(styles_text.begin(), styles_text.end(), style_pattern);
+        auto style_end = std::sregex_iterator();
+        for (auto iterator = style_begin; iterator != style_end; ++iterator) {
+            unsigned char red = 0;
+            unsigned char green = 0;
+            unsigned char blue = 0;
+            if (!TryParseByte((*iterator)[1].str(), red) ||
+                !TryParseByte((*iterator)[2].str(), green) ||
+                !TryParseByte((*iterator)[3].str(), blue)) {
+                error = L"Invalid measurement overlay color in project file.";
+                return false;
+            }
+            loaded.measurement_styles.push_back({red, green, blue});
+        }
+    }
+
     const std::regex dye_pattern(
         R"project(\{\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"excitation_nm"\s*:\s*([-+0-9.eE]+)\s*,\s*"emission_nm"\s*:\s*([-+0-9.eE]+)\s*,\s*"color"\s*:\s*\{\s*"r"\s*:\s*([0-9]+)\s*,\s*"g"\s*:\s*([0-9]+)\s*,\s*"b"\s*:\s*([0-9]+)\s*\}\s*\})project");
 
@@ -758,7 +792,7 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
         if (!std::regex_search(text, match, pattern)) return true;
         int value = 0;
         if (!TryParseInt(match[1].str(), value) || value < minimum || value > maximum) {
-            error = L"Invalid extended stitch setting in project file.";
+            error = L"Invalid processing setting in project file.";
             return false;
         }
         target = value;
@@ -781,7 +815,9 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
         !read_integer_setting("stitch_blend_mode", 0, 1,
             loaded.processing_settings.stitch_blend_mode) ||
         !read_integer_setting("live_stitch_interval_ms", 250, 10000,
-            loaded.processing_settings.live_stitch_interval_ms)) {
+            loaded.processing_settings.live_stitch_interval_ms) ||
+        !read_integer_setting("fluorescence_blend_mode", 0, 2,
+            loaded.processing_settings.fluorescence_blend_mode)) {
         return false;
     }
 

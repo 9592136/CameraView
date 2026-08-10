@@ -19,6 +19,7 @@ struct ProjectProcessingSettings {
     int stitch_transform_model = 1;
     int stitch_blend_mode = 0;
     int live_stitch_interval_ms = 1200;
+    int fluorescence_blend_mode = 1;
 };
 
 struct ObjectiveCalibrationDocument {
@@ -38,6 +39,7 @@ struct ProjectDocument {
     std::vector<PolylineMeasurement> polyline_measurements;
     std::vector<CircleMeasurement> circle_measurements;
     std::vector<EllipseMeasurement> ellipse_measurements;
+    std::vector<MeasurementOverlayStyle> measurement_styles;
     std::vector<DyeProfile> dye_profiles;
     std::vector<FluorescenceChannelRecipe> fluorescence_channels;
     ProjectProcessingSettings processing_settings;
