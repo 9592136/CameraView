@@ -183,6 +183,65 @@ void PointCloudDialog::buildUi()
     interactive_crop_layout->addWidget(begin_crop_button_);
     interactive_crop_layout->addWidget(rowOf({keep_crop_button_, remove_crop_button_}));
     process_layout->addWidget(interactive_crop_group);
+    auto* smart_filter_group = new QGroupBox(tr("智能滤波与去噪"));
+    auto* smart_filter_form = new QFormLayout(smart_filter_group);
+    smart_radius_spin_ = coordinateSpin(QStringLiteral("PointCloudSmartFilterRadius"));
+    smart_radius_spin_->setRange(0.000001, 1e12);
+    smart_neighbors_spin_ = new QSpinBox;
+    smart_neighbors_spin_->setObjectName(QStringLiteral("PointCloudSmartFilterNeighbors"));
+    smart_neighbors_spin_->setRange(2, 100);
+    smart_neighbors_spin_->setValue(4);
+    smart_sigma_spin_ = new QDoubleSpinBox;
+    smart_sigma_spin_->setObjectName(QStringLiteral("PointCloudSmartFilterSigma"));
+    smart_sigma_spin_->setRange(1.0, 10.0);
+    smart_sigma_spin_->setDecimals(2);
+    smart_sigma_spin_->setValue(3.5);
+    smart_deviation_spin_ = coordinateSpin(QStringLiteral("PointCloudSmartFilterDeviation"));
+    smart_deviation_spin_->setRange(0.0, 1e12);
+    smart_smoothing_spin_ = new QDoubleSpinBox;
+    smart_smoothing_spin_->setObjectName(QStringLiteral("PointCloudSmartFilterSmoothing"));
+    smart_smoothing_spin_->setRange(0.0, 1.0);
+    smart_smoothing_spin_->setSingleStep(0.05);
+    smart_smoothing_spin_->setValue(0.25);
+    auto* smart_filter_apply = new QPushButton(tr("快速去除飞点与毛刺"));
+    smart_filter_apply->setObjectName(QStringLiteral("PointCloudSmartFilterApplyButton"));
+    smart_filter_apply->setProperty("role", QStringLiteral("primary"));
+    smart_filter_report_ = new QLabel(tr("自动估计间距后可调整参数。"));
+    smart_filter_report_->setObjectName(QStringLiteral("PointCloudSmartFilterReport"));
+    smart_filter_report_->setWordWrap(true);
+    smart_filter_form->addRow(tr("邻域半径"), smart_radius_spin_);
+    smart_filter_form->addRow(tr("最少邻点"), smart_neighbors_spin_);
+    smart_filter_form->addRow(tr("毛刺灵敏度 σ"), smart_sigma_spin_);
+    smart_filter_form->addRow(tr("保边高度阈值"), smart_deviation_spin_);
+    smart_filter_form->addRow(tr("平滑强度"), smart_smoothing_spin_);
+    smart_filter_form->addRow({}, smart_filter_apply);
+    smart_filter_form->addRow({}, smart_filter_report_);
+    process_layout->addWidget(smart_filter_group);
+
+    auto* hole_repair_group = new QGroupBox(tr("死角与空洞修复"));
+    auto* hole_repair_form = new QFormLayout(hole_repair_group);
+    repair_spacing_spin_ = coordinateSpin(QStringLiteral("PointCloudRepairGridSpacing"));
+    repair_spacing_spin_->setRange(0.000001, 1e12);
+    repair_max_cells_spin_ = new QSpinBox;
+    repair_max_cells_spin_->setObjectName(QStringLiteral("PointCloudRepairMaxHoleCells"));
+    repair_max_cells_spin_->setRange(1, 10000);
+    repair_max_cells_spin_->setValue(64);
+    repair_search_spin_ = new QSpinBox;
+    repair_search_spin_->setObjectName(QStringLiteral("PointCloudRepairSearchRadius"));
+    repair_search_spin_->setRange(2, 20);
+    repair_search_spin_->setValue(5);
+    auto* hole_repair_apply = new QPushButton(tr("自动检测并平滑填补"));
+    hole_repair_apply->setObjectName(QStringLiteral("PointCloudHoleRepairApplyButton"));
+    hole_repair_apply->setProperty("role", QStringLiteral("primary"));
+    hole_repair_report_ = new QLabel(tr("仅修复被有效点包围的内部空洞。"));
+    hole_repair_report_->setObjectName(QStringLiteral("PointCloudHoleRepairReport"));
+    hole_repair_report_->setWordWrap(true);
+    hole_repair_form->addRow(tr("补点网格间距"), repair_spacing_spin_);
+    hole_repair_form->addRow(tr("最大空洞格数"), repair_max_cells_spin_);
+    hole_repair_form->addRow(tr("趋势搜索半径"), repair_search_spin_);
+    hole_repair_form->addRow({}, hole_repair_apply);
+    hole_repair_form->addRow({}, hole_repair_report_);
+    process_layout->addWidget(hole_repair_group);
     auto* voxel_group = new QGroupBox(tr("体素降采样"));
     auto* voxel_form = new QFormLayout(voxel_group);
     voxel_spin_ = coordinateSpin(QStringLiteral("PointCloudVoxelSize"));
@@ -324,6 +383,10 @@ void PointCloudDialog::buildUi()
         });
     connect(voxel_apply, &QPushButton::clicked, this, &PointCloudDialog::applyVoxelDownsample);
     connect(outlier_apply, &QPushButton::clicked, this, &PointCloudDialog::applyOutlierRemoval);
+    connect(smart_filter_apply, &QPushButton::clicked,
+        this, &PointCloudDialog::applySmartDenoise);
+    connect(hole_repair_apply, &QPushButton::clicked,
+        this, &PointCloudDialog::applyHoleRepair);
     connect(crop_apply, &QPushButton::clicked, this, &PointCloudDialog::applyCrop);
     connect(begin_crop_button_, &QPushButton::clicked,
         this, &PointCloudDialog::beginInteractiveCrop);
@@ -501,6 +564,14 @@ void PointCloudDialog::updateCropRanges()
         current_cloud_.bounds.Height(), 1e-6});
     voxel_spin_->setValue(extent / 100.0);
     outlier_radius_spin_->setValue(extent / 50.0);
+    const double nominal_spacing = PointCloudProcessor::EstimateNominalSpacing(current_cloud_);
+    if (nominal_spacing > 0.0) {
+        smart_radius_spin_->setValue(nominal_spacing * 2.5);
+        smart_deviation_spin_->setValue(nominal_spacing * 0.2);
+        repair_spacing_spin_->setValue(nominal_spacing);
+        smart_filter_report_->setText(tr("估计点间距：%1 %2")
+            .arg(nominal_spacing, 0, 'g', 7).arg(unitLabel()));
+    }
 }
 
 void PointCloudDialog::pushProcessedCloud(PointCloud cloud, const QString& operation)
@@ -531,6 +602,54 @@ void PointCloudDialog::applyOutlierRemoval()
     pushProcessedCloud(PointCloudProcessor::RemoveRadiusOutliers(
         current_cloud_, outlier_radius_spin_->value(),
         static_cast<std::size_t>(outlier_neighbors_spin_->value())), tr("离群点过滤"));
+}
+
+void PointCloudDialog::applySmartDenoise()
+{
+    if (current_cloud_.Empty()) return;
+    PointCloudDenoiseOptions options;
+    options.neighbor_radius = smart_radius_spin_->value();
+    options.minimum_neighbors = static_cast<std::size_t>(smart_neighbors_spin_->value());
+    options.spike_sigma = smart_sigma_spin_->value();
+    options.minimum_height_deviation = smart_deviation_spin_->value();
+    options.smoothing_strength = smart_smoothing_spin_->value();
+    PointCloudDenoiseReport report;
+    PointCloud result = PointCloudProcessor::SmartDenoise(current_cloud_, options, &report);
+    if (report.removed_isolated == 0 && report.removed_spikes == 0 &&
+        report.smoothed_points == 0) {
+        QMessageBox::information(this, tr("智能去噪"), tr("未检测到需要处理的飞点或毛刺。"));
+        return;
+    }
+    pushProcessedCloud(std::move(result), tr("智能滤波去噪"));
+    smart_filter_report_->setText(tr("飞点 %1，毛刺 %2，保边平滑 %3 点")
+        .arg(report.removed_isolated).arg(report.removed_spikes).arg(report.smoothed_points));
+}
+
+void PointCloudDialog::applyHoleRepair()
+{
+    if (current_cloud_.Empty()) return;
+    PointCloudHoleRepairOptions options;
+    options.grid_spacing = repair_spacing_spin_->value();
+    options.maximum_hole_cells = static_cast<std::size_t>(repair_max_cells_spin_->value());
+    options.search_radius_cells = repair_search_spin_->value();
+    PointCloudHoleRepairReport report;
+    PointCloud result = PointCloudProcessor::RepairHoles(current_cloud_, options, &report);
+    if (!report.applicable) {
+        hole_repair_report_->setText(errorText(report.message));
+        QMessageBox::warning(this, tr("空洞修复"), errorText(report.message));
+        return;
+    }
+    hole_repair_report_->setText(tr("检测 %1 处，修复 %2 处，新增 %3 点，跳过大空洞 %4 处")
+        .arg(report.detected_holes).arg(report.filled_holes)
+        .arg(report.filled_points).arg(report.skipped_large_holes));
+    if (report.filled_points == 0) {
+        QMessageBox::information(this, tr("空洞修复"),
+            report.detected_holes == 0
+                ? tr("未检测到被有效点完全包围的内部空洞。")
+                : tr("检测到的空洞缺少足够的四周趋势支撑，未执行填补。"));
+        return;
+    }
+    pushProcessedCloud(std::move(result), tr("死角空洞修复"));
 }
 
 void PointCloudDialog::applyCrop()

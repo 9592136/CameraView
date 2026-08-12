@@ -3,6 +3,8 @@
 #include "pointcloud/PointCloudMeasurement.h"
 #include "pointcloud/PointCloudProcessor.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -108,6 +110,127 @@ int main()
     const PointCloud filtered = PointCloudProcessor::RemoveRadiusOutliers(noisy, 0.8, 3);
     if (filtered.Size() != cloud.Size() || filtered.bounds.max_x > 10.0) {
         return fail("Radius outlier filtering did not remove the isolated point.");
+    }
+
+    PointCloud denoise_cloud;
+    denoise_cloud.unit = PointCloudUnit::Millimeters;
+    for (int y = 0; y < 9; ++y) {
+        for (int x = 0; x < 9; ++x) {
+            PointCloudPoint point;
+            point.x = x;
+            point.y = y;
+            point.z = 0.05 * x + 0.02 * y;
+            if (x == 4 && y == 4) point.z += 8.0;
+            denoise_cloud.points.push_back(point);
+        }
+    }
+    denoise_cloud.points.push_back({100.0, 100.0, 20.0});
+    denoise_cloud.RecalculateBounds();
+    PointCloudDenoiseOptions denoise_options;
+    denoise_options.neighbor_radius = 1.6;
+    denoise_options.minimum_neighbors = 3;
+    denoise_options.minimum_height_deviation = 0.3;
+    denoise_options.spike_sigma = 3.0;
+    denoise_options.smoothing_strength = 0.0;
+    PointCloudDenoiseReport denoise_report;
+    const PointCloud smart_filtered = PointCloudProcessor::SmartDenoise(
+        denoise_cloud, denoise_options, &denoise_report);
+    if (smart_filtered.Size() != 80 || denoise_report.removed_isolated != 1 ||
+        denoise_report.removed_spikes != 1 || smart_filtered.bounds.max_x > 8.0) {
+        return fail("Smart denoising did not remove both the isolated point and local spike.");
+    }
+    PointCloud step_edge;
+    for (int y = 0; y < 10; ++y) {
+        for (int x = 0; x < 10; ++x) {
+            step_edge.points.push_back({static_cast<double>(x), static_cast<double>(y),
+                x < 5 ? 0.0 : 5.0});
+        }
+    }
+    step_edge.RecalculateBounds();
+    PointCloudDenoiseReport edge_denoise_report;
+    const PointCloud preserved_edge = PointCloudProcessor::SmartDenoise(
+        step_edge, denoise_options, &edge_denoise_report);
+    if (preserved_edge.Size() != step_edge.Size() || edge_denoise_report.removed_spikes != 0 ||
+        !near(preserved_edge.bounds.Height(), 5.0)) {
+        return fail("Smart denoising incorrectly removed a supported sharp surface edge.");
+    }
+
+    PointCloud hole_cloud;
+    hole_cloud.unit = PointCloudUnit::Millimeters;
+    for (int y = 0; y <= 10; ++y) {
+        for (int x = 0; x <= 10; ++x) {
+            if (x >= 4 && x <= 6 && y >= 4 && y <= 6) continue;
+            PointCloudPoint point;
+            point.x = x;
+            point.y = y;
+            point.z = 2.0 + 0.2 * x - 0.1 * y;
+            hole_cloud.points.push_back(point);
+        }
+    }
+    hole_cloud.RecalculateBounds();
+    PointCloudHoleRepairOptions repair_options;
+    repair_options.grid_spacing = 1.0;
+    repair_options.maximum_hole_cells = 16;
+    repair_options.search_radius_cells = 4;
+    repair_options.smoothing_iterations = 2;
+    PointCloudHoleRepairReport repair_report;
+    const PointCloud repaired = PointCloudProcessor::RepairHoles(
+        hole_cloud, repair_options, &repair_report);
+    if (repaired.Size() != 121 || repair_report.detected_holes != 1 ||
+        repair_report.filled_holes != 1 || repair_report.filled_points != 9) {
+        return fail("Internal point-cloud hole detection or repair produced the wrong topology.");
+    }
+    const auto repaired_center = std::find_if(repaired.points.begin(), repaired.points.end(),
+        [](const PointCloudPoint& point) { return near(point.x, 5.0) && near(point.y, 5.0); });
+    if (repaired_center == repaired.points.end() || !near(repaired_center->z, 2.5, 1e-5)) {
+        return fail("Hole repair did not follow the surrounding planar trend.");
+    }
+    PointCloud edge_gap = repaired;
+    edge_gap.points.erase(std::remove_if(edge_gap.points.begin(), edge_gap.points.end(),
+        [](const PointCloudPoint& point) { return near(point.x, 0.0) && near(point.y, 5.0); }),
+        edge_gap.points.end());
+    edge_gap.RecalculateBounds();
+    PointCloudHoleRepairReport edge_report;
+    const PointCloud edge_unchanged = PointCloudProcessor::RepairHoles(
+        edge_gap, repair_options, &edge_report);
+    if (edge_unchanged.Size() != edge_gap.Size() || edge_report.filled_points != 0) {
+        return fail("Hole repair incorrectly expanded an exterior boundary gap.");
+    }
+    PointCloudHoleRepairOptions skip_large_options = repair_options;
+    skip_large_options.maximum_hole_cells = 4;
+    PointCloudHoleRepairReport skipped_report;
+    const PointCloud skipped_hole = PointCloudProcessor::RepairHoles(
+        hole_cloud, skip_large_options, &skipped_report);
+    if (skipped_hole.Size() != hole_cloud.Size() || skipped_report.filled_points != 0 ||
+        skipped_report.skipped_large_holes != 1) {
+        return fail("Hole repair did not honor the maximum automatic repair area.");
+    }
+
+    PointCloud performance_cloud;
+    performance_cloud.points.reserve(256 * 256 + 1);
+    for (int y = 0; y < 256; ++y) {
+        for (int x = 0; x < 256; ++x) {
+            performance_cloud.points.push_back({
+                static_cast<double>(x), static_cast<double>(y),
+                0.002 * x + 0.001 * y});
+        }
+    }
+    performance_cloud.points.push_back({1000.0, 1000.0, 100.0});
+    performance_cloud.RecalculateBounds();
+    PointCloudDenoiseOptions performance_options;
+    performance_options.neighbor_radius = 2.1;
+    performance_options.minimum_neighbors = 4;
+    performance_options.minimum_height_deviation = 0.05;
+    performance_options.smoothing_strength = 0.0;
+    const auto performance_start = std::chrono::steady_clock::now();
+    PointCloudDenoiseReport performance_report;
+    const PointCloud performance_result = PointCloudProcessor::SmartDenoise(
+        performance_cloud, performance_options, &performance_report);
+    const auto performance_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - performance_start);
+    if (performance_result.Size() != 256U * 256U ||
+        performance_report.removed_isolated != 1 || performance_elapsed.count() > 5000) {
+        return fail("Smart denoising did not meet the large-cloud fast-path contract.");
     }
 
     const PointCloudPoint origin{0.0, 0.0, 0.0};

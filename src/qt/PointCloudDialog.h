@@ -55,6 +55,8 @@ private:
     void updateCropRanges();
     void applyVoxelDownsample();
     void applyOutlierRemoval();
+    void applySmartDenoise();
+    void applyHoleRepair();
     void applyCrop();
     void beginInteractiveCrop();
     void acceptBoxSelection(const QVector<int>& indices);
@@ -82,6 +84,16 @@ private:
     QDoubleSpinBox* voxel_spin_ = nullptr;
     QDoubleSpinBox* outlier_radius_spin_ = nullptr;
     QSpinBox* outlier_neighbors_spin_ = nullptr;
+    QDoubleSpinBox* smart_radius_spin_ = nullptr;
+    QSpinBox* smart_neighbors_spin_ = nullptr;
+    QDoubleSpinBox* smart_sigma_spin_ = nullptr;
+    QDoubleSpinBox* smart_deviation_spin_ = nullptr;
+    QDoubleSpinBox* smart_smoothing_spin_ = nullptr;
+    QDoubleSpinBox* repair_spacing_spin_ = nullptr;
+    QSpinBox* repair_max_cells_spin_ = nullptr;
+    QSpinBox* repair_search_spin_ = nullptr;
+    QLabel* smart_filter_report_ = nullptr;
+    QLabel* hole_repair_report_ = nullptr;
     QDoubleSpinBox* crop_min_x_ = nullptr;
     QDoubleSpinBox* crop_max_x_ = nullptr;
     QDoubleSpinBox* crop_min_y_ = nullptr;

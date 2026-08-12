@@ -233,6 +233,8 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudBeginInteractiveCropButton"),
         QStringLiteral("PointCloudKeepSelectionButton"),
         QStringLiteral("PointCloudRemoveSelectionButton"),
+        QStringLiteral("PointCloudSmartFilterApplyButton"),
+        QStringLiteral("PointCloudHoleRepairApplyButton"),
         QStringLiteral("PointCloudFitPlaneButton"),
         QStringLiteral("PointCloudLevelButton"),
         QStringLiteral("PointCloudUndoButton"),
