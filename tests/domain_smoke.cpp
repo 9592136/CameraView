@@ -16,6 +16,7 @@
 #include "../src/imaging/EdfProcessor.h"
 #include "../src/imaging/EdfStackListActions.h"
 #include "../src/imaging/FluorescenceChannelFactory.h"
+#include "../src/imaging/FluorescenceCaptureSequence.h"
 #include "../src/imaging/FluorescenceChannelAnalysis.h"
 #include "../src/imaging/FluorescenceChannelListActions.h"
 #include "../src/imaging/FluorescenceChannelSettings.h"
@@ -3258,6 +3259,7 @@ int main()
     document.processing_settings.fluorescence_blend_mode = 2;
     FluorescenceChannelRecipe channel_recipe;
     channel_recipe.name = L"FITC 1";
+    channel_recipe.exposure_ms = 42.5;
     channel_recipe.color = RgbColor{80, 255, 80};
     channel_recipe.visible = false;
     channel_recipe.black_level = 12;
@@ -3325,6 +3327,7 @@ int main()
         loaded_document.processing_settings.live_stitch_interval_ms != 1350 ||
         loaded_document.processing_settings.fluorescence_blend_mode != 2 ||
         loaded_document.fluorescence_channels[0].name != L"FITC 1" ||
+        !Near(loaded_document.fluorescence_channels[0].exposure_ms, 42.5) ||
         loaded_document.fluorescence_channels[0].visible ||
         loaded_document.fluorescence_channels[0].black_level != 12 ||
         loaded_document.fluorescence_channels[0].white_level != 220 ||
@@ -3346,6 +3349,7 @@ int main()
         MeasurementReference{MeasurementKind::Angle, 0}, mapped_angle_style);
     FluorescenceChannel mapped_channel;
     mapped_channel.name = L"Mapped Channel";
+    mapped_channel.exposure_ms = 18.75;
     mapped_channel.color = RgbColor{9, 8, 7};
     mapped_channel.visible = false;
     mapped_channel.black_level = 11;
@@ -3384,6 +3388,7 @@ int main()
         !Near(mapped_document.objective_calibrations[2].calibration.MicronsPerPixel(), 0.125) ||
         mapped_document.fluorescence_channels.size() != 1 ||
         mapped_document.fluorescence_channels[0].name != L"Mapped Channel" ||
+        !Near(mapped_document.fluorescence_channels[0].exposure_ms, 18.75) ||
         mapped_document.fluorescence_channels[0].visible ||
         mapped_document.fluorescence_channels[0].black_level != 11 ||
         mapped_document.processing_settings.edf_focus_radius != 5 ||
@@ -3788,6 +3793,26 @@ int main()
     }
     if (FluorescenceFormatter::FormatDefaultChannelName(dyes[1], 4) != L"FITC 4") {
         return Fail("FluorescenceFormatter did not format a default channel name.");
+    }
+    FluorescenceCaptureSequenceState capture_sequence;
+    if (!FluorescenceCaptureSequence::Start(capture_sequence, 2) ||
+        capture_sequence.current_index != 0 ||
+        !FluorescenceCaptureSequence::RequestExposure(capture_sequence, 12.5, 100) ||
+        FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 20.0, true, 101) ||
+        FluorescenceCaptureSequence::CanCapture(capture_sequence, 102) ||
+        !FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 12.5, true, 102) ||
+        FluorescenceCaptureSequence::CanCapture(capture_sequence, 102) ||
+        !FluorescenceCaptureSequence::CanCapture(capture_sequence, 103) ||
+        FluorescenceCaptureSequence::Capture(capture_sequence, 103) !=
+            FluorescenceCaptureAdvance::NextPreset ||
+        capture_sequence.current_index != 1 ||
+        !FluorescenceCaptureSequence::RequestExposure(capture_sequence, 40.0, 103) ||
+        !FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 40.0, true, 104) ||
+        FluorescenceCaptureSequence::Capture(capture_sequence, 105) !=
+            FluorescenceCaptureAdvance::Complete ||
+        FluorescenceCaptureSequence::IsActive(capture_sequence) ||
+        FluorescenceCaptureSequence::Start(capture_sequence, 0)) {
+        return Fail("Fluorescence capture sequence did not gate exposure and fresh frames safely.");
     }
     const FluorescenceChannel factory_channel =
         FluorescenceChannelFactory::CreateFromFrame(dyes[1], MakeSolidImage(2, 1, 10, 20, 30), 4);

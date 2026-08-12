@@ -17,12 +17,22 @@ enum class MeasurementToolGlyph {
     SmartCount,
     SmartCountRun,
     EdgeSnap,
+    SelectMeasurement,
+    RenameMeasurement,
+    MeasurementColor,
+    ResetMeasurementColor,
     DeleteMeasurement,
     ClearMeasurements,
     ExportCsv
 };
 
 QIcon measurementToolIcon(MeasurementToolGlyph glyph);
+
+QToolButton* createMeasurementActionButton(
+    MeasurementToolGlyph glyph,
+    const QString& text,
+    const QString& toolTip,
+    QWidget* parent = nullptr);
 
 class MeasurementToolButton final : public QToolButton {
 public:

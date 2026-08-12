@@ -50,6 +50,10 @@ int main(int argc, char* argv[])
         MeasurementToolGlyph::SmartCount,
         MeasurementToolGlyph::SmartCountRun,
         MeasurementToolGlyph::EdgeSnap,
+        MeasurementToolGlyph::SelectMeasurement,
+        MeasurementToolGlyph::RenameMeasurement,
+        MeasurementToolGlyph::MeasurementColor,
+        MeasurementToolGlyph::ResetMeasurementColor,
         MeasurementToolGlyph::DeleteMeasurement,
         MeasurementToolGlyph::ClearMeasurements,
         MeasurementToolGlyph::ExportCsv};
@@ -88,6 +92,19 @@ int main(int argc, char* argv[])
         button.icon().isNull() || button.accessibleName() != QStringLiteral("角度") ||
         button.property("role").toString() != QStringLiteral("measurementTool")) {
         return fail("MeasurementToolButton did not expose the expected graphical-button behavior.");
+    }
+
+    QToolButton* action_button = createMeasurementActionButton(
+        MeasurementToolGlyph::DeleteMeasurement,
+        QStringLiteral("Delete"), QStringLiteral("Delete selected measurement"));
+    const bool action_button_valid = !action_button->isCheckable() &&
+        action_button->toolButtonStyle() == Qt::ToolButtonTextUnderIcon &&
+        action_button->iconSize() == button.iconSize() &&
+        action_button->minimumSize() == button.minimumSize() &&
+        action_button->property("role").toString() == QStringLiteral("measurementAction");
+    delete action_button;
+    if (!action_button_valid) {
+        return fail("Measurement action buttons did not match the measurement tool style.");
     }
     return 0;
 }

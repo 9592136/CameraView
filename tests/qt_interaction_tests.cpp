@@ -1,6 +1,7 @@
 #include "qt/CalibrationDialog.h"
 #include "qt/ImageCanvas.h"
 #include "qt/ObjectiveCalibrationSettings.h"
+#include "qt/FluorescenceCaptureSettings.h"
 #include "qt/ai/YoloWorkspaceWidget.h"
 
 #include <QApplication>
@@ -78,6 +79,9 @@ int main(int argc, char* argv[])
         saved.calibrations[0] = CalibrationProfile::FromMicronsPerPixel(1.25);
         saved.calibrations[2] = CalibrationProfile::FromMicronsPerPixel(0.25);
         ObjectiveCalibrationSettings::Save(settings, saved);
+        if (settings.status() != QSettings::NoError) {
+            return fail("Could not write objective calibration settings.");
+        }
     }
     {
         QSettings settings(calibration_settings_path, QSettings::IniFormat);
@@ -87,6 +91,53 @@ int main(int argc, char* argv[])
             !near(restored.calibrations[0].MicronsPerPixel(), 1.25) ||
             !near(restored.calibrations[2].MicronsPerPixel(), 0.25)) {
             return fail("Objective-specific calibration settings were not remembered correctly.");
+        }
+    }
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        ObjectiveCalibrationState reduced;
+        reduced.labels = {L"20x", L"40x Oil"};
+        reduced.calibrations = {
+            CalibrationProfile::FromMicronsPerPixel(0.5),
+            CalibrationProfile::FromMicronsPerPixel(0.2)};
+        reduced.selected_index = 1;
+        ObjectiveCalibrationSettings::Save(settings, reduced);
+        const ObjectiveCalibrationState restored = ObjectiveCalibrationSettings::Load(settings);
+        if (restored.labels != reduced.labels || restored.calibrations.size() != 2 ||
+            restored.selected_index != 1 ||
+            !near(restored.calibrations[1].MicronsPerPixel(), 0.2)) {
+            return fail("Objective calibration records did not support persistent CRUD changes.");
+        }
+    }
+
+    const QString fluorescence_settings_path =
+        calibration_settings_directory.filePath(QStringLiteral("fluorescence.ini"));
+    const std::vector<DyeProfile> fluorescence_dyes{
+        {L"DAPI", 358.0, 461.0, {80, 120, 255}},
+        {L"FITC", 495.0, 519.0, {80, 255, 80}}};
+    {
+        QSettings settings(fluorescence_settings_path, QSettings::IniFormat);
+        const auto defaults = FluorescenceCaptureSettings::Load(settings, fluorescence_dyes);
+        if (defaults.size() != 2 || defaults[0].dye_name != L"DAPI" ||
+            !near(defaults[0].exposure_ms, 10.0) || defaults[1].color.g != 255) {
+            return fail("Fluorescence capture defaults did not mirror the dye library.");
+        }
+        const std::vector<FluorescenceCapturePreset> presets{
+            {L"DAPI", 125.5, {12, 34, 240}},
+            {L"FITC", 42.25, {20, 230, 40}}};
+        FluorescenceCaptureSettings::Save(settings, presets);
+    }
+    {
+        QSettings settings(fluorescence_settings_path, QSettings::IniFormat);
+        const auto restored = FluorescenceCaptureSettings::Load(settings, fluorescence_dyes);
+        if (restored.size() != 2 || restored[0].dye_name != L"DAPI" ||
+            !near(restored[0].exposure_ms, 125.5) || restored[0].color.b != 240 ||
+            !near(restored[1].exposure_ms, 42.25) || restored[1].color.g != 230) {
+            return fail("Fluorescence exposure and pseudo-color presets were not remembered.");
+        }
+        FluorescenceCaptureSettings::Save(settings, {});
+        if (!FluorescenceCaptureSettings::Load(settings, fluorescence_dyes).empty()) {
+            return fail("Deleted fluorescence capture presets were unexpectedly restored.");
         }
     }
 
@@ -196,8 +247,24 @@ int main(int argc, char* argv[])
         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &circle_center);
     QApplication::sendEvent(&canvas, &circle_edge);
-    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2) {
-        return fail("Circle canvas interaction did not commit center and edge points.");
+    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2 ||
+        canvas.tool() != CanvasTool::Circle) {
+        return fail("Circle canvas interaction did not commit points and keep the tool active.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    QMouseEvent second_circle_center(
+        QEvent::MouseButtonPress, QPointF(250.0, 250.0), QPointF(250.0, 250.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent second_circle_edge(
+        QEvent::MouseButtonPress, QPointF(325.0, 250.0), QPointF(325.0, 250.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &second_circle_center);
+    QApplication::sendEvent(&canvas, &second_circle_edge);
+    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2 ||
+        canvas.tool() != CanvasTool::Circle) {
+        return fail("Circle canvas interaction did not support consecutive measurements.");
     }
 
     committed_tool = CanvasTool::None;

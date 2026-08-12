@@ -34,6 +34,7 @@ signals:
     void frameReady(QImage image, quint64 sequence, quint32 timestamp);
     void cameraStateChanged(bool opened, QString message);
     void operationFinished(QString message, bool success);
+    void exposureApplied(double value, bool success, QString message);
 
 private slots:
     void captureOne();

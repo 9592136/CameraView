@@ -9,6 +9,7 @@ namespace {
 
 constexpr auto kSettingsGroup = "ObjectiveCalibrations";
 constexpr auto kProfilesArray = "profiles";
+constexpr auto kSchemaVersion = "schemaVersion";
 
 int IndexForLabel(const std::vector<std::wstring>& labels, const std::wstring& label)
 {
@@ -50,6 +51,8 @@ ObjectiveCalibrationState ObjectiveCalibrationSettings::Load(QSettings& settings
 {
     ObjectiveCalibrationState state;
     settings.beginGroup(QString::fromLatin1(kSettingsGroup));
+    const bool has_saved_collection = settings.value(
+        QString::fromLatin1(kSchemaVersion), 0).toInt() >= 2;
     const QString selected_label = settings.value(QStringLiteral("selectedObjective")).toString();
     const int profile_count = settings.beginReadArray(QString::fromLatin1(kProfilesArray));
     for (int index = 0; index < profile_count; ++index) {
@@ -65,8 +68,10 @@ ObjectiveCalibrationState ObjectiveCalibrationSettings::Load(QSettings& settings
     settings.endArray();
     settings.endGroup();
 
-    for (const std::wstring& label : CalibrationProfile::ObjectiveMagnificationOptions()) {
-        AppendObjective(state, label, CalibrationProfile::Uncalibrated());
+    if (!has_saved_collection) {
+        for (const std::wstring& label : CalibrationProfile::ObjectiveMagnificationOptions()) {
+            AppendObjective(state, label, CalibrationProfile::Uncalibrated());
+        }
     }
     if (state.labels.empty()) {
         state = Defaults();
@@ -89,6 +94,7 @@ void ObjectiveCalibrationSettings::Save(
     }
     const int selected_index = NormalizeIndex(state.selected_index, state.labels.size());
     settings.beginGroup(QString::fromLatin1(kSettingsGroup));
+    settings.setValue(QString::fromLatin1(kSchemaVersion), 2);
     settings.setValue(
         QStringLiteral("selectedObjective"),
         QString::fromStdWString(state.labels[static_cast<std::size_t>(selected_index)]));

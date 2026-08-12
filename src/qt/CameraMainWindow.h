@@ -8,6 +8,7 @@
 #include "imaging/ChannelFusionEngine.h"
 #include "imaging/EdfProcessor.h"
 #include "imaging/Fluorescence.h"
+#include "imaging/FluorescenceCaptureSequence.h"
 #include "imaging/HistogramCalculator.h"
 #include "imaging/ImageAdjuster.h"
 #include "imaging/ImageFilterProcessor.h"
@@ -34,6 +35,8 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
+class QGroupBox;
+class QToolButton;
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -117,6 +120,9 @@ private:
     void chooseSelectedMeasurementColor();
     void resetSelectedMeasurementColor();
     void updateMeasurementStyleUi();
+    void applyGlobalMeasurementColor();
+    void loadMeasurementPreferences();
+    void saveMeasurementPreferences() const;
     void updateSmartTargetUi();
     void updateImageFilterPipelineUi();
     void refreshFluorescenceChannelList(int selectedRow = -1);
@@ -125,9 +131,18 @@ private:
     void removeSelectedFluorescenceChannel();
     void isolateSelectedFluorescenceChannel();
     void showAllFluorescenceChannels();
+    void refreshFluorescencePresetList(int selectedRow = -1);
+    void updateFluorescencePresetEditor();
+    void saveFluorescenceCapturePresets() const;
+    void startFluorescenceCaptureSequence();
+    void captureCurrentFluorescencePreset();
+    void cancelFluorescenceCaptureSequence();
+    void applyCurrentFluorescencePreset();
+    void updateFluorescenceCaptureUi();
     void rebuildOverlays();
     void updateCalibrationUi();
     void selectObjective(int index, bool rememberSelection = true);
+    void refreshObjectiveControls();
     void loadObjectiveCalibrationMemory();
     void saveObjectiveCalibrationMemory() const;
     QString currentObjectiveLabel() const;
@@ -181,6 +196,14 @@ private:
     QSlider* level_slider_ = nullptr;
     QSlider* width_slider_ = nullptr;
     QComboBox* dye_combo_ = nullptr;
+    QGroupBox* fluorescence_preset_group_ = nullptr;
+    QListWidget* fluorescence_preset_list_ = nullptr;
+    QDoubleSpinBox* fluorescence_preset_exposure_spin_ = nullptr;
+    QPushButton* fluorescence_preset_color_button_ = nullptr;
+    QPushButton* fluorescence_capture_start_button_ = nullptr;
+    QPushButton* fluorescence_capture_button_ = nullptr;
+    QPushButton* fluorescence_capture_cancel_button_ = nullptr;
+    QLabel* fluorescence_capture_status_label_ = nullptr;
     QListWidget* channel_list_ = nullptr;
     QCheckBox* fusion_check_ = nullptr;
     QComboBox* fluorescence_blend_combo_ = nullptr;
@@ -216,8 +239,8 @@ private:
     QComboBox* display_unit_combo_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
     QLabel* measurement_count_label_ = nullptr;
-    QPushButton* measurement_color_button_ = nullptr;
-    QPushButton* measurement_reset_color_button_ = nullptr;
+    QToolButton* measurement_color_button_ = nullptr;
+    QToolButton* measurement_reset_color_button_ = nullptr;
     QCheckBox* edge_snap_check_ = nullptr;
     NumericSlider* edge_snap_radius_slider_ = nullptr;
     QLabel* calibration_label_ = nullptr;
@@ -259,6 +282,7 @@ private:
     int selected_objective_index_ = 0;
     MeasurementUnit display_unit_ = MeasurementUnit::Micrometers;
     MeasurementCollection measurements_;
+    MeasurementOverlayStyle global_measurement_style_{76, 201, 240};
     QVector<CanvasOverlay> ai_overlays_;
     QVector<QPointF> profile_line_points_;
     std::vector<SmartTargetRegion> smart_target_samples_;
@@ -268,6 +292,9 @@ private:
     bool smart_count_session_active_ = false;
     quint64 image_generation_ = 0;
     std::vector<DyeProfile> dyes_;
+    std::vector<FluorescenceCapturePreset> fluorescence_capture_presets_;
+    RgbColor fluorescence_preset_editor_color_{255, 255, 255};
+    FluorescenceCaptureSequenceState fluorescence_capture_state_;
     std::vector<FluorescenceChannel> channels_;
     FluorescenceBlendMode fluorescence_blend_mode_ = FluorescenceBlendMode::Screen;
     std::vector<StitchTile> stitch_tiles_;

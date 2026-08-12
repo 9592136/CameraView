@@ -2,6 +2,7 @@
 
 #include "CalibrationDialog.h"
 #include "CameraWorker.h"
+#include "FluorescenceCaptureSettings.h"
 #include "HistogramWidget.h"
 #include "ImageSurface3DDialog.h"
 #include "MeasurementToolButton.h"
@@ -39,6 +40,8 @@
 #include <QCollator>
 #include <QColorDialog>
 #include <QDockWidget>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -104,6 +107,48 @@ constexpr int kLiveStitchReferenceTileCount = 5;
 constexpr int kLiveStitchOutOfRangeWarningFrames = 3;
 constexpr int kLiveStitchMissingMatchWarningFrames = 6;
 constexpr qint64 kLiveStitchWarningBeepMinIntervalMs = 2500;
+
+bool editObjectiveCalibrationRecord(
+    QWidget* parent,
+    const QString& title,
+    QString& objectiveLabel,
+    double& micronsPerPixel)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    dialog.setObjectName(QStringLiteral("ObjectiveCalibrationEditor"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* label = new QLineEdit(objectiveLabel, &dialog);
+    label->setObjectName(QStringLiteral("ObjectiveCalibrationName"));
+    label->setPlaceholderText(QObject::tr("例如：20x、40x 油镜"));
+    auto* scale = new QDoubleSpinBox(&dialog);
+    scale->setObjectName(QStringLiteral("ObjectiveCalibrationScale"));
+    scale->setDecimals(10);
+    scale->setRange(0.0, 1000000.0);
+    scale->setSingleStep(0.01);
+    scale->setSpecialValueText(QObject::tr("未标定"));
+    scale->setSuffix(QObject::tr(" µm / px"));
+    scale->setValue(std::max(0.0, micronsPerPixel));
+    form->addRow(QObject::tr("物镜倍率"), label);
+    form->addRow(QObject::tr("标定值"), scale);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    label->setFocus();
+    label->selectAll();
+    if (dialog.exec() != QDialog::Accepted) return false;
+    objectiveLabel = label->text().trimmed();
+    micronsPerPixel = scale->value();
+    if (objectiveLabel.isEmpty()) {
+        QMessageBox::warning(parent, QObject::tr("物镜标定"), QObject::tr("物镜倍率不能为空。"));
+        return false;
+    }
+    return true;
+}
 
 QPushButton* addButton(QBoxLayout* layout, const QString& text)
 {
@@ -203,7 +248,14 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     objective_calibrations_ = objective_state.calibrations;
     selected_objective_index_ = objective_state.selected_index;
     setupUi();
+    loadMeasurementPreferences();
     loadObjectiveCalibrationMemory();
+    {
+        QSettings fluorescence_settings;
+        fluorescence_capture_presets_ = FluorescenceCaptureSettings::Load(
+            fluorescence_settings, dyes_);
+        refreshFluorescencePresetList();
+    }
     setupMenusAndToolbar();
     QSettings settings;
     settings.beginGroup(QStringLiteral("MainWindow"));
@@ -235,6 +287,18 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
             statusBar()->showMessage(message, 5000);
             if (!success) {
                 camera_state_label_->setText(message);
+            }
+        });
+    connect(camera_worker_, &CameraWorker::exposureApplied, this,
+        [this](double value, bool success, const QString& message) {
+            if (!FluorescenceCaptureSequence::ConfirmExposure(
+                    fluorescence_capture_state_, value, success,
+                    latest_camera_sequence_)) return;
+            updateFluorescenceCaptureUi();
+            if (!success && fluorescence_capture_status_label_) {
+                fluorescence_capture_status_label_->setText(
+                    tr("当前通道曝光设置失败：%1。请检查相机曝光控制后重试。")
+                        .arg(message));
             }
         });
     camera_thread_.start();
@@ -750,13 +814,68 @@ QWidget* CameraMainWindow::buildFluorescencePage()
     workflow_hint->setWordWrap(true);
     workflow_hint->setProperty("role", QStringLiteral("summary"));
     layout->addWidget(workflow_hint);
+    fluorescence_preset_group_ = new QGroupBox(tr("采集预设"));
+    fluorescence_preset_group_->setObjectName(QStringLiteral("FluorescencePresetGroup"));
+    auto* preset_layout = new QVBoxLayout(fluorescence_preset_group_);
+    fluorescence_preset_list_ = new QListWidget;
+    fluorescence_preset_list_->setObjectName(QStringLiteral("FluorescencePresetList"));
+    fluorescence_preset_list_->setMinimumHeight(100);
+    fluorescence_preset_list_->setMaximumHeight(170);
+    fluorescence_preset_list_->setToolTip(tr("按列表顺序逐通道采集；每项保存独立曝光与伪彩。"));
+    preset_layout->addWidget(fluorescence_preset_list_);
     dye_combo_ = new QComboBox;
     dye_combo_->setObjectName(QStringLiteral("FluorescenceDyeCombo"));
     for (const DyeProfile& dye : dyes_) {
         dye_combo_->addItem(QString::fromStdWString(FluorescenceFormatter::FormatDyeLabel(dye)));
     }
-    layout->addWidget(new QLabel(tr("染料 / 激发-发射")));
-    layout->addWidget(dye_combo_);
+    fluorescence_preset_exposure_spin_ = new QDoubleSpinBox;
+    fluorescence_preset_exposure_spin_->setObjectName(
+        QStringLiteral("FluorescencePresetExposure"));
+    fluorescence_preset_exposure_spin_->setRange(0.01, 10000.0);
+    fluorescence_preset_exposure_spin_->setDecimals(2);
+    fluorescence_preset_exposure_spin_->setSuffix(tr(" ms"));
+    fluorescence_preset_color_button_ = new QPushButton(tr("选择伪彩…"));
+    fluorescence_preset_color_button_->setObjectName(
+        QStringLiteral("FluorescencePresetColorButton"));
+    auto* preset_form = new QFormLayout;
+    preset_form->addRow(tr("染料 / 激发-发射"), dye_combo_);
+    preset_form->addRow(tr("曝光参数"), fluorescence_preset_exposure_spin_);
+    preset_form->addRow(tr("伪彩"), fluorescence_preset_color_button_);
+    preset_layout->addLayout(preset_form);
+    auto* preset_add = new QPushButton(tr("新增预设"));
+    auto* preset_save = new QPushButton(tr("保存修改"));
+    auto* preset_delete = new QPushButton(tr("删除预设"));
+    preset_add->setObjectName(QStringLiteral("FluorescencePresetAddButton"));
+    preset_save->setObjectName(QStringLiteral("FluorescencePresetSaveButton"));
+    preset_delete->setObjectName(QStringLiteral("FluorescencePresetDeleteButton"));
+    preset_layout->addWidget(buttonRow({preset_add, preset_save, preset_delete}));
+    layout->addWidget(fluorescence_preset_group_);
+
+    auto* capture_group = new QGroupBox(tr("逐通道采集"));
+    capture_group->setObjectName(QStringLiteral("FluorescenceCaptureGroup"));
+    auto* capture_layout = new QVBoxLayout(capture_group);
+    fluorescence_capture_status_label_ = new QLabel;
+    fluorescence_capture_status_label_->setObjectName(
+        QStringLiteral("FluorescenceCaptureStatus"));
+    fluorescence_capture_status_label_->setWordWrap(true);
+    fluorescence_capture_status_label_->setProperty("role", QStringLiteral("summary"));
+    capture_layout->addWidget(fluorescence_capture_status_label_);
+    fluorescence_capture_start_button_ = new QPushButton(tr("开始逐通道采集"));
+    fluorescence_capture_button_ = new QPushButton(tr("采集当前通道"));
+    fluorescence_capture_cancel_button_ = new QPushButton(tr("取消"));
+    fluorescence_capture_start_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureStartButton"));
+    fluorescence_capture_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureCurrentButton"));
+    fluorescence_capture_cancel_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureCancelButton"));
+    setButtonRole(fluorescence_capture_start_button_, "primary");
+    setButtonRole(fluorescence_capture_cancel_button_, "danger");
+    capture_layout->addWidget(buttonRow({
+        fluorescence_capture_start_button_, fluorescence_capture_button_,
+        fluorescence_capture_cancel_button_}));
+    layout->addWidget(capture_group);
+
     auto* add = addButton(layout, tr("当前帧添加为通道"));
     add->setObjectName(QStringLiteral("FluorescenceAddChannelButton"));
     fusion_check_ = new QCheckBox(tr("显示融合预览"));
@@ -822,6 +941,63 @@ QWidget* CameraMainWindow::buildFluorescencePage()
     fluorescence_statistics_label_->setWordWrap(true);
     fluorescence_statistics_label_->setProperty("role", QStringLiteral("summary"));
     layout->addWidget(fluorescence_statistics_label_);
+    connect(fluorescence_preset_list_, &QListWidget::currentRowChanged,
+        this, [this](int) { updateFluorescencePresetEditor(); });
+    connect(fluorescence_preset_color_button_, &QPushButton::clicked, this, [this] {
+        const QColor current(fluorescence_preset_editor_color_.r,
+            fluorescence_preset_editor_color_.g, fluorescence_preset_editor_color_.b);
+        const QColor selected = QColorDialog::getColor(
+            current, this, tr("选择荧光通道伪彩"), QColorDialog::DontUseNativeDialog);
+        if (!selected.isValid()) return;
+        fluorescence_preset_editor_color_ = {
+            static_cast<unsigned char>(selected.red()),
+            static_cast<unsigned char>(selected.green()),
+            static_cast<unsigned char>(selected.blue())};
+        QPixmap swatch(22, 22);
+        swatch.fill(selected);
+        fluorescence_preset_color_button_->setIcon(QIcon(swatch));
+        fluorescence_preset_color_button_->setIconSize(swatch.size());
+        fluorescence_preset_color_button_->setText(
+            tr("伪彩 %1").arg(selected.name(QColor::HexRgb).toUpper()));
+    });
+    connect(preset_add, &QPushButton::clicked, this, [this] {
+        const int dye_index = dye_combo_->currentIndex();
+        if (dye_index < 0 || dye_index >= static_cast<int>(dyes_.size())) return;
+        const DyeProfile& dye = dyes_[static_cast<std::size_t>(dye_index)];
+        fluorescence_capture_presets_.push_back({
+            dye.name, fluorescence_preset_exposure_spin_->value(),
+            fluorescence_preset_editor_color_});
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(
+            static_cast<int>(fluorescence_capture_presets_.size()) - 1);
+    });
+    connect(preset_save, &QPushButton::clicked, this, [this] {
+        const int row = fluorescence_preset_list_->currentRow();
+        const int dye_index = dye_combo_->currentIndex();
+        if (row < 0 || row >= static_cast<int>(fluorescence_capture_presets_.size()) ||
+            dye_index < 0 || dye_index >= static_cast<int>(dyes_.size())) return;
+        FluorescenceCapturePreset& preset =
+            fluorescence_capture_presets_[static_cast<std::size_t>(row)];
+        preset.dye_name = dyes_[static_cast<std::size_t>(dye_index)].name;
+        preset.exposure_ms = fluorescence_preset_exposure_spin_->value();
+        preset.color = fluorescence_preset_editor_color_;
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(row);
+    });
+    connect(preset_delete, &QPushButton::clicked, this, [this] {
+        const int row = fluorescence_preset_list_->currentRow();
+        if (row < 0 || row >= static_cast<int>(fluorescence_capture_presets_.size())) return;
+        fluorescence_capture_presets_.erase(fluorescence_capture_presets_.begin() + row);
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(std::min(
+            row, static_cast<int>(fluorescence_capture_presets_.size()) - 1));
+    });
+    connect(fluorescence_capture_start_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::startFluorescenceCaptureSequence);
+    connect(fluorescence_capture_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::captureCurrentFluorescencePreset);
+    connect(fluorescence_capture_cancel_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::cancelFluorescenceCaptureSequence);
     connect(add, &QPushButton::clicked, this, &CameraMainWindow::addFluorescenceChannel);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearFluorescenceChannels);
     connect(remove_channel, &QPushButton::clicked,
@@ -1145,7 +1321,15 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     for (const std::wstring& objective : objective_labels_) {
         objective_combo_->addItem(QString::fromStdWString(objective));
     }
-    calibration_form->addRow(tr("物镜倍率"), objective_combo_);
+    calibration_form->addRow(tr("系统当前物镜"), objective_combo_);
+    auto* add_objective = new QPushButton(tr("新增"));
+    add_objective->setObjectName(QStringLiteral("CalibrationObjectiveAddButton"));
+    auto* edit_objective = new QPushButton(tr("编辑"));
+    edit_objective->setObjectName(QStringLiteral("CalibrationObjectiveEditButton"));
+    auto* delete_objective = new QPushButton(tr("删除"));
+    delete_objective->setObjectName(QStringLiteral("CalibrationObjectiveDeleteButton"));
+    calibration_form->addRow(
+        tr("标定数据管理"), buttonRow({add_objective, edit_objective, delete_objective}));
     calibration_length_spin_ = new QDoubleSpinBox;
     calibration_length_spin_->setObjectName(QStringLiteral("CalibrationLength"));
     calibration_length_spin_->setDecimals(6);
@@ -1208,6 +1392,42 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"), QStringLiteral("MeasurementEllipseButton"), 2, 1);
     auto* profile = make_tool_button(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
         tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"), QStringLiteral("MeasurementProfileButton"), 2, 2);
+    auto* select_tool = make_tool_button(
+        MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
+        tr("选择"), tr("进入选择模式：选择、拖动或编辑测量对象"),
+        QStringLiteral("MeasurementSelectionButton"), 3, 0);
+    select_tool->setChecked(canvas_->tool() == CanvasTool::None);
+    auto* rename_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::RenameMeasurement, tr("重命名"),
+        tr("重命名当前选中的测量结果"), tool_group);
+    rename_tool->setObjectName(QStringLiteral("MeasurementRenameToolButton"));
+    measurement_color_button_ = createMeasurementActionButton(
+        MeasurementToolGlyph::MeasurementColor, tr("设置颜色"),
+        tr("设置全部测量统一使用的全局颜色"), tool_group);
+    measurement_color_button_->setObjectName(QStringLiteral("MeasurementColorToolButton"));
+    measurement_reset_color_button_ = createMeasurementActionButton(
+        MeasurementToolGlyph::ResetMeasurementColor, tr("默认颜色"),
+        tr("恢复系统默认的全局测量颜色"), tool_group);
+    measurement_reset_color_button_->setObjectName(
+        QStringLiteral("MeasurementResetColorToolButton"));
+    auto* delete_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::DeleteMeasurement, tr("删除选中"),
+        tr("删除当前选中的测量结果"), tool_group);
+    delete_tool->setObjectName(QStringLiteral("MeasurementDeleteToolButton"));
+    auto* clear_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::ClearMeasurements, tr("清空测量"),
+        tr("清空全部测量结果"), tool_group);
+    clear_tool->setObjectName(QStringLiteral("MeasurementClearToolButton"));
+    auto* export_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::ExportCsv, tr("导出 CSV"),
+        tr("导出全部测量结果为 CSV"), tool_group);
+    export_tool->setObjectName(QStringLiteral("MeasurementExportToolButton"));
+    tool_grid->addWidget(rename_tool, 3, 1);
+    tool_grid->addWidget(measurement_color_button_, 3, 2);
+    tool_grid->addWidget(measurement_reset_color_button_, 4, 0);
+    tool_grid->addWidget(delete_tool, 4, 1);
+    tool_grid->addWidget(clear_tool, 4, 2);
+    tool_grid->addWidget(export_tool, 5, 1);
     tool_layout->addLayout(tool_grid);
     display_unit_combo_ = new QComboBox;
     display_unit_combo_->addItems({tr("像素"), tr("µm"), tr("mm")});
@@ -1288,37 +1508,75 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     measurement_list_->setToolTip(tr("单击高亮，双击在图像中定位；F2 重命名，Delete 删除"));
     layout->addWidget(measurement_list_, 1);
 
-    auto* overlay_edit_group = new QGroupBox(tr("覆盖层编辑"));
-    overlay_edit_group->setObjectName(QStringLiteral("MeasurementOverlayEditGroup"));
-    auto* overlay_edit_layout = new QVBoxLayout(overlay_edit_group);
-    auto* overlay_edit_hint = new QLabel(
-        tr("选中测量后，拖动白边控制点修改形状；拖动线条或图形内部可整体移动。"));
-    overlay_edit_hint->setWordWrap(true);
-    overlay_edit_layout->addWidget(overlay_edit_hint);
-    auto* edit_overlay = new QPushButton(tr("进入编辑/拖动"));
-    edit_overlay->setObjectName(QStringLiteral("MeasurementOverlayEditButton"));
-    measurement_color_button_ = new QPushButton(tr("设置颜色…"));
-    measurement_color_button_->setObjectName(QStringLiteral("MeasurementOverlayColorButton"));
-    measurement_reset_color_button_ = new QPushButton(tr("恢复默认颜色"));
-    measurement_reset_color_button_->setObjectName(
-        QStringLiteral("MeasurementOverlayResetColorButton"));
-    overlay_edit_layout->addWidget(buttonRow(
-        {edit_overlay, measurement_color_button_, measurement_reset_color_button_}));
-    layout->addWidget(overlay_edit_group);
-
-    auto* rename_selected = new QPushButton(tr("重命名"));
-    auto* delete_selected = new QPushButton(tr("删除选中"));
-    auto* clear = new QPushButton(tr("清空"));
-    layout->addWidget(buttonRow({rename_selected, delete_selected, clear}));
-    auto* export_csv = addButton(layout, tr("导出测量 CSV"));
-    setButtonRole(clear, "danger");
-    setButtonRole(export_csv, "primary");
-
     connect(calibrate, &QPushButton::clicked, this, [this] {
         setMeasurementTool(CanvasTool::Calibration, tr("请在图像上选择标定线的两个端点"));
     });
     connect(objective_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int index) { selectObjective(index); });
+    connect(add_objective, &QPushButton::clicked, this, [this] {
+        QString label;
+        double microns_per_pixel = 0.0;
+        if (!editObjectiveCalibrationRecord(
+                this, tr("新增物镜标定"), label, microns_per_pixel)) return;
+        const auto duplicate = std::find(
+            objective_labels_.begin(), objective_labels_.end(), label.toStdWString());
+        if (duplicate != objective_labels_.end()) {
+            QMessageBox::warning(this, tr("物镜标定"), tr("该物镜倍率已存在。"));
+            return;
+        }
+        objective_labels_.push_back(label.toStdWString());
+        objective_calibrations_.push_back(
+            CalibrationProfile::FromMicronsPerPixel(microns_per_pixel));
+        selected_objective_index_ = static_cast<int>(objective_labels_.size()) - 1;
+        calibration_ = objective_calibrations_.back();
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("已新增并设为当前物镜：%1").arg(label), 3500);
+    });
+    connect(edit_objective, &QPushButton::clicked, this, [this] {
+        if (selected_objective_index_ < 0 ||
+            selected_objective_index_ >= static_cast<int>(objective_labels_.size())) return;
+        const std::size_t index = static_cast<std::size_t>(selected_objective_index_);
+        QString label = QString::fromStdWString(objective_labels_[index]);
+        double microns_per_pixel = objective_calibrations_[index].MicronsPerPixel();
+        if (!editObjectiveCalibrationRecord(
+                this, tr("编辑物镜标定"), label, microns_per_pixel)) return;
+        for (std::size_t candidate = 0; candidate < objective_labels_.size(); ++candidate) {
+            if (candidate != index && objective_labels_[candidate] == label.toStdWString()) {
+                QMessageBox::warning(this, tr("物镜标定"), tr("该物镜倍率已存在。"));
+                return;
+            }
+        }
+        objective_labels_[index] = label.toStdWString();
+        objective_calibrations_[index] =
+            CalibrationProfile::FromMicronsPerPixel(microns_per_pixel);
+        calibration_ = objective_calibrations_[index];
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("物镜标定记录已更新：%1").arg(label), 3500);
+    });
+    connect(delete_objective, &QPushButton::clicked, this, [this] {
+        if (objective_labels_.size() <= 1) {
+            QMessageBox::warning(this, tr("物镜标定"), tr("系统至少需要保留一个物镜倍率。"));
+            return;
+        }
+        const int index = selected_objective_index_;
+        if (index < 0 || index >= static_cast<int>(objective_labels_.size())) return;
+        const QString label = QString::fromStdWString(
+            objective_labels_[static_cast<std::size_t>(index)]);
+        if (QMessageBox::question(
+                this, tr("删除物镜标定"),
+                tr("确定删除“%1”及其标定数据吗？").arg(label)) != QMessageBox::Yes) return;
+        objective_labels_.erase(objective_labels_.begin() + index);
+        objective_calibrations_.erase(objective_calibrations_.begin() + index);
+        selected_objective_index_ = std::min(
+            index, static_cast<int>(objective_labels_.size()) - 1);
+        calibration_ = objective_calibrations_[
+            static_cast<std::size_t>(selected_objective_index_)];
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("物镜标定记录已删除：%1").arg(label), 3500);
+    });
     connect(clear_calibration, &QPushButton::clicked, this, [this] {
         calibration_ = CalibrationProfile::Uncalibrated();
         if (selected_objective_index_ >= 0 &&
@@ -1340,6 +1598,13 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(polyline, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
     connect(circle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
     connect(ellipse, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
+    connect(select_tool, &QToolButton::clicked, this, [this] {
+        ai_annotation_active_ = false;
+        canvas_->setTool(CanvasTool::None);
+        canvas_->setFocus(Qt::OtherFocusReason);
+        statusBar()->showMessage(
+            tr("选择模式：单击选择测量，拖动控制点修改形状，拖动对象整体移动"), 5000);
+    });
     connect(canvas_, &ImageCanvas::toolChanged, page, [tool_buttons](CanvasTool tool) {
         tool_buttons->setExclusive(false);
         for (QAbstractButton* button : tool_buttons->buttons()) {
@@ -1397,7 +1662,7 @@ QWidget* CameraMainWindow::buildMeasurementPage()
             updateMeasurementList();
         }
     };
-    connect(rename_selected, &QPushButton::clicked, this, rename_current);
+    connect(rename_tool, &QToolButton::clicked, this, rename_current);
     connect(measurement_list_, &QListWidget::currentRowChanged, this,
         [this](int) {
             rebuildOverlays();
@@ -1409,18 +1674,12 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(rename_shortcut, &QShortcut::activated, this, rename_current);
     auto* delete_shortcut = new QShortcut(QKeySequence::Delete, measurement_list_);
     connect(delete_shortcut, &QShortcut::activated, this, &CameraMainWindow::deleteSelectedMeasurement);
-    connect(delete_selected, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
-    connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearMeasurements);
-    connect(export_csv, &QPushButton::clicked, this, &CameraMainWindow::exportMeasurements);
-    connect(edit_overlay, &QPushButton::clicked, this, [this] {
-        canvas_->setTool(CanvasTool::None);
-        canvas_->setFocus(Qt::OtherFocusReason);
-        statusBar()->showMessage(
-            tr("覆盖层编辑：拖动控制点修改形状，拖动线条或图形内部整体移动"), 5000);
-    });
-    connect(measurement_color_button_, &QPushButton::clicked,
+    connect(delete_tool, &QToolButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
+    connect(clear_tool, &QToolButton::clicked, this, &CameraMainWindow::clearMeasurements);
+    connect(export_tool, &QToolButton::clicked, this, &CameraMainWindow::exportMeasurements);
+    connect(measurement_color_button_, &QToolButton::clicked,
         this, &CameraMainWindow::chooseSelectedMeasurementColor);
-    connect(measurement_reset_color_button_, &QPushButton::clicked,
+    connect(measurement_reset_color_button_, &QToolButton::clicked,
         this, &CameraMainWindow::resetSelectedMeasurementColor);
     updateMeasurementStyleUi();
     updateSmartTargetUi();
@@ -1619,15 +1878,9 @@ void CameraMainWindow::openProject()
     selected_objective_index_ = std::clamp(
         selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
     calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
-    {
-        const QSignalBlocker blocker(objective_combo_);
-        objective_combo_->clear();
-        for (const std::wstring& objective : objective_labels_) {
-            objective_combo_->addItem(QString::fromStdWString(objective));
-        }
-        objective_combo_->setCurrentIndex(selected_objective_index_);
-    }
     measurements_ = std::move(state.measurements);
+    applyGlobalMeasurementColor();
+    refreshObjectiveControls();
     dyes_ = std::move(state.dye_profiles);
     channels_ = std::move(state.fluorescence_channels);
     const auto restore_combo = [](QComboBox* combo, int value) {
@@ -1679,6 +1932,9 @@ void CameraMainWindow::openSelectedCamera()
 void CameraMainWindow::stopCamera()
 {
     if (live_stitch_active_) stopLiveStitch(false);
+    if (FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) {
+        cancelFluorescenceCaptureSequence();
+    }
     QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::QueuedConnection);
 }
 
@@ -1722,6 +1978,9 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
             preview_frames_since_sample_ = 0;
             preview_fps_timer_.restart();
         }
+    }
+    if (FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) {
+        updateFluorescenceCaptureUi();
     }
     if (camera_open_) {
         QMetaObject::invokeMethod(camera_worker_, "frameConsumed", Qt::QueuedConnection);
@@ -2155,10 +2414,18 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::Ellipse, measurements_),
             imagePoint(points[0]), imagePoint(points[1]));
     }
-    canvas_->setTool(CanvasTool::None);
+    const bool repeatable_measurement = added_measurement.has_value() ||
+        tool == CanvasTool::ProfileLine;
+    if (!repeatable_measurement) {
+        canvas_->setTool(CanvasTool::None);
+    }
+    if (added_measurement) {
+        measurements_.SetStyle(*added_measurement, global_measurement_style_);
+    }
     updateMeasurementList();
     if (added_measurement) {
         measurement_list_->setCurrentRow(static_cast<int>(measurements_.FlatIndexOf(*added_measurement)));
+        statusBar()->showMessage(tr("测量已添加，可继续使用当前工具测量"), 3000);
     }
 }
 
@@ -2225,6 +2492,26 @@ void CameraMainWindow::selectObjective(int index, bool rememberSelection)
     }
 }
 
+void CameraMainWindow::refreshObjectiveControls()
+{
+    if (!objective_combo_ || objective_labels_.empty()) return;
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    const QSignalBlocker blocker(objective_combo_);
+    objective_combo_->clear();
+    for (std::size_t index = 0; index < objective_labels_.size(); ++index) {
+        const QString label = QString::fromStdWString(objective_labels_[index]);
+        const CalibrationProfile profile = index < objective_calibrations_.size()
+            ? objective_calibrations_[index] : CalibrationProfile::Uncalibrated();
+        objective_combo_->addItem(profile.IsCalibrated()
+            ? tr("%1  ·  %2 µm/px").arg(label).arg(profile.MicronsPerPixel(), 0, 'g', 8)
+            : tr("%1  ·  未标定").arg(label));
+    }
+    objective_combo_->setCurrentIndex(selected_objective_index_);
+    updateCalibrationUi();
+    updateMeasurementList();
+}
+
 void CameraMainWindow::loadObjectiveCalibrationMemory()
 {
     QSettings settings;
@@ -2239,14 +2526,7 @@ void CameraMainWindow::loadObjectiveCalibrationMemory()
     selected_objective_index_ = std::clamp(
         selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
     calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
-    const QSignalBlocker blocker(objective_combo_);
-    objective_combo_->clear();
-    for (const std::wstring& objective : objective_labels_) {
-        objective_combo_->addItem(QString::fromStdWString(objective));
-    }
-    objective_combo_->setCurrentIndex(selected_objective_index_);
-    updateCalibrationUi();
-    updateMeasurementList();
+    refreshObjectiveControls();
 }
 
 void CameraMainWindow::saveObjectiveCalibrationMemory() const
@@ -2271,12 +2551,8 @@ QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
     QVector<CanvasOverlay> overlays;
     const int selected = measurement_list_ ? measurement_list_->currentRow() : -1;
     auto append = [this, &overlays, selected](CanvasOverlay overlay) {
-        const auto reference = measurements_.AtFlatIndex(
-            static_cast<std::size_t>(overlays.size()));
-        if (reference) {
-            const MeasurementOverlayStyle style = measurements_.Style(*reference);
-            overlay.color = QColor(style.red, style.green, style.blue);
-        }
+        overlay.color = QColor(global_measurement_style_.red,
+            global_measurement_style_.green, global_measurement_style_.blue);
         overlay.highlighted = overlays.size() == selected;
         overlay.editable = true;
         overlay.source_index = overlays.size();
@@ -2435,61 +2711,80 @@ void CameraMainWindow::focusSelectedMeasurement()
 
 void CameraMainWindow::chooseSelectedMeasurementColor()
 {
-    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
-    const auto reference = row >= 0
-        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
-    if (!reference) return;
-    const MeasurementOverlayStyle current_style = measurements_.Style(*reference);
-    const QColor current(current_style.red, current_style.green, current_style.blue);
+    const QColor current(global_measurement_style_.red,
+        global_measurement_style_.green, global_measurement_style_.blue);
     const QColor selected = QColorDialog::getColor(
-        current, this, tr("设置测量覆盖层颜色"), QColorDialog::DontUseNativeDialog);
+        current, this, tr("设置全局测量颜色"), QColorDialog::DontUseNativeDialog);
     if (!selected.isValid()) return;
-    if (measurements_.SetStyle(*reference, {
-            static_cast<std::uint8_t>(selected.red()),
-            static_cast<std::uint8_t>(selected.green()),
-            static_cast<std::uint8_t>(selected.blue())})) {
-        updateMeasurementStyleUi();
-        rebuildOverlays();
-        statusBar()->showMessage(tr("测量覆盖层颜色已更新"), 2500);
-    }
+    global_measurement_style_ = {
+        static_cast<std::uint8_t>(selected.red()),
+        static_cast<std::uint8_t>(selected.green()),
+        static_cast<std::uint8_t>(selected.blue())};
+    applyGlobalMeasurementColor();
+    saveMeasurementPreferences();
+    updateMeasurementStyleUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("全局测量颜色已更新，并应用到全部测量"), 3000);
 }
 
 void CameraMainWindow::resetSelectedMeasurementColor()
 {
-    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
-    const auto reference = row >= 0
-        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
-    if (!reference) return;
-    if (measurements_.SetStyle(*reference,
-            MeasurementCollection::DefaultStyle(reference->kind))) {
-        updateMeasurementStyleUi();
-        rebuildOverlays();
-        statusBar()->showMessage(tr("已恢复该测量类型的默认颜色"), 2500);
-    }
+    global_measurement_style_ = {76, 201, 240};
+    applyGlobalMeasurementColor();
+    saveMeasurementPreferences();
+    updateMeasurementStyleUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("已恢复系统默认测量颜色"), 2500);
 }
 
 void CameraMainWindow::updateMeasurementStyleUi()
 {
     if (!measurement_color_button_) return;
-    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
-    const auto reference = row >= 0
-        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
-    measurement_color_button_->setEnabled(reference.has_value());
-    if (measurement_reset_color_button_) {
-        measurement_reset_color_button_->setEnabled(reference.has_value());
-    }
-    if (!reference) {
-        measurement_color_button_->setIcon({});
-        measurement_color_button_->setText(tr("设置颜色…"));
-        return;
-    }
-    const MeasurementOverlayStyle style = measurements_.Style(*reference);
-    const QColor color(style.red, style.green, style.blue);
+    measurement_color_button_->setEnabled(true);
+    if (measurement_reset_color_button_) measurement_reset_color_button_->setEnabled(true);
+    const QColor color(global_measurement_style_.red,
+        global_measurement_style_.green, global_measurement_style_.blue);
     QPixmap swatch(22, 22);
     swatch.fill(color);
     measurement_color_button_->setIcon(QIcon(swatch));
     measurement_color_button_->setIconSize(swatch.size());
-    measurement_color_button_->setText(tr("颜色 %1").arg(color.name(QColor::HexRgb).toUpper()));
+    measurement_color_button_->setToolTip(tr("设置全局测量颜色（%1），适用于现有及后续测量")
+        .arg(color.name(QColor::HexRgb).toUpper()));
+}
+
+void CameraMainWindow::applyGlobalMeasurementColor()
+{
+    measurements_.SetStyles(std::vector<MeasurementOverlayStyle>(
+        measurements_.Count(), global_measurement_style_));
+}
+
+void CameraMainWindow::loadMeasurementPreferences()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Measurement"));
+    const QColor color = settings.value(
+        QStringLiteral("globalColor"), QColor(76, 201, 240)).value<QColor>();
+    settings.endGroup();
+    if (color.isValid()) {
+        global_measurement_style_ = {
+            static_cast<std::uint8_t>(color.red()),
+            static_cast<std::uint8_t>(color.green()),
+            static_cast<std::uint8_t>(color.blue())};
+    }
+    applyGlobalMeasurementColor();
+    updateMeasurementStyleUi();
+}
+
+void CameraMainWindow::saveMeasurementPreferences() const
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Measurement"));
+    settings.setValue(QStringLiteral("globalColor"), QColor(
+        global_measurement_style_.red,
+        global_measurement_style_.green,
+        global_measurement_style_.blue));
+    settings.endGroup();
+    settings.sync();
 }
 
 QVector<CanvasOverlay> CameraMainWindow::smartTargetOverlays() const
@@ -2734,6 +3029,182 @@ void CameraMainWindow::startProfileMeasurement()
     setMeasurementTool(CanvasTool::ProfileLine, tr("请在图像上选择剖线的两个端点"));
 }
 
+void CameraMainWindow::refreshFluorescencePresetList(int selectedRow)
+{
+    if (!fluorescence_preset_list_) return;
+    if (selectedRow < 0) selectedRow = fluorescence_preset_list_->currentRow();
+    const QSignalBlocker blocker(fluorescence_preset_list_);
+    fluorescence_preset_list_->clear();
+    for (std::size_t index = 0; index < fluorescence_capture_presets_.size(); ++index) {
+        const FluorescenceCapturePreset& preset = fluorescence_capture_presets_[index];
+        auto* item = new QListWidgetItem(tr("%1. %2  ·  %3 ms")
+            .arg(index + 1)
+            .arg(QString::fromStdWString(preset.dye_name))
+            .arg(preset.exposure_ms, 0, 'f', 2));
+        item->setForeground(QColor(preset.color.r, preset.color.g, preset.color.b));
+        fluorescence_preset_list_->addItem(item);
+    }
+    if (!fluorescence_capture_presets_.empty()) {
+        fluorescence_preset_list_->setCurrentRow(std::clamp(
+            selectedRow, 0, static_cast<int>(fluorescence_capture_presets_.size()) - 1));
+    }
+    updateFluorescencePresetEditor();
+    updateFluorescenceCaptureUi();
+}
+
+void CameraMainWindow::updateFluorescencePresetEditor()
+{
+    if (!fluorescence_preset_list_ || !fluorescence_preset_exposure_spin_ ||
+        !fluorescence_preset_color_button_ || !dye_combo_) return;
+    const int row = fluorescence_preset_list_->currentRow();
+    if (row >= 0 && row < static_cast<int>(fluorescence_capture_presets_.size())) {
+        const FluorescenceCapturePreset& preset =
+            fluorescence_capture_presets_[static_cast<std::size_t>(row)];
+        fluorescence_preset_exposure_spin_->setValue(preset.exposure_ms);
+        fluorescence_preset_editor_color_ = preset.color;
+        for (std::size_t index = 0; index < dyes_.size(); ++index) {
+            if (dyes_[index].name == preset.dye_name) {
+                const QSignalBlocker blocker(dye_combo_);
+                dye_combo_->setCurrentIndex(static_cast<int>(index));
+                break;
+            }
+        }
+    } else if (dye_combo_->currentIndex() >= 0 &&
+        dye_combo_->currentIndex() < static_cast<int>(dyes_.size())) {
+        fluorescence_preset_editor_color_ =
+            dyes_[static_cast<std::size_t>(dye_combo_->currentIndex())].color;
+    }
+    const QColor color(fluorescence_preset_editor_color_.r,
+        fluorescence_preset_editor_color_.g, fluorescence_preset_editor_color_.b);
+    QPixmap swatch(22, 22);
+    swatch.fill(color);
+    fluorescence_preset_color_button_->setIcon(QIcon(swatch));
+    fluorescence_preset_color_button_->setIconSize(swatch.size());
+    fluorescence_preset_color_button_->setText(
+        tr("伪彩 %1").arg(color.name(QColor::HexRgb).toUpper()));
+}
+
+void CameraMainWindow::saveFluorescenceCapturePresets() const
+{
+    QSettings settings;
+    FluorescenceCaptureSettings::Save(settings, fluorescence_capture_presets_);
+}
+
+void CameraMainWindow::startFluorescenceCaptureSequence()
+{
+    if (fluorescence_capture_presets_.empty()) {
+        QMessageBox::information(this, tr("逐通道采集"), tr("请先建立至少一个采集预设。"));
+        return;
+    }
+    if (!camera_open_) {
+        QMessageBox::information(this, tr("逐通道采集"), tr("请先打开相机。"));
+        return;
+    }
+    if (!channels_.empty() && QMessageBox::question(
+            this, tr("逐通道采集"),
+            tr("开始新序列会清除当前已采集的荧光通道，是否继续？")) != QMessageBox::Yes) {
+        return;
+    }
+    channels_.clear();
+    fusion_check_->setChecked(false);
+    FluorescenceCaptureSequence::Start(
+        fluorescence_capture_state_, fluorescence_capture_presets_.size());
+    refreshFluorescenceChannelList();
+    applyCurrentFluorescencePreset();
+}
+
+void CameraMainWindow::applyCurrentFluorescencePreset()
+{
+    if (!FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) return;
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    if (!FluorescenceCaptureSequence::RequestExposure(
+            fluorescence_capture_state_, preset.exposure_ms,
+            latest_camera_sequence_)) return;
+    {
+        const QSignalBlocker blocker(exposure_spin_);
+        exposure_spin_->setValue(preset.exposure_ms);
+    }
+    QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
+        Q_ARG(double, preset.exposure_ms));
+    updateFluorescenceCaptureUi();
+    statusBar()->showMessage(tr("已应用 %1 通道曝光 %2 ms；请切换对应滤光片并等待画面稳定")
+        .arg(QString::fromStdWString(preset.dye_name))
+        .arg(preset.exposure_ms, 0, 'f', 2), 6000);
+}
+
+void CameraMainWindow::captureCurrentFluorescencePreset()
+{
+    if (!FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) return;
+    if (!FluorescenceCaptureSequence::CanCapture(
+            fluorescence_capture_state_, latest_camera_sequence_)) {
+        statusBar()->showMessage(tr("正在等待曝光成功应用及新相机帧，请稍候。"), 2500);
+        return;
+    }
+    ImageFrame frame = latestCameraFrame();
+    if (!frame.IsValid()) {
+        statusBar()->showMessage(tr("当前没有可采集的相机帧。"), 2500);
+        return;
+    }
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    FluorescenceChannel channel;
+    channel.name = preset.dye_name;
+    channel.frame = std::move(frame);
+    channel.color = preset.color;
+    channel.exposure_ms = preset.exposure_ms;
+    channels_.push_back(std::move(channel));
+    refreshFluorescenceChannelList(static_cast<int>(channels_.size()) - 1);
+    const FluorescenceCaptureAdvance advance = FluorescenceCaptureSequence::Capture(
+        fluorescence_capture_state_, latest_camera_sequence_);
+    if (advance == FluorescenceCaptureAdvance::Complete) {
+        fusion_check_->setChecked(true);
+        showAllFluorescenceChannels();
+        updateFluorescenceCaptureUi();
+        statusBar()->showMessage(tr("全部荧光通道采集完成，已生成融合预览。"), 5000);
+        return;
+    }
+    applyCurrentFluorescencePreset();
+}
+
+void CameraMainWindow::cancelFluorescenceCaptureSequence()
+{
+    FluorescenceCaptureSequence::Cancel(fluorescence_capture_state_);
+    updateFluorescenceCaptureUi();
+    statusBar()->showMessage(tr("逐通道采集已取消，已采集通道予以保留。"), 3500);
+}
+
+void CameraMainWindow::updateFluorescenceCaptureUi()
+{
+    if (!fluorescence_capture_status_label_) return;
+    const bool active = FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_);
+    fluorescence_capture_start_button_->setEnabled(!active && !fluorescence_capture_presets_.empty());
+    fluorescence_capture_button_->setEnabled(
+        FluorescenceCaptureSequence::CanCapture(
+            fluorescence_capture_state_, latest_camera_sequence_));
+    fluorescence_capture_cancel_button_->setEnabled(active);
+    fluorescence_preset_group_->setEnabled(!active);
+    if (!active) {
+        fluorescence_capture_status_label_->setText(
+            fluorescence_capture_presets_.empty()
+                ? tr("尚无采集预设。")
+                : tr("已配置 %1 个通道。开始后将依次应用曝光、采集并融合。")
+                    .arg(fluorescence_capture_presets_.size()));
+        return;
+    }
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    fluorescence_capture_status_label_->setText(
+        tr("步骤 %1/%2：%3，曝光 %4 ms。请切换对应滤光片，待画面稳定后采集。")
+            .arg(fluorescence_capture_state_.current_index + 1)
+            .arg(fluorescence_capture_presets_.size())
+            .arg(QString::fromStdWString(preset.dye_name))
+            .arg(preset.exposure_ms, 0, 'f', 2));
+}
+
 void CameraMainWindow::addFluorescenceChannel()
 {
     const ImageFrame frame = currentVisibleFrame();
@@ -2747,6 +3218,7 @@ void CameraMainWindow::addFluorescenceChannel()
     const FluorescenceChannelListActionResult result =
         FluorescenceChannelListActions::AddCurrentFrame(channels_, frame, dye);
     if (result.changed) {
+        channels_.back().exposure_ms = exposure_spin_->value();
         refreshFluorescenceChannelList(static_cast<int>(channels_.size()) - 1);
         fusion_check_->setChecked(true);
     }

@@ -89,7 +89,9 @@ void CameraWorker::setExposure(double value)
 {
     const bool ok = driver_.IsOpen() && driver_.HasExposureControl() &&
         driver_.SetExposure(static_cast<float>(value));
-    emit operationFinished(ok ? tr("曝光已更新") : tr("曝光设置失败"), ok);
+    const QString message = ok ? tr("曝光已更新") : tr("曝光设置失败");
+    emit operationFinished(message, ok);
+    emit exposureApplied(value, ok, message);
 }
 
 void CameraWorker::autoExposure()

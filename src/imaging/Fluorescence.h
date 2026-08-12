@@ -20,6 +20,7 @@ struct DyeProfile {
 struct FluorescenceChannelRecipe {
     std::wstring name;
     RgbColor color;
+    double exposure_ms = 0.0;
     bool visible = true;
     unsigned char black_level = 0;
     unsigned char white_level = 255;
@@ -29,7 +30,14 @@ struct FluorescenceChannel {
     std::wstring name;
     ImageFrame frame;
     RgbColor color;
+    double exposure_ms = 0.0;
     bool visible = true;
     unsigned char black_level = 0;
     unsigned char white_level = 255;
+};
+
+struct FluorescenceCapturePreset {
+    std::wstring dye_name;
+    double exposure_ms = 10.0;
+    RgbColor color;
 };

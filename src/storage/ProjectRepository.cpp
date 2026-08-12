@@ -383,6 +383,7 @@ bool ProjectRepository::Save(const std::filesystem::path& path, const ProjectDoc
         }
         output << "    {\n";
         output << "      \"name\": \"" << JsonEscape(channel.name) << "\",\n";
+        output << "      \"exposure_ms\": " << std::setprecision(10) << channel.exposure_ms << ",\n";
         output << "      \"visible\": " << (channel.visible ? "true" : "false") << ",\n";
         output << "      \"black_level\": " << static_cast<int>(channel.black_level) << ",\n";
         output << "      \"white_level\": " << static_cast<int>(channel.white_level) << ",\n";
@@ -722,7 +723,7 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
     }
 
     const std::regex channel_pattern(
-        R"project(\{\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"visible"\s*:\s*(true|false)\s*,\s*"black_level"\s*:\s*([0-9]+)\s*,\s*"white_level"\s*:\s*([0-9]+)\s*,\s*"color"\s*:\s*\{\s*"r"\s*:\s*([0-9]+)\s*,\s*"g"\s*:\s*([0-9]+)\s*,\s*"b"\s*:\s*([0-9]+)\s*\}\s*\})project");
+        R"project(\{\s*"name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*(?:"exposure_ms"\s*:\s*([-+0-9.eE]+)\s*,\s*)?"visible"\s*:\s*(true|false)\s*,\s*"black_level"\s*:\s*([0-9]+)\s*,\s*"white_level"\s*:\s*([0-9]+)\s*,\s*"color"\s*:\s*\{\s*"r"\s*:\s*([0-9]+)\s*,\s*"g"\s*:\s*([0-9]+)\s*,\s*"b"\s*:\s*([0-9]+)\s*\}\s*\})project");
 
     begin = std::sregex_iterator(text.begin(), text.end(), channel_pattern);
     for (auto iterator = begin; iterator != end; ++iterator) {
@@ -732,11 +733,13 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
         unsigned char red = 0;
         unsigned char green = 0;
         unsigned char blue = 0;
-        if (!TryParseByte(match[3].str(), black_level) ||
-            !TryParseByte(match[4].str(), white_level) ||
-            !TryParseByte(match[5].str(), red) ||
-            !TryParseByte(match[6].str(), green) ||
-            !TryParseByte(match[7].str(), blue) ||
+        double exposure_ms = 0.0;
+        if ((match[2].matched && (!TryParseDouble(match[2].str(), exposure_ms) || exposure_ms < 0.0)) ||
+            !TryParseByte(match[4].str(), black_level) ||
+            !TryParseByte(match[5].str(), white_level) ||
+            !TryParseByte(match[6].str(), red) ||
+            !TryParseByte(match[7].str(), green) ||
+            !TryParseByte(match[8].str(), blue) ||
             white_level <= black_level) {
             error = L"Invalid fluorescence channel settings in project file.";
             return false;
@@ -744,7 +747,8 @@ bool ProjectRepository::Load(const std::filesystem::path& path, ProjectDocument&
 
         FluorescenceChannelRecipe channel;
         channel.name = JsonUnescape(match[1].str());
-        channel.visible = match[2].str() == "true";
+        channel.exposure_ms = exposure_ms;
+        channel.visible = match[3].str() == "true";
         channel.black_level = black_level;
         channel.white_level = white_level;
         channel.color = RgbColor{red, green, blue};

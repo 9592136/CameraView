@@ -17,6 +17,7 @@
 #include <QJsonParseError>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QDoubleSpinBox>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
@@ -24,6 +25,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QToolButton>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QTabWidget>
@@ -213,10 +215,17 @@ int main(int argc, char* argv[])
     if (parser.isSet(verify_measurement_overlay_editor)) {
         const QStringList required_controls{
             QStringLiteral("MeasurementResultList"),
-            QStringLiteral("MeasurementOverlayEditGroup"),
-            QStringLiteral("MeasurementOverlayEditButton"),
-            QStringLiteral("MeasurementOverlayColorButton"),
-            QStringLiteral("MeasurementOverlayResetColorButton")};
+            QStringLiteral("CalibrationObjective"),
+            QStringLiteral("CalibrationObjectiveAddButton"),
+            QStringLiteral("CalibrationObjectiveEditButton"),
+            QStringLiteral("CalibrationObjectiveDeleteButton"),
+            QStringLiteral("MeasurementSelectionButton"),
+            QStringLiteral("MeasurementRenameToolButton"),
+            QStringLiteral("MeasurementColorToolButton"),
+            QStringLiteral("MeasurementResetColorToolButton"),
+            QStringLiteral("MeasurementDeleteToolButton"),
+            QStringLiteral("MeasurementClearToolButton"),
+            QStringLiteral("MeasurementExportToolButton")};
         for (const QString& object_name : required_controls) {
             if (!window.findChild<QWidget*>(object_name)) {
                 qCritical().noquote() << QStringLiteral(
@@ -226,22 +235,39 @@ int main(int argc, char* argv[])
         }
         auto* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
         auto* list = window.findChild<QListWidget*>(QStringLiteral("MeasurementResultList"));
-        auto* color = window.findChild<QPushButton*>(
-            QStringLiteral("MeasurementOverlayColorButton"));
-        auto* reset_color = window.findChild<QPushButton*>(
-            QStringLiteral("MeasurementOverlayResetColorButton"));
+        auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
+        auto* color = window.findChild<QToolButton*>(
+            QStringLiteral("MeasurementColorToolButton"));
+        auto* reset_color = window.findChild<QToolButton*>(
+            QStringLiteral("MeasurementResetColorToolButton"));
+        auto* selection = window.findChild<QToolButton*>(
+            QStringLiteral("MeasurementSelectionButton"));
         QImage frame(100, 100, QImage::Format_RGB32);
         frame.fill(Qt::black);
         const QVector<QPointF> measurement_points{{20.0, 20.0}, {40.0, 20.0}};
-        if (!canvas || !list || !color || !reset_color || color->isEnabled() ||
-            reset_color->isEnabled() ||
+        QAction* length_action = nullptr;
+        if (toolbar) {
+            for (QAction* action : toolbar->actions()) {
+                if (action->data().toInt() == static_cast<int>(CanvasTool::Length)) {
+                    length_action = action;
+                    break;
+                }
+            }
+        }
+        if (!canvas || !list || !toolbar || !length_action || !selection ||
+            !color || !reset_color ||
+            !color->isEnabled() ||
+            !reset_color->isEnabled() ||
             !QMetaObject::invokeMethod(&window, "onCameraFrame", Qt::DirectConnection,
                 Q_ARG(QImage, frame), Q_ARG(quint64, 1), Q_ARG(quint32, 0)) ||
+            (length_action->trigger(), canvas->tool() != CanvasTool::Length) ||
             !QMetaObject::invokeMethod(&window, "onCanvasPoints", Qt::DirectConnection,
                 Q_ARG(CanvasTool, CanvasTool::Length),
                 Q_ARG(QVector<QPointF>, measurement_points)) ||
-            list->count() != 1 || list->currentRow() != 0 || !color->isEnabled() ||
-            !color->text().contains(QLatin1Char('#'))) {
+            list->count() != 1 || list->currentRow() != 0 ||
+            canvas->tool() != CanvasTool::Length || !length_action->isChecked() ||
+            !color->isEnabled() ||
+            !color->toolTip().contains(QLatin1Char('#'))) {
             qCritical() << "Measurement overlay editor did not bind to the selected measurement.";
             return 11;
         }
@@ -254,20 +280,51 @@ int main(int argc, char* argv[])
         });
         color->click();
         if (canvas->overlays().isEmpty() || canvas->overlays().first().color != custom_color ||
-            !color->text().contains(QStringLiteral("#0C2238"))) {
+            !color->toolTip().contains(QStringLiteral("#0C2238"))) {
             qCritical() << "Custom measurement overlay color did not reach the canvas.";
             return 11;
         }
+        const QVector<QPointF> second_measurement_points{{30.0, 30.0}, {60.0, 30.0}};
+        if (!QMetaObject::invokeMethod(&window, "onCanvasPoints", Qt::DirectConnection,
+                Q_ARG(CanvasTool, CanvasTool::Length),
+                Q_ARG(QVector<QPointF>, second_measurement_points)) ||
+            list->count() != 2 || list->currentRow() != 1 ||
+            canvas->tool() != CanvasTool::Length || !length_action->isChecked() ||
+            canvas->overlays().size() != 2 ||
+            canvas->overlays().at(0).color != custom_color ||
+            canvas->overlays().at(1).color != custom_color) {
+            qCritical() << "Global color or continuous measurement behavior was not preserved.";
+            return 11;
+        }
         reset_color->click();
-        if (canvas->overlays().isEmpty() ||
-            canvas->overlays().first().color != QColor(76, 201, 240)) {
-            qCritical() << "Measurement overlay default color was not restored.";
+        if (canvas->overlays().size() != 2 ||
+            canvas->overlays().at(0).color != QColor(76, 201, 240) ||
+            canvas->overlays().at(1).color != QColor(76, 201, 240)) {
+            qCritical() << "Global measurement color was not restored for all overlays.";
+            return 11;
+        }
+        selection->click();
+        if (canvas->tool() != CanvasTool::None || !selection->isChecked() ||
+            length_action->isChecked()) {
+            qCritical() << "Measurement selection mode did not replace the active drawing tool.";
             return 11;
         }
         return 0;
     }
     if (parser.isSet(verify_fluorescence_workflow)) {
         const QStringList required_controls{
+            QStringLiteral("FluorescencePresetGroup"),
+            QStringLiteral("FluorescencePresetList"),
+            QStringLiteral("FluorescencePresetExposure"),
+            QStringLiteral("FluorescencePresetColorButton"),
+            QStringLiteral("FluorescencePresetAddButton"),
+            QStringLiteral("FluorescencePresetSaveButton"),
+            QStringLiteral("FluorescencePresetDeleteButton"),
+            QStringLiteral("FluorescenceCaptureGroup"),
+            QStringLiteral("FluorescenceCaptureStatus"),
+            QStringLiteral("FluorescenceCaptureStartButton"),
+            QStringLiteral("FluorescenceCaptureCurrentButton"),
+            QStringLiteral("FluorescenceCaptureCancelButton"),
             QStringLiteral("FluorescenceDyeCombo"),
             QStringLiteral("FluorescenceAddChannelButton"),
             QStringLiteral("FluorescencePreviewCheck"),
@@ -296,8 +353,16 @@ int main(int argc, char* argv[])
             QStringLiteral("FluorescenceBlackLevelSlider"));
         const auto* white = window.findChild<NumericSlider*>(
             QStringLiteral("FluorescenceWhiteLevelSlider"));
+        const auto* presets = window.findChild<QListWidget*>(
+            QStringLiteral("FluorescencePresetList"));
+        const auto* preset_exposure = window.findChild<QDoubleSpinBox*>(
+            QStringLiteral("FluorescencePresetExposure"));
+        const auto* capture_current = window.findChild<QPushButton*>(
+            QStringLiteral("FluorescenceCaptureCurrentButton"));
         if (!blend || blend->count() != 3 || blend->currentData().toInt() !=
                 static_cast<int>(FluorescenceBlendMode::Screen) ||
+            !presets || !preset_exposure ||
+            preset_exposure->value() <= 0.0 || !capture_current || capture_current->isEnabled() ||
             !black || black->minimum() != 0 || black->maximum() != 254 ||
             !white || white->minimum() != 1 || white->maximum() != 255) {
             qCritical() << "Fluorescence workflow defaults are incomplete.";

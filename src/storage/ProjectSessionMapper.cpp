@@ -195,6 +195,7 @@ FluorescenceChannelRecipe ProjectSessionMapper::ToRecipe(const FluorescenceChann
     FluorescenceChannelRecipe recipe;
     recipe.name = channel.name;
     recipe.color = channel.color;
+    recipe.exposure_ms = channel.exposure_ms;
     recipe.visible = channel.visible;
     recipe.black_level = channel.black_level;
     recipe.white_level = channel.white_level;
@@ -206,6 +207,7 @@ FluorescenceChannel ProjectSessionMapper::ToChannel(const FluorescenceChannelRec
     FluorescenceChannel channel;
     channel.name = recipe.name;
     channel.color = recipe.color;
+    channel.exposure_ms = recipe.exposure_ms;
     channel.visible = recipe.visible;
     channel.black_level = recipe.black_level;
     channel.white_level = recipe.white_level;

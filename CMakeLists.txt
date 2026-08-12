@@ -59,6 +59,7 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/EdfStackListActions.cpp
     src/imaging/EdfStackListActions.h
     src/imaging/Fluorescence.h
+    src/imaging/FluorescenceCaptureSequence.h
     src/imaging/FluorescenceChannelAnalysis.cpp
     src/imaging/FluorescenceChannelAnalysis.h
     src/imaging/FluorescenceChannelFactory.cpp
@@ -292,6 +293,8 @@ qt_add_executable(CameraView WIN32
     src/qt/CameraViewTheme.h
     src/qt/CameraWorker.cpp
     src/qt/CameraWorker.h
+    src/qt/FluorescenceCaptureSettings.cpp
+    src/qt/FluorescenceCaptureSettings.h
     src/qt/HistogramWidget.cpp
     src/qt/HistogramWidget.h
     src/qt/ImageCanvas.cpp
@@ -582,6 +585,8 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/CalibrationDialog.h
         src/qt/ObjectiveCalibrationSettings.cpp
         src/qt/ObjectiveCalibrationSettings.h
+        src/qt/FluorescenceCaptureSettings.cpp
+        src/qt/FluorescenceCaptureSettings.h
         src/qt/ImageCanvas.cpp
         src/qt/ImageCanvas.h
         src/qt/NumericSlider.cpp
