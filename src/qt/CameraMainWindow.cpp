@@ -9,6 +9,7 @@
 #include "NumericSlider.h"
 #include "ObjectiveCalibrationSettings.h"
 #include "ProfileAnalysisDialog.h"
+#include "PointCloudDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
 #include "app/ExportActions.h"
 #include "domain/MeasurementFormatter.h"
@@ -520,6 +521,14 @@ void CameraMainWindow::setupMenusAndToolbar()
     QAction* profile_action = image_menu->addAction(tr("剖线测量"), this, &CameraMainWindow::startProfileMeasurement);
     profile_action->setShortcut(QKeySequence(Qt::Key_P));
 
+    QMenu* three_d_menu = menuBar()->addMenu(tr("3D(&D)"));
+    QAction* point_cloud_action = three_d_menu->addAction(
+        tr("3D 点云工作台…"), this, &CameraMainWindow::showPointCloudWorkspace);
+    point_cloud_action->setObjectName(QStringLiteral("PointCloudWorkspaceAction"));
+    point_cloud_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+3")));
+    point_cloud_action->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
+    three_d_menu->addAction(surface_action);
+
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
     view_menu->addAction(tr("适合窗口"), QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
     view_menu->addSeparator();
@@ -545,6 +554,8 @@ void CameraMainWindow::setupMenusAndToolbar()
     export_action_->setEnabled(false);
     toolbar->addAction(open_action);
     toolbar->addAction(export_action_);
+    toolbar->addSeparator();
+    toolbar->addAction(point_cloud_action);
     toolbar->addSeparator();
     QAction* fit_action = toolbar->addAction(
         style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
@@ -3027,6 +3038,15 @@ void CameraMainWindow::show3DView()
 void CameraMainWindow::startProfileMeasurement()
 {
     setMeasurementTool(CanvasTool::ProfileLine, tr("请在图像上选择剖线的两个端点"));
+}
+
+void CameraMainWindow::showPointCloudWorkspace()
+{
+    auto* dialog = new PointCloudDialog(this);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+    statusBar()->showMessage(tr("已打开 3D 点云工作台"), 3000);
 }
 
 void CameraMainWindow::refreshFluorescencePresetList(int selectedRow)

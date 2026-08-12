@@ -88,6 +88,7 @@ private slots:
     void runSmartTargetCounting();
     void clearSmartTargetCounting();
     void show3DView();
+    void showPointCloudWorkspace();
     void startProfileMeasurement();
     void applySelectedImageFilter();
     void undoImageFilter();

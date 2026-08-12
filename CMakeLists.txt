@@ -137,6 +137,14 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/ViewportInteractionActions.h
     src/platform/TextInputParser.cpp
     src/platform/TextInputParser.h
+    src/pointcloud/PointCloud.cpp
+    src/pointcloud/PointCloud.h
+    src/pointcloud/PointCloudIO.cpp
+    src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudMeasurement.cpp
+    src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudProcessor.cpp
+    src/pointcloud/PointCloudProcessor.h
     src/storage/DiagnosticReportBuilder.cpp
     src/storage/DiagnosticReportBuilder.h
     src/storage/ImageExporter.cpp
@@ -273,6 +281,14 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/StitchTileListActions.h
     src/imaging/StitchTilePlacementPlanner.cpp
     src/imaging/StitchTilePlacementPlanner.h
+    src/pointcloud/PointCloud.cpp
+    src/pointcloud/PointCloud.h
+    src/pointcloud/PointCloudIO.cpp
+    src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudMeasurement.cpp
+    src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudProcessor.cpp
+    src/pointcloud/PointCloudProcessor.h
     src/storage/MeasurementCsvExporter.cpp
     src/storage/MeasurementCsvExporter.h
     src/storage/ProjectDocument.h
@@ -313,6 +329,10 @@ qt_add_executable(CameraView WIN32
     src/qt/ProfileAnalysisDialog.h
     src/qt/ProfilePlotWidget.cpp
     src/qt/ProfilePlotWidget.h
+    src/qt/PointCloudDialog.cpp
+    src/qt/PointCloudDialog.h
+    src/qt/PointCloudWidget.cpp
+    src/qt/PointCloudWidget.h
     src/qt/ai/YoloModelRegistry.cpp
     src/qt/ai/YoloModelRegistry.h
     src/qt/ai/YoloDatasetProject.cpp
@@ -536,6 +556,8 @@ if(CAMERAVIEW_BUILD_TESTS)
     set_tests_properties(CameraViewPreviewPipelinePerformance PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtFluorescenceWorkflow
         COMMAND CameraView --verify-fluorescence-workflow)
+    add_test(NAME CameraViewQtPointCloudWorkflow
+        COMMAND CameraView --verify-point-cloud-workflow)
     set_tests_properties(CameraViewQtFluorescenceWorkflow PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtNumericSliderControls
         COMMAND CameraView --verify-numeric-sliders)
@@ -629,6 +651,22 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_compile_features(CameraViewImageProfileTests PRIVATE cxx_std_17)
     add_test(NAME CameraViewImageProfileTests COMMAND CameraViewImageProfileTests)
 
+    add_executable(CameraViewPointCloudTests
+        tests/pointcloud_tests.cpp
+        src/pointcloud/PointCloud.cpp
+        src/pointcloud/PointCloud.h
+        src/pointcloud/PointCloudIO.cpp
+        src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudMeasurement.cpp
+        src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudProcessor.cpp
+        src/pointcloud/PointCloudProcessor.h
+    )
+    target_include_directories(CameraViewPointCloudTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewPointCloudTests PRIVATE cxx_std_17)
+    set_target_properties(CameraViewPointCloudTests PROPERTIES AUTOMOC OFF AUTOUIC OFF)
+    add_test(NAME CameraViewPointCloudTests COMMAND CameraViewPointCloudTests)
+
     add_executable(CameraViewVisualizationTests
         tests/visualization_tests.cpp
         src/domain/CalibrationProfile.cpp
@@ -645,6 +683,18 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ProfileAnalysisDialog.h
         src/qt/ProfilePlotWidget.cpp
         src/qt/ProfilePlotWidget.h
+        src/pointcloud/PointCloud.cpp
+        src/pointcloud/PointCloud.h
+        src/pointcloud/PointCloudIO.cpp
+        src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudMeasurement.cpp
+        src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudProcessor.cpp
+        src/pointcloud/PointCloudProcessor.h
+        src/qt/PointCloudDialog.cpp
+        src/qt/PointCloudDialog.h
+        src/qt/PointCloudWidget.cpp
+        src/qt/PointCloudWidget.h
     )
     target_include_directories(CameraViewVisualizationTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewVisualizationTests PRIVATE cxx_std_17)

@@ -1,6 +1,7 @@
 #include "CameraMainWindow.h"
 #include "CameraViewTheme.h"
 #include "NumericSlider.h"
+#include "PointCloudDialog.h"
 #include "ai/YoloModelRegistry.h"
 #include "imaging/ProcessingParameterRules.h"
 
@@ -157,6 +158,9 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_fluorescence_workflow(
         QStringLiteral("verify-fluorescence-workflow"),
         QStringLiteral("Verify microscopy fluorescence display and exposure controls."));
+    const QCommandLineOption verify_point_cloud_workflow(
+        QStringLiteral("verify-point-cloud-workflow"),
+        QStringLiteral("Verify the 3D point-cloud workbench and controls."));
     const QCommandLineOption verify_numeric_sliders(
         QStringLiteral("verify-numeric-sliders"),
         QStringLiteral("Verify drag-based numeric setting controls and value readouts."));
@@ -179,6 +183,7 @@ int main(int argc, char* argv[])
     parser.addOption(verify_measurement_overlay_editor);
     parser.addOption(verify_preview_pipeline);
     parser.addOption(verify_fluorescence_workflow);
+    parser.addOption(verify_point_cloud_workflow);
     parser.addOption(verify_numeric_sliders);
     parser.addOption(verify_stitch_workflow);
     parser.addOption(verify_stitch_execution);
@@ -190,6 +195,54 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
+    if (parser.isSet(verify_point_cloud_workflow)) {
+        QAction* action = window.findChild<QAction*>(QStringLiteral("PointCloudWorkspaceAction"));
+        if (!action) {
+            qCritical() << "3D point-cloud workbench action is missing.";
+            return 12;
+        }
+        action->trigger();
+        application.processEvents();
+        auto* dialog = window.findChild<PointCloudDialog*>(QStringLiteral("PointCloudDialog"));
+        const QStringList required_controls{
+            QStringLiteral("PointCloudView"),
+            QStringLiteral("PointCloudToolTabs"),
+            QStringLiteral("PointCloudOpenButton"),
+            QStringLiteral("PointCloudExportButton"),
+            QStringLiteral("PointCloudUnitCombo"),
+            QStringLiteral("PointCloudColorCombo"),
+            QStringLiteral("PointCloudPointSize"),
+            QStringLiteral("PointCloudAxesCheck"),
+            QStringLiteral("PointCloudVoxelApplyButton"),
+            QStringLiteral("PointCloudOutlierApplyButton"),
+            QStringLiteral("PointCloudCropApplyButton"),
+            QStringLiteral("PointCloudBeginInteractiveCropButton"),
+            QStringLiteral("PointCloudKeepSelectionButton"),
+            QStringLiteral("PointCloudRemoveSelectionButton"),
+            QStringLiteral("PointCloudFitPlaneButton"),
+            QStringLiteral("PointCloudLevelButton"),
+            QStringLiteral("PointCloudUndoButton"),
+            QStringLiteral("PointCloudRestoreButton"),
+            QStringLiteral("PointCloudPointMeasureButton"),
+            QStringLiteral("PointCloudDistanceMeasureButton"),
+            QStringLiteral("PointCloudHeightMeasureButton"),
+            QStringLiteral("PointCloudAngleMeasureButton"),
+            QStringLiteral("PointCloudPlaneMeasureButton"),
+            QStringLiteral("PointCloudMeasurementList"),
+            QStringLiteral("PointCloudExportMeasurementsButton")};
+        if (!dialog) {
+            qCritical() << "3D point-cloud workbench did not open.";
+            return 12;
+        }
+        for (const QString& name : required_controls) {
+            if (!dialog->findChild<QWidget*>(name)) {
+                qCritical().noquote() << QStringLiteral(
+                    "3D point-cloud control is missing: %1").arg(name);
+                return 12;
+            }
+        }
+        return 0;
+    }
     if (parser.isSet(verify_preview_pipeline)) {
         QImage frame(3072, 2048, QImage::Format_BGR888);
         frame.fill(Qt::black);

@@ -2,6 +2,8 @@
 #include "qt/ImageSurface3DWidget.h"
 #include "qt/ProfileAnalysisDialog.h"
 #include "qt/ProfilePlotWidget.h"
+#include "qt/PointCloudDialog.h"
+#include "qt/PointCloudWidget.h"
 #include "qt/CameraViewTheme.h"
 
 #include <QApplication>
@@ -11,7 +13,9 @@
 #include <QImage>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QPixmap>
+#include <QTabWidget>
 
 #include <cmath>
 #include <cstring>
@@ -179,6 +183,138 @@ int main(int argc, char* argv[])
     if (!profile_dialog.grab().save(
             QDir::current().filePath(QStringLiteral("CameraView-profile-dialog.png")))) {
         return fail("Profile analysis dialog snapshot could not be rendered.");
+    }
+
+    PointCloud point_cloud;
+    point_cloud.name = L"synthetic point cloud";
+    point_cloud.unit = PointCloudUnit::Millimeters;
+    for (int y = -12; y <= 12; ++y) {
+        for (int x = -16; x <= 16; ++x) {
+            const double z = 2.5 * std::exp(-(
+                std::pow(x / 8.0, 2.0) + std::pow(y / 7.0, 2.0)));
+            PointCloudPoint point;
+            point.x = x * 0.4;
+            point.y = y * 0.4;
+            point.z = z;
+            point.r = static_cast<std::uint8_t>(qBound(0, 80 + x * 4, 255));
+            point.g = static_cast<std::uint8_t>(qBound(0, 120 + y * 4, 255));
+            point.b = 220;
+            point.has_color = true;
+            point_cloud.points.push_back(point);
+        }
+    }
+    point_cloud.RecalculateBounds();
+    PointCloudWidget point_cloud_view;
+    point_cloud_view.resize(780, 520);
+    point_cloud_view.setCloud(point_cloud);
+    point_cloud_view.show();
+    application.processEvents();
+    const QImage point_cloud_snapshot = point_cloud_view.grab().toImage();
+    const int center_index = static_cast<int>(point_cloud.points.size() / 2);
+    const QPointF center_screen = point_cloud_view.screenPosition(center_index);
+    if (!point_cloud_view.hasCloud() || point_cloud_view.renderedPointCount() < 700 ||
+        point_cloud_view.pickNearest(center_screen, 8.0) < 0 ||
+        !point_cloud_view.renderBackend().startsWith(QStringLiteral("OpenGL")) ||
+        point_cloud_snapshot.isNull() || !point_cloud_snapshot.save(
+            QDir::current().filePath(QStringLiteral("CameraView-point-cloud.png")))) {
+        return fail("3D point-cloud rendering or screen-space picking failed.");
+    }
+
+    PointCloudDialog point_cloud_dialog(point_cloud);
+    const QStringList point_cloud_controls{
+        QStringLiteral("PointCloudView"),
+        QStringLiteral("PointCloudOpenButton"),
+        QStringLiteral("PointCloudExportButton"),
+        QStringLiteral("PointCloudUnitCombo"),
+        QStringLiteral("PointCloudColorCombo"),
+        QStringLiteral("PointCloudVoxelApplyButton"),
+        QStringLiteral("PointCloudOutlierApplyButton"),
+        QStringLiteral("PointCloudCropApplyButton"),
+        QStringLiteral("PointCloudBeginInteractiveCropButton"),
+        QStringLiteral("PointCloudKeepSelectionButton"),
+        QStringLiteral("PointCloudRemoveSelectionButton"),
+        QStringLiteral("PointCloudFitPlaneButton"),
+        QStringLiteral("PointCloudLevelButton"),
+        QStringLiteral("PointCloudUndoButton"),
+        QStringLiteral("PointCloudDistanceMeasureButton"),
+        QStringLiteral("PointCloudHeightMeasureButton"),
+        QStringLiteral("PointCloudAngleMeasureButton"),
+        QStringLiteral("PointCloudPlaneMeasureButton"),
+        QStringLiteral("PointCloudMeasurementList")};
+    for (const QString& name : point_cloud_controls) {
+        if (!point_cloud_dialog.findChild<QWidget*>(name)) {
+            return fail("3D point-cloud workbench is missing a required control.");
+        }
+    }
+    const QRectF point_cloud_selection_rect(
+        point_cloud_dialog.cloudWidget()->rect().adjusted(120, 100, -120, -100));
+    const QVector<int> box_selected =
+        point_cloud_dialog.cloudWidget()->indicesInScreenRect(point_cloud_selection_rect);
+    if (box_selected.isEmpty() || box_selected.size() >= point_cloud.Size()) {
+        return fail("3D point-cloud screen rectangle selection failed.");
+    }
+    QVector<int> drag_selected;
+    QObject::connect(point_cloud_dialog.cloudWidget(),
+        &PointCloudWidget::boxSelectionFinished,
+        [&drag_selected](const QVector<int>& indices) { drag_selected = indices; });
+    auto* begin_selection = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudBeginInteractiveCropButton"));
+    auto* keep_selection = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudKeepSelectionButton"));
+    auto* remove_selection = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudRemoveSelectionButton"));
+    begin_selection->click();
+    if (!point_cloud_dialog.cloudWidget()->boxSelectionEnabled()) {
+        return fail("Interactive crop button did not enter box-selection mode.");
+    }
+    const QPointF selection_start = point_cloud_selection_rect.topLeft();
+    const QPointF selection_end = point_cloud_selection_rect.bottomRight();
+    QMouseEvent selection_press(QEvent::MouseButtonPress,
+        selection_start, selection_start, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selection_move(QEvent::MouseMove,
+        selection_end, selection_end, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selection_release(QEvent::MouseButtonRelease,
+        selection_end, selection_end, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_press);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_move);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_release);
+    if (drag_selected.size() != box_selected.size() ||
+        point_cloud_dialog.cloudWidget()->boxSelectionEnabled() ||
+        !keep_selection->isEnabled() || !remove_selection->isEnabled()) {
+        return fail("3D point-cloud drag selection did not emit its selected points.");
+    }
+    point_cloud_dialog.setMeasurementMode(PointCloudMeasureMode::Distance);
+    if (point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Distance ||
+        !point_cloud_dialog.cloudWidget()->pickingEnabled()) {
+        return fail("3D point-cloud measurement mode did not enable point picking.");
+    }
+    if (!QMetaObject::invokeMethod(&point_cloud_dialog, "acceptPickedPoint",
+            Qt::DirectConnection, Q_ARG(int, 0)) ||
+        !QMetaObject::invokeMethod(&point_cloud_dialog, "acceptPickedPoint",
+            Qt::DirectConnection, Q_ARG(int, center_index)) ||
+        point_cloud_dialog.measurementCount() != 1) {
+        return fail("3D point-cloud picked points did not create a distance measurement.");
+    }
+    point_cloud_dialog.resize(1180, 760);
+    point_cloud_dialog.show();
+    application.processEvents();
+    auto* point_cloud_tabs = point_cloud_dialog.findChild<QTabWidget*>(
+        QStringLiteral("PointCloudToolTabs"));
+    if (point_cloud_dialog.cloud().Size() != point_cloud.Size() ||
+        !point_cloud_tabs || point_cloud_tabs->count() != 3) {
+        return fail("3D point-cloud workbench tabs could not be rendered.");
+    }
+    const QStringList point_cloud_tab_snapshots{
+        QStringLiteral("CameraView-point-cloud-dialog-data.png"),
+        QStringLiteral("CameraView-point-cloud-dialog-processing.png"),
+        QStringLiteral("CameraView-point-cloud-dialog-measurement.png")};
+    for (int tab_index = 0; tab_index < point_cloud_tabs->count(); ++tab_index) {
+        point_cloud_tabs->setCurrentIndex(tab_index);
+        application.processEvents();
+        if (!point_cloud_dialog.grab().save(
+                QDir::current().filePath(point_cloud_tab_snapshots[tab_index]))) {
+            return fail("3D point-cloud workbench snapshot could not be rendered.");
+        }
     }
     return 0;
 }
