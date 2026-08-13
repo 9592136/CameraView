@@ -158,6 +158,22 @@ void applyCameraViewTheme(QApplication& application)
         QPushButton[role="primary"]:pressed { background: #2469cf; }
         QPushButton[role="danger"] { color: #ffb4b4; border-color: #684044; background: #36252a; }
         QPushButton[role="danger"]:hover { background: #4a2b31; border-color: #92535b; }
+        #PointCloudWorkspaceToolbar {
+            background: #141e2a;
+            border: 1px solid #293b4f;
+            border-radius: 8px;
+        }
+        #PointCloudWorkspaceToolbar QPushButton {
+            min-height: 28px;
+            padding: 3px 11px;
+        }
+        #PointCloudSelectionStatus, #PointCloudWorkspaceStatus {
+            color: #a9c9ea;
+            padding: 3px 7px;
+        }
+        QLabel[status="ok"] { color: #55d98d; }
+        QLabel[status="warning"] { color: #ffc35c; }
+        QLabel[status="error"] { color: #ff7f7f; }
 
         QLabel[exposureState="ok"] { color: #9ee6b0; }
         QLabel[exposureState="caution"] { color: #ffd98a; }

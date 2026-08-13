@@ -141,10 +141,18 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/pointcloud/PointCloud.h
     src/pointcloud/PointCloudIO.cpp
     src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudDeviationDistribution.cpp
+    src/pointcloud/PointCloudDeviationDistribution.h
+    src/pointcloud/PointCloudGeometricModel.cpp
+    src/pointcloud/PointCloudGeometricModel.h
     src/pointcloud/PointCloudMeasurement.cpp
     src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudMetrology.cpp
+    src/pointcloud/PointCloudMetrology.h
     src/pointcloud/PointCloudProcessor.cpp
     src/pointcloud/PointCloudProcessor.h
+    src/pointcloud/PointCloudSection.cpp
+    src/pointcloud/PointCloudSection.h
     src/storage/DiagnosticReportBuilder.cpp
     src/storage/DiagnosticReportBuilder.h
     src/storage/ImageExporter.cpp
@@ -285,9 +293,17 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/pointcloud/PointCloud.h
     src/pointcloud/PointCloudIO.cpp
     src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudDeviationDistribution.cpp
+    src/pointcloud/PointCloudDeviationDistribution.h
+    src/pointcloud/PointCloudGeometricModel.cpp
+    src/pointcloud/PointCloudGeometricModel.h
     src/pointcloud/PointCloudMeasurement.cpp
     src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudMetrology.cpp
+    src/pointcloud/PointCloudMetrology.h
     src/pointcloud/PointCloudProcessor.cpp
+    src/pointcloud/PointCloudSection.cpp
+    src/pointcloud/PointCloudSection.h
     src/pointcloud/PointCloudProcessor.h
     src/storage/MeasurementCsvExporter.cpp
     src/storage/MeasurementCsvExporter.h
@@ -331,6 +347,10 @@ qt_add_executable(CameraView WIN32
     src/qt/ProfilePlotWidget.h
     src/qt/PointCloudDialog.cpp
     src/qt/PointCloudDialog.h
+    src/qt/PointCloudDeviationDialog.cpp
+    src/qt/PointCloudDeviationDialog.h
+    src/qt/PointCloudSectionDialog.cpp
+    src/qt/PointCloudSectionDialog.h
     src/qt/PointCloudWidget.cpp
     src/qt/PointCloudWidget.h
     src/qt/ai/YoloModelRegistry.cpp
@@ -657,10 +677,18 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/pointcloud/PointCloud.h
         src/pointcloud/PointCloudIO.cpp
         src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudDeviationDistribution.cpp
+        src/pointcloud/PointCloudDeviationDistribution.h
+        src/pointcloud/PointCloudGeometricModel.cpp
+        src/pointcloud/PointCloudGeometricModel.h
         src/pointcloud/PointCloudMeasurement.cpp
         src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudMetrology.cpp
+        src/pointcloud/PointCloudMetrology.h
         src/pointcloud/PointCloudProcessor.cpp
         src/pointcloud/PointCloudProcessor.h
+        src/pointcloud/PointCloudSection.cpp
+        src/pointcloud/PointCloudSection.h
     )
     target_include_directories(CameraViewPointCloudTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewPointCloudTests PRIVATE cxx_std_17)
@@ -687,12 +715,24 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/pointcloud/PointCloud.h
         src/pointcloud/PointCloudIO.cpp
         src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudDeviationDistribution.cpp
+        src/pointcloud/PointCloudDeviationDistribution.h
+        src/pointcloud/PointCloudGeometricModel.cpp
+        src/pointcloud/PointCloudGeometricModel.h
         src/pointcloud/PointCloudMeasurement.cpp
         src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudMetrology.cpp
+        src/pointcloud/PointCloudMetrology.h
         src/pointcloud/PointCloudProcessor.cpp
         src/pointcloud/PointCloudProcessor.h
+        src/pointcloud/PointCloudSection.cpp
+        src/pointcloud/PointCloudSection.h
         src/qt/PointCloudDialog.cpp
         src/qt/PointCloudDialog.h
+        src/qt/PointCloudDeviationDialog.cpp
+        src/qt/PointCloudDeviationDialog.h
+        src/qt/PointCloudSectionDialog.cpp
+        src/qt/PointCloudSectionDialog.h
         src/qt/PointCloudWidget.cpp
         src/qt/PointCloudWidget.h
     )

@@ -1,7 +1,11 @@
 #include "pointcloud/PointCloud.h"
+#include "pointcloud/PointCloudDeviationDistribution.h"
+#include "pointcloud/PointCloudGeometricModel.h"
 #include "pointcloud/PointCloudIO.h"
 #include "pointcloud/PointCloudMeasurement.h"
+#include "pointcloud/PointCloudMetrology.h"
 #include "pointcloud/PointCloudProcessor.h"
+#include "pointcloud/PointCloudSection.h"
 
 #include <algorithm>
 #include <chrono>
@@ -72,6 +76,37 @@ int main()
     if (PointCloudProcessor::FitPlane(collinear).valid) {
         return fail("Plane fitting accepted a degenerate collinear point set.");
     }
+    PointCloud gaussian_cloud;
+    for (int index = 0; index < 100; ++index) {
+        const double deviation = index < 25 ? -2.0 : index < 50 ? -1.0
+            : index < 75 ? 1.0 : 2.0;
+        gaussian_cloud.points.push_back({static_cast<double>(index % 10),
+            static_cast<double>(index / 10), deviation});
+    }
+    gaussian_cloud.RecalculateBounds();
+    PointCloudPlane zero_plane;
+    zero_plane.nz = 1.0;
+    zero_plane.valid = true;
+    const PointCloudDeviationDistribution gaussian_distribution =
+        PointCloudDeviationAnalyzer::Analyze(gaussian_cloud, zero_plane, 12);
+    if (!gaussian_distribution.valid || gaussian_distribution.deviations.size() != 100 ||
+        gaussian_distribution.bins.size() != 12 || !near(gaussian_distribution.mean, 0.0) ||
+        !near(gaussian_distribution.standard_deviation, std::sqrt(2.5)) ||
+        !near(gaussian_distribution.rms, std::sqrt(2.5)) ||
+        !near(gaussian_distribution.skewness, 0.0) ||
+        !near(gaussian_distribution.within_one_sigma_percent, 50.0) ||
+        !near(gaussian_distribution.within_two_sigma_percent, 100.0)) {
+        return fail("Point-cloud Gaussian deviation statistics are inaccurate.");
+    }
+    std::size_t histogram_total = 0;
+    bool has_expected_gaussian = false;
+    for (const auto& bin : gaussian_distribution.bins) {
+        histogram_total += bin.count;
+        has_expected_gaussian = has_expected_gaussian || bin.gaussian_expected_count > 0.0;
+    }
+    if (histogram_total != gaussian_distribution.deviations.size() || !has_expected_gaussian) {
+        return fail("Point-cloud deviation histogram or Gaussian curve is incomplete.");
+    }
     const PointCloud leveled = PointCloudProcessor::LevelToPlane(cloud, plane);
     if (leveled.Empty() || leveled.bounds.Height() > 1e-7) {
         return fail("Plane leveling did not flatten the fitted surface.");
@@ -81,18 +116,6 @@ int main()
     if (downsampled.Empty() || downsampled.Size() >= cloud.Size() ||
         downsampled.unit != cloud.unit || !downsampled.points.front().has_color) {
         return fail("Voxel downsampling did not preserve point-cloud metadata and colors.");
-    }
-    PointCloudBounds crop_bounds;
-    crop_bounds.min_x = -1.0;
-    crop_bounds.max_x = 1.0;
-    crop_bounds.min_y = -1.0;
-    crop_bounds.max_y = 1.0;
-    crop_bounds.min_z = cloud.bounds.min_z;
-    crop_bounds.max_z = cloud.bounds.max_z;
-    crop_bounds.valid = true;
-    const PointCloud cropped = PointCloudProcessor::Crop(cloud, crop_bounds);
-    if (cropped.Size() != 25 || cropped.bounds.min_x < -1.0 || cropped.bounds.max_x > 1.0) {
-        return fail("Coordinate crop did not retain the expected points.");
     }
     const std::vector<std::size_t> selected_indices{0, 10, 20};
     const PointCloud selected_only = PointCloudProcessor::SelectIndices(
@@ -242,6 +265,184 @@ int main()
         !near(PointCloudMeasurement::AngleDegrees(x_axis, origin, y_axis), 90.0) ||
         !near(PointCloudMeasurement::PointToPlaneDistance(cloud.points.front(), plane), 0.0)) {
         return fail("3D point-cloud measurement formulas are incorrect.");
+    }
+
+    const PointCloudPlane horizontal = PointCloudMetrology::PlaneFromPoints(
+        origin, x_axis, y_axis);
+    const PointCloudPlane vertical = PointCloudMetrology::PlaneFromPoints(
+        origin, x_axis, elevated);
+    if (!horizontal.valid || !vertical.valid ||
+        !near(PointCloudMeasurement::PointToPlaneDistance(elevated, horizontal), 5.0) ||
+        !near(PointCloudMetrology::PlaneAngleDegrees(horizontal, vertical), 90.0)) {
+        return fail("Point-to-plane or two-plane angle metrology is inaccurate.");
+    }
+    const PointCloudLineIntersection crossing = PointCloudMetrology::IntersectLines(
+        PointCloudMetrology::LineFromPoints({-1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}),
+        PointCloudMetrology::LineFromPoints({0.0, -1.0, 0.0}, {0.0, 1.0, 0.0}));
+    const PointCloudLineIntersection skew = PointCloudMetrology::IntersectLines(
+        PointCloudMetrology::LineFromPoints({-1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}),
+        PointCloudMetrology::LineFromPoints({0.0, -1.0, 2.0}, {0.0, 1.0, 2.0}));
+    if (!crossing.valid || !crossing.intersects || !near(crossing.point.x, 0.0) ||
+        !skew.valid || skew.intersects || !near(skew.separation, 2.0)) {
+        return fail("3D line intersection or skew-line separation is inaccurate.");
+    }
+
+    PointCloud tolerance_plane = makePlaneCloud();
+    tolerance_plane.points.front().z += 0.04;
+    tolerance_plane.points.back().z -= 0.04;
+    tolerance_plane.RecalculateBounds();
+    PointCloudToleranceLimits tolerance_limits;
+    tolerance_limits.flatness = 0.1;
+    tolerance_limits.cylindricity = 100.0;
+    tolerance_limits.circularity = 100.0;
+    tolerance_limits.warpage = 0.1;
+    tolerance_limits.profile = 0.2;
+    const PointCloudToleranceReport tolerance_report =
+        PointCloudMetrology::EvaluateTolerances(tolerance_plane, tolerance_limits);
+    if (tolerance_report.metrics.size() != 5 || !tolerance_report.metrics[0].valid ||
+        !tolerance_report.metrics[0].passed || tolerance_report.metrics[0].measured <= 0.07 ||
+        !tolerance_report.metrics[3].passed || !tolerance_report.metrics[4].passed) {
+        return fail("One-click geometric tolerance grading produced incorrect plane metrics.");
+    }
+
+    PointCloud cylinder;
+    constexpr double pi = 3.14159265358979323846;
+    for (int z = -20; z <= 20; ++z) {
+        for (int angle_index = 0; angle_index < 72; ++angle_index) {
+            const double angle = 2.0 * pi * angle_index / 72.0;
+            const double radius = angle_index == 0 ? 5.03 : 5.0;
+            cylinder.points.push_back({radius * std::cos(angle), radius * std::sin(angle),
+                static_cast<double>(z)});
+        }
+    }
+    cylinder.RecalculateBounds();
+    PointCloudToleranceLimits cylinder_limits;
+    cylinder_limits.flatness = 100.0;
+    cylinder_limits.cylindricity = 0.04;
+    cylinder_limits.circularity = 0.04;
+    cylinder_limits.warpage = 100.0;
+    cylinder_limits.profile = 200.0;
+    const PointCloudToleranceReport cylinder_report =
+        PointCloudMetrology::EvaluateTolerances(cylinder, cylinder_limits);
+    if (!cylinder_report.metrics[1].valid || !cylinder_report.metrics[1].passed ||
+        !near(cylinder_report.metrics[1].measured, 0.03, 0.003) ||
+        !cylinder_report.metrics[2].valid || !cylinder_report.metrics[2].passed) {
+        return fail("Cylindricity or circularity grading is inaccurate.");
+    }
+
+    PointCloud rotated_short_cylinder;
+    const std::array<double, 3> cylinder_axis{1.0 / std::sqrt(3.0),
+        1.0 / std::sqrt(3.0), 1.0 / std::sqrt(3.0)};
+    const std::array<double, 3> radial_x{1.0 / std::sqrt(2.0),
+        -1.0 / std::sqrt(2.0), 0.0};
+    const std::array<double, 3> radial_y{1.0 / std::sqrt(6.0),
+        1.0 / std::sqrt(6.0), -2.0 / std::sqrt(6.0)};
+    for (int layer = -2; layer <= 2; ++layer) {
+        for (int angle_index = 0; angle_index < 120; ++angle_index) {
+            const double angle = 2.0 * pi * angle_index / 120.0;
+            const double radius = angle_index == 0 ? 5.025 : 5.0;
+            const double axial = layer * 0.25;
+            rotated_short_cylinder.points.push_back({
+                axial * cylinder_axis[0] + radius * (std::cos(angle) * radial_x[0] +
+                    std::sin(angle) * radial_y[0]),
+                axial * cylinder_axis[1] + radius * (std::cos(angle) * radial_x[1] +
+                    std::sin(angle) * radial_y[1]),
+                axial * cylinder_axis[2] + radius * (std::cos(angle) * radial_x[2] +
+                    std::sin(angle) * radial_y[2])});
+        }
+    }
+    rotated_short_cylinder.RecalculateBounds();
+    const PointCloudToleranceReport rotated_cylinder_report =
+        PointCloudMetrology::EvaluateTolerances(rotated_short_cylinder, cylinder_limits);
+    if (!rotated_cylinder_report.metrics[1].valid ||
+        !near(rotated_cylinder_report.metrics[1].measured, 0.025, 0.004) ||
+        !rotated_cylinder_report.metrics[2].valid ||
+        !near(rotated_cylinder_report.metrics[2].measured, 0.025, 0.004)) {
+        return fail("Rotated short-cylinder axis and circularity fitting are inaccurate.");
+    }
+
+    PointCloud sphere;
+    sphere.unit = PointCloudUnit::Millimeters;
+    const PointCloudPoint expected_sphere_center{2.0, -3.0, 5.0};
+    constexpr double expected_sphere_radius = 8.0;
+    for (int latitude = 2; latitude <= 16; ++latitude) {
+        const double polar = pi * latitude / 18.0;
+        for (int longitude = 0; longitude < 48; ++longitude) {
+            const double azimuth = 2.0 * pi * longitude / 48.0;
+            const double deterministic_noise = 0.008 * std::sin(longitude * 1.7 + latitude);
+            const double radius = expected_sphere_radius + deterministic_noise;
+            sphere.points.push_back({
+                expected_sphere_center.x + radius * std::sin(polar) * std::cos(azimuth),
+                expected_sphere_center.y + radius * std::sin(polar) * std::sin(azimuth),
+                expected_sphere_center.z + radius * std::cos(polar)});
+        }
+    }
+    sphere.points.push_back({80.0, 80.0, -40.0});
+    sphere.points.push_back({-70.0, 50.0, 30.0});
+    sphere.RecalculateBounds();
+    PointCloudFitOptions sphere_options;
+    sphere_options.inlier_threshold = 0.05;
+    sphere_options.random_seed = 17;
+    const PointCloudFitResult sphere_fit = PointCloudGeometricFitter::FitSphere(
+        sphere, {}, sphere_options);
+    if (!sphere_fit.valid || !near(sphere_fit.model.sphere.center.x, 2.0, 0.02) ||
+        !near(sphere_fit.model.sphere.center.y, -3.0, 0.02) ||
+        !near(sphere_fit.model.sphere.center.z, 5.0, 0.02) ||
+        !near(sphere_fit.model.sphere.radius, expected_sphere_radius, 0.02) ||
+        sphere_fit.model.quality.inlier_count < sphere.Size() - 2 ||
+        sphere_fit.model.quality.rms > 0.02) {
+        return fail("Robust sphere fitting did not recover the expected partial noisy sphere.");
+    }
+    PointCloudFitOptions rejected_sphere = sphere_options;
+    rejected_sphere.minimum_radius = 9.0;
+    if (PointCloudGeometricFitter::FitSphere(sphere, {}, rejected_sphere).valid) {
+        return fail("Sphere fitting did not honor the radius constraint.");
+    }
+
+    PointCloudFitOptions cylinder_options;
+    cylinder_options.inlier_threshold = 0.06;
+    const PointCloudFitResult cylinder_fit = PointCloudGeometricFitter::FitCylinder(
+        rotated_short_cylinder, {}, cylinder_options);
+    const double fitted_axis_alignment = cylinder_fit.valid
+        ? std::abs(cylinder_fit.model.cylinder.axis_direction[0] * cylinder_axis[0] +
+            cylinder_fit.model.cylinder.axis_direction[1] * cylinder_axis[1] +
+            cylinder_fit.model.cylinder.axis_direction[2] * cylinder_axis[2]) : 0.0;
+    if (!cylinder_fit.valid || !near(cylinder_fit.model.cylinder.radius, 5.0, 0.02) ||
+        fitted_axis_alignment < 0.999 || cylinder_fit.model.quality.rms > 0.01) {
+        return fail("Free-axis cylinder fitting did not recover the rotated cylinder.");
+    }
+    PointCloudFitOptions z_axis_options;
+    z_axis_options.cylinder_axis = PointCloudCylinderAxisConstraint::Z;
+    z_axis_options.minimum_radius = 4.9;
+    z_axis_options.maximum_radius = 5.1;
+    const PointCloudFitResult z_cylinder_fit = PointCloudGeometricFitter::FitCylinder(
+        cylinder, {}, z_axis_options);
+    if (!z_cylinder_fit.valid || !near(z_cylinder_fit.model.cylinder.radius, 5.0, 0.01) ||
+        std::abs(z_cylinder_fit.model.cylinder.axis_direction[2]) < 0.999999) {
+        return fail("Axis-constrained cylinder fitting is inaccurate.");
+    }
+    if (!near(PointCloudGeometricFitter::Residual(
+            z_cylinder_fit.model, {5.1, 0.0, 0.0}), 0.1, 0.01)) {
+        return fail("Unified geometric-model residual calculation is inaccurate.");
+    }
+
+    PointCloud section_cloud;
+    std::vector<std::size_t> section_indices;
+    for (int x = 0; x <= 100; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            double height = x < 50 ? 1.0 : 3.0;
+            if (x >= 70 && x <= 80) height = 0.25;
+            section_indices.push_back(section_cloud.points.size());
+            section_cloud.points.push_back({x * 0.1, y * 0.05, height});
+        }
+    }
+    section_cloud.RecalculateBounds();
+    const PointCloudSectionProfile section = PointCloudSectionAnalyzer::Analyze(
+        section_cloud, section_indices, 101);
+    if (!section.valid || !near(section.width, 10.0, 0.02) ||
+        !near(section.signed_step_height, 2.0, 0.05) ||
+        !near(section.groove_depth, 0.75, 0.05)) {
+        return fail("Arbitrary section width, step height, or groove depth is inaccurate.");
     }
 
     const std::filesystem::path ply_path =

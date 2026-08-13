@@ -219,21 +219,6 @@ PointCloud PointCloudProcessor::VoxelDownsample(const PointCloud& cloud, double 
     return result;
 }
 
-PointCloud PointCloudProcessor::Crop(const PointCloud& cloud, const PointCloudBounds& bounds)
-{
-    PointCloud result = DerivedCloud(cloud);
-    if (!bounds.valid) return result;
-    result.points.reserve(cloud.points.size());
-    std::copy_if(cloud.points.begin(), cloud.points.end(), std::back_inserter(result.points),
-        [&bounds](const PointCloudPoint& point) {
-            return point.x >= bounds.min_x && point.x <= bounds.max_x &&
-                point.y >= bounds.min_y && point.y <= bounds.max_y &&
-                point.z >= bounds.min_z && point.z <= bounds.max_z;
-        });
-    result.RecalculateBounds();
-    return result;
-}
-
 PointCloud PointCloudProcessor::SelectIndices(
     const PointCloud& cloud,
     const std::vector<std::size_t>& indices,

@@ -3,10 +3,13 @@
 #include "qt/ProfileAnalysisDialog.h"
 #include "qt/ProfilePlotWidget.h"
 #include "qt/PointCloudDialog.h"
+#include "qt/PointCloudDeviationDialog.h"
+#include "qt/PointCloudSectionDialog.h"
 #include "qt/PointCloudWidget.h"
 #include "qt/CameraViewTheme.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
@@ -221,6 +224,19 @@ int main(int argc, char* argv[])
     }
 
     PointCloudDialog point_cloud_dialog(point_cloud);
+    PointCloudDialog empty_point_cloud_dialog;
+    auto* empty_export = empty_point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudExportButton"));
+    auto* empty_measure = empty_point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudDistanceMeasureButton"));
+    auto* empty_rating = empty_point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudEvaluateTolerancesButton"));
+    auto* empty_section = empty_point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudBeginSectionButton"));
+    if (!empty_export || empty_export->isEnabled() || !empty_measure || empty_measure->isEnabled() ||
+        !empty_rating || empty_rating->isEnabled() || !empty_section || empty_section->isEnabled()) {
+        return fail("Point-cloud actions were not disabled before loading data.");
+    }
     const QStringList point_cloud_controls{
         QStringLiteral("PointCloudView"),
         QStringLiteral("PointCloudOpenButton"),
@@ -229,25 +245,70 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudColorCombo"),
         QStringLiteral("PointCloudVoxelApplyButton"),
         QStringLiteral("PointCloudOutlierApplyButton"),
-        QStringLiteral("PointCloudCropApplyButton"),
         QStringLiteral("PointCloudBeginInteractiveCropButton"),
         QStringLiteral("PointCloudKeepSelectionButton"),
         QStringLiteral("PointCloudRemoveSelectionButton"),
         QStringLiteral("PointCloudSmartFilterApplyButton"),
         QStringLiteral("PointCloudHoleRepairApplyButton"),
         QStringLiteral("PointCloudFitPlaneButton"),
+        QStringLiteral("PointCloudFitPlaneModelButton"),
+        QStringLiteral("PointCloudFitSphereButton"),
+        QStringLiteral("PointCloudFitCylinderButton"),
+        QStringLiteral("PointCloudModelList"),
+        QStringLiteral("PointCloudShowFittedPlaneCheck"),
         QStringLiteral("PointCloudLevelButton"),
         QStringLiteral("PointCloudUndoButton"),
         QStringLiteral("PointCloudDistanceMeasureButton"),
         QStringLiteral("PointCloudHeightMeasureButton"),
         QStringLiteral("PointCloudAngleMeasureButton"),
         QStringLiteral("PointCloudPlaneMeasureButton"),
+        QStringLiteral("PointCloudPlaneAngleButton"),
+        QStringLiteral("PointCloudLineIntersectionButton"),
+        QStringLiteral("PointCloudEvaluateTolerancesButton"),
+        QStringLiteral("PointCloudDeviationDistributionButton"),
+        QStringLiteral("PointCloudBeginSectionButton"),
         QStringLiteral("PointCloudMeasurementList")};
     for (const QString& name : point_cloud_controls) {
         if (!point_cloud_dialog.findChild<QWidget*>(name)) {
             return fail("3D point-cloud workbench is missing a required control.");
         }
     }
+    auto* fit_plane_button = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudFitPlaneButton"));
+    auto* show_plane_check = point_cloud_dialog.findChild<QCheckBox*>(
+        QStringLiteral("PointCloudShowFittedPlaneCheck"));
+    fit_plane_button->click();
+    application.processEvents();
+    if (!point_cloud_dialog.cloudWidget()->fittedPlane().valid ||
+        !point_cloud_dialog.cloudWidget()->fittedPlaneVisible() ||
+        !show_plane_check || !show_plane_check->isEnabled() || !show_plane_check->isChecked()) {
+        return fail("Fitted plane was not displayed in the 3D point-cloud view.");
+    }
+    show_plane_check->setChecked(false);
+    if (point_cloud_dialog.cloudWidget()->fittedPlaneVisible()) {
+        return fail("Fitted-plane visibility control did not hide the overlay.");
+    }
+    show_plane_check->setChecked(true);
+    point_cloud_dialog.show();
+    application.processEvents();
+    if (!point_cloud_dialog.grab().save(
+            QDir::current().filePath(QStringLiteral("CameraView-point-cloud-fitted-plane.png")))) {
+        return fail("Fitted-plane 3D visualization snapshot could not be rendered.");
+    }
+    auto* deviation_button = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudDeviationDistributionButton"));
+    deviation_button->click();
+    application.processEvents();
+    auto* deviation_dialog = point_cloud_dialog.findChild<PointCloudDeviationDialog*>(
+        QStringLiteral("PointCloudDeviationDialog"));
+    if (!deviation_dialog || !deviation_dialog->distribution().valid ||
+        deviation_dialog->distribution().deviations.size() != point_cloud.Size() ||
+        deviation_dialog->plotWidget()->binCount() < 8 ||
+        !deviation_dialog->grab().save(QDir::current().filePath(
+            QStringLiteral("CameraView-point-cloud-deviation-distribution.png")))) {
+        return fail("Point-cloud Gaussian deviation distribution could not be rendered.");
+    }
+    deviation_dialog->close();
     const QRectF point_cloud_selection_rect(
         point_cloud_dialog.cloudWidget()->rect().adjusted(120, 100, -120, -100));
     const QVector<int> box_selected =
@@ -265,8 +326,13 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudKeepSelectionButton"));
     auto* remove_selection = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudRemoveSelectionButton"));
+    point_cloud_dialog.setMeasurementMode(PointCloudMeasureMode::Distance);
     begin_selection->click();
-    if (!point_cloud_dialog.cloudWidget()->boxSelectionEnabled()) {
+    auto* navigate_button = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudNavigateButton"));
+    if (!point_cloud_dialog.cloudWidget()->boxSelectionEnabled() ||
+        point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Navigate ||
+        !navigate_button || !navigate_button->isChecked()) {
         return fail("Interactive crop button did not enter box-selection mode.");
     }
     const QPointF selection_start = point_cloud_selection_rect.topLeft();
@@ -290,12 +356,58 @@ int main(int argc, char* argv[])
         !point_cloud_dialog.cloudWidget()->pickingEnabled()) {
         return fail("3D point-cloud measurement mode did not enable point picking.");
     }
+    if (box_selected.size() != drag_selected.size()) {
+        return fail("Universal point-cloud selection was not preserved when switching tools.");
+    }
     if (!QMetaObject::invokeMethod(&point_cloud_dialog, "acceptPickedPoint",
             Qt::DirectConnection, Q_ARG(int, 0)) ||
         !QMetaObject::invokeMethod(&point_cloud_dialog, "acceptPickedPoint",
             Qt::DirectConnection, Q_ARG(int, center_index)) ||
-        point_cloud_dialog.measurementCount() != 1) {
-        return fail("3D point-cloud picked points did not create a distance measurement.");
+        point_cloud_dialog.measurementCount() != 1 ||
+        point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Distance ||
+        !point_cloud_dialog.cloudWidget()->pickingEnabled()) {
+        return fail("3D point-cloud continuous distance measurement did not remain active.");
+    }
+    auto* section_button = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudBeginSectionButton"));
+    section_button->click();
+    if (!point_cloud_dialog.cloudWidget()->sectionSelectionEnabled() ||
+        point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Navigate ||
+        !navigate_button || !navigate_button->isChecked()) {
+        return fail("Point-cloud section button did not enter line-selection mode.");
+    }
+    const QPointF section_start(130.0, point_cloud_dialog.cloudWidget()->height() * 0.55);
+    const QPointF section_end(
+        point_cloud_dialog.cloudWidget()->width() - 130.0,
+        point_cloud_dialog.cloudWidget()->height() * 0.55);
+    QMouseEvent section_press(QEvent::MouseButtonPress,
+        section_start, section_start, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent section_move(QEvent::MouseMove,
+        section_end, section_end, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent section_release(QEvent::MouseButtonRelease,
+        section_end, section_end, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &section_press);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &section_move);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &section_release);
+    application.processEvents();
+    auto* section_dialog = point_cloud_dialog.findChild<PointCloudSectionDialog*>(
+        QStringLiteral("PointCloudSectionDialog"));
+    if (!section_dialog || !section_dialog->profile().valid ||
+        section_dialog->plotWidget()->sampleCount() < 8 ||
+        !section_dialog->grab().save(
+            QDir::current().filePath(QStringLiteral("CameraView-point-cloud-section.png")))) {
+        return fail("Arbitrary point-cloud section interaction or plot rendering failed.");
+    }
+    section_dialog->close();
+    const int measurements_before_rating = point_cloud_dialog.measurementCount();
+    auto* evaluate_tolerances = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudEvaluateTolerancesButton"));
+    auto* tolerance_summary = point_cloud_dialog.findChild<QLabel*>(
+        QStringLiteral("PointCloudToleranceSummary"));
+    evaluate_tolerances->click();
+    if (point_cloud_dialog.measurementCount() != measurements_before_rating + 5 ||
+        !tolerance_summary || !tolerance_summary->text().contains(QStringLiteral("平面度"))) {
+        return fail("One-click point-cloud tolerance rating did not publish five results.");
     }
     point_cloud_dialog.resize(1180, 760);
     point_cloud_dialog.show();
@@ -303,13 +415,15 @@ int main(int argc, char* argv[])
     auto* point_cloud_tabs = point_cloud_dialog.findChild<QTabWidget*>(
         QStringLiteral("PointCloudToolTabs"));
     if (point_cloud_dialog.cloud().Size() != point_cloud.Size() ||
-        !point_cloud_tabs || point_cloud_tabs->count() != 3) {
+        !point_cloud_tabs || point_cloud_tabs->count() != 5) {
         return fail("3D point-cloud workbench tabs could not be rendered.");
     }
     const QStringList point_cloud_tab_snapshots{
         QStringLiteral("CameraView-point-cloud-dialog-data.png"),
         QStringLiteral("CameraView-point-cloud-dialog-processing.png"),
-        QStringLiteral("CameraView-point-cloud-dialog-measurement.png")};
+        QStringLiteral("CameraView-point-cloud-dialog-fit.png"),
+        QStringLiteral("CameraView-point-cloud-dialog-measurement.png"),
+        QStringLiteral("CameraView-point-cloud-dialog-inspection.png")};
     for (int tab_index = 0; tab_index < point_cloud_tabs->count(); ++tab_index) {
         point_cloud_tabs->setCurrentIndex(tab_index);
         application.processEvents();

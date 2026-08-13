@@ -52,7 +52,6 @@ struct PointCloudHoleRepairReport {
 class PointCloudProcessor final {
 public:
     static PointCloud VoxelDownsample(const PointCloud& cloud, double voxel_size);
-    static PointCloud Crop(const PointCloud& cloud, const PointCloudBounds& bounds);
     static PointCloud SelectIndices(
         const PointCloud& cloud,
         const std::vector<std::size_t>& indices,

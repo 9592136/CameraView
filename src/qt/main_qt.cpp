@@ -215,13 +215,13 @@ int main(int argc, char* argv[])
             QStringLiteral("PointCloudAxesCheck"),
             QStringLiteral("PointCloudVoxelApplyButton"),
             QStringLiteral("PointCloudOutlierApplyButton"),
-            QStringLiteral("PointCloudCropApplyButton"),
             QStringLiteral("PointCloudBeginInteractiveCropButton"),
             QStringLiteral("PointCloudKeepSelectionButton"),
             QStringLiteral("PointCloudRemoveSelectionButton"),
             QStringLiteral("PointCloudSmartFilterApplyButton"),
             QStringLiteral("PointCloudHoleRepairApplyButton"),
             QStringLiteral("PointCloudFitPlaneButton"),
+            QStringLiteral("PointCloudShowFittedPlaneCheck"),
             QStringLiteral("PointCloudLevelButton"),
             QStringLiteral("PointCloudUndoButton"),
             QStringLiteral("PointCloudRestoreButton"),
@@ -230,7 +230,12 @@ int main(int argc, char* argv[])
             QStringLiteral("PointCloudHeightMeasureButton"),
             QStringLiteral("PointCloudAngleMeasureButton"),
             QStringLiteral("PointCloudPlaneMeasureButton"),
+            QStringLiteral("PointCloudPlaneAngleButton"),
+            QStringLiteral("PointCloudLineIntersectionButton"),
             QStringLiteral("PointCloudMeasurementList"),
+            QStringLiteral("PointCloudEvaluateTolerancesButton"),
+            QStringLiteral("PointCloudDeviationDistributionButton"),
+            QStringLiteral("PointCloudBeginSectionButton"),
             QStringLiteral("PointCloudExportMeasurementsButton")};
         if (!dialog) {
             qCritical() << "3D point-cloud workbench did not open.";
