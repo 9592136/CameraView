@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ImageCanvas.h"
+#include "app/DiagnosticReportActions.h"
 #include "camera/CameraDevice.h"
 #include "domain/CalibrationProfile.h"
 #include "domain/ImageFrame.h"
@@ -62,6 +63,11 @@ protected:
 private slots:
     void openImage();
     void exportImage();
+    void exportImageReport();
+    void exportDiagnosticReport();
+    void showReportTemplateDesigner();
+    void loadReportTemplate();
+    void clearReportTemplate();
     void saveProject();
     void openProject();
     void refreshDevices();
@@ -171,6 +177,9 @@ private:
     static ImageFrame imageFrameFromQImage(const QImage& image, quint64 sequence = 0, quint32 timestamp = 0);
     static QImage qImageFromFrame(const ImageFrame& frame);
     static ImagePoint imagePoint(const QPointF& point);
+    DiagnosticReportActionInput buildDiagnosticReportInput() const;
+    void loadReportTemplateSettings();
+    void saveReportTemplateSettings() const;
 
     ImageCanvas* canvas_ = nullptr;
     QDockWidget* function_dock_ = nullptr;
@@ -322,4 +331,7 @@ private:
     std::vector<ImageFrame> edf_stack_;
     EdfResult edf_result_;
     bool fusion_enabled_ = false;
+    std::wstring report_template_text_;
+    QString report_template_path_;
+    ImageReportTemplateOptions report_template_options_;
 };

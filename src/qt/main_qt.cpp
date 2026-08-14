@@ -2,6 +2,7 @@
 #include "CameraViewTheme.h"
 #include "NumericSlider.h"
 #include "PointCloudDialog.h"
+#include "ReportTemplateDialog.h"
 #include "ai/YoloModelRegistry.h"
 #include "imaging/ProcessingParameterRules.h"
 
@@ -170,6 +171,9 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_stitch_execution(
         QStringLiteral("verify-stitch-execution"),
         QStringLiteral("Run an end-to-end Qt stitching workflow with synthetic overlapping images."));
+    const QCommandLineOption verify_report_workflow(
+        QStringLiteral("verify-report-workflow"),
+        QStringLiteral("Verify the migrated report export and template design workflow."));
     const QCommandLineOption live_camera_report(
         QStringLiteral("live-camera-report"),
         QStringLiteral("Open the first camera, exercise the live Qt preview, and write a JSON report."),
@@ -187,6 +191,7 @@ int main(int argc, char* argv[])
     parser.addOption(verify_numeric_sliders);
     parser.addOption(verify_stitch_workflow);
     parser.addOption(verify_stitch_execution);
+    parser.addOption(verify_report_workflow);
     parser.addOption(live_camera_report);
     parser.process(application);
 
@@ -195,6 +200,55 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
+    if (parser.isSet(verify_report_workflow)) {
+        const QStringList required_actions{
+            QStringLiteral("ExportImageReportAction"),
+            QStringLiteral("ExportDiagnosticReportAction"),
+            QStringLiteral("DesignReportTemplateAction"),
+            QStringLiteral("LoadReportTemplateAction"),
+            QStringLiteral("ClearReportTemplateAction")};
+        for (const QString& name : required_actions) {
+            if (!window.findChild<QAction*>(name)) {
+                qCritical().noquote() << QStringLiteral("Report action is missing: %1").arg(name);
+                return 13;
+            }
+        }
+        const QStringList required_buttons{
+            QStringLiteral("ProjectExportImageReportButton"),
+            QStringLiteral("ProjectDesignReportTemplateButton"),
+            QStringLiteral("ProjectLoadReportTemplateButton"),
+            QStringLiteral("ProjectClearReportTemplateButton")};
+        for (const QString& name : required_buttons) {
+            if (!window.findChild<QPushButton*>(name)) {
+                qCritical().noquote() << QStringLiteral("Report project control is missing: %1").arg(name);
+                return 13;
+            }
+        }
+        ReportTemplateDialog designer(ImageReportTemplateOptions{}, &window);
+        const QStringList designer_controls{
+            QStringLiteral("ReportTemplateTitle"),
+            QStringLiteral("ReportTemplateAccent"),
+            QStringLiteral("ReportTemplateSectionList"),
+            QStringLiteral("ReportTemplatePreview")};
+        for (const QString& name : designer_controls) {
+            if (!designer.findChild<QWidget*>(name)) {
+                qCritical().noquote() << QStringLiteral("Report designer control is missing: %1").arg(name);
+                return 13;
+            }
+        }
+        const ImageReportTemplateOptions options = designer.options();
+        const std::wstring template_text =
+            DiagnosticReportActions::BuildImageReportTemplate(options);
+        ImageReportTemplateOptions parsed;
+        if (template_text.find(L"{{ImageTag}}") == std::wstring::npos ||
+            template_text.find(L"{{MeasurementTable}}") == std::wstring::npos ||
+            !DiagnosticReportActions::TryParseImageReportTemplateOptions(template_text, parsed) ||
+            parsed.section_order.size() != 6U) {
+            qCritical() << "Report template generation or round-trip parsing failed.";
+            return 13;
+        }
+        return 0;
+    }
     if (parser.isSet(verify_point_cloud_workflow)) {
         QAction* action = window.findChild<QAction*>(QStringLiteral("PointCloudWorkspaceAction"));
         if (!action) {

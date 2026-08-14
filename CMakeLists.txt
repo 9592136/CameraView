@@ -216,6 +216,8 @@ set(CAMERAVIEW_DOMAIN_SOURCES
 # Platform-neutral application services used by the Qt front end.  The legacy
 # Win32 view/layout sources intentionally stay out of the default executable.
 set(CAMERAVIEW_QT_CORE_SOURCES
+    src/app/DiagnosticReportActions.cpp
+    src/app/DiagnosticReportActions.h
     src/app/ExportActions.cpp
     src/app/ExportActions.h
     src/imaging/ImageViewport.cpp
@@ -226,6 +228,8 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/ViewTransform.h
     src/storage/ImageExporter.cpp
     src/storage/ImageExporter.h
+    src/storage/DiagnosticReportBuilder.cpp
+    src/storage/DiagnosticReportBuilder.h
     src/domain/CalibrationProfile.cpp
     src/domain/CalibrationProfile.h
     src/domain/Geometry.h
@@ -345,6 +349,8 @@ qt_add_executable(CameraView WIN32
     src/qt/ProfileAnalysisDialog.h
     src/qt/ProfilePlotWidget.cpp
     src/qt/ProfilePlotWidget.h
+    src/qt/ReportTemplateDialog.cpp
+    src/qt/ReportTemplateDialog.h
     src/qt/PointCloudDialog.cpp
     src/qt/PointCloudDialog.h
     src/qt/PointCloudDeviationDialog.cpp
@@ -588,6 +594,9 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewQtStitchExecution
         COMMAND CameraView --verify-stitch-execution)
     set_tests_properties(CameraViewQtStitchExecution PROPERTIES TIMEOUT 30)
+    add_test(NAME CameraViewQtReportWorkflow
+        COMMAND CameraView --verify-report-workflow)
+    set_tests_properties(CameraViewQtReportWorkflow PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtUiSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"

@@ -10,6 +10,7 @@
 #include "ObjectiveCalibrationSettings.h"
 #include "ProfileAnalysisDialog.h"
 #include "PointCloudDialog.h"
+#include "ReportTemplateDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
 #include "app/ExportActions.h"
 #include "domain/MeasurementFormatter.h"
@@ -43,9 +44,11 @@
 #include <QDockWidget>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -69,7 +72,6 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPainter>
-#include <QSaveFile>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QScrollArea>
@@ -77,13 +79,11 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QStatusBar>
-#include <QStringConverter>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QStyle>
 #include <QTimer>
 #include <QTransform>
-#include <QTextStream>
 #include <QTime>
 #include <QUrl>
 #include <QVariant>
@@ -251,6 +251,7 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     setupUi();
     loadMeasurementPreferences();
     loadObjectiveCalibrationMemory();
+    loadReportTemplateSettings();
     {
         QSettings fluorescence_settings;
         fluorescence_capture_presets_ = FluorescenceCaptureSettings::Load(
@@ -447,39 +448,24 @@ void CameraMainWindow::setupMenusAndToolbar()
     file_menu->addSeparator();
     file_menu->addAction(tr("打开项目…"), this, &CameraMainWindow::openProject);
     file_menu->addAction(tr("保存项目…"), QKeySequence::Save, this, &CameraMainWindow::saveProject);
-    file_menu->addAction(tr("保存诊断报告…"), this, [this] {
-        QString file_name = QFileDialog::getSaveFileName(
-            this, tr("保存诊断报告"), QStringLiteral("CameraView-diagnostics.txt"), tr("文本文件 (*.txt)"));
-        if (file_name.isEmpty()) {
-            return;
-        }
-        QSaveFile file(file_name);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, tr("保存失败"), file.errorString());
-            return;
-        }
-        QTextStream stream(&file);
-        stream.setEncoding(QStringConverter::Utf8);
-        const ImageFrame visible_frame = currentVisibleFrame();
-        stream << "CameraView Qt diagnostics\n"
-               << "Generated: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n"
-               << "Qt: " << QT_VERSION_STR << "\n"
-               << "Camera: " << camera_state_label_->text() << "\n"
-               << "Source: " << current_source_ << "\n"
-               << "Frame: " << visible_frame.width << " x " << visible_frame.height << "\n"
-               << "Objective: " << currentObjectiveLabel() << "\n"
-               << "Calibration: " << (calibration_.IsCalibrated()
-                    ? QString::number(calibration_.MicronsPerPixel(), 'g', 10) + " um/px" : "none") << "\n"
-               << "Measurements: " << measurements_.Count() << "\n"
-               << "Fluorescence channels: " << channels_.size() << "\n"
-               << "Stitch frames: " << stitch_tiles_.size() << "\n"
-               << "EDF frames: " << edf_stack_.size() << "\n";
-        if (!file.commit()) {
-            QMessageBox::warning(this, tr("保存失败"), file.errorString());
-        } else {
-            statusBar()->showMessage(tr("诊断报告已保存：%1").arg(file_name), 5000);
-        }
-    });
+    file_menu->addSeparator();
+    QMenu* report_menu = file_menu->addMenu(tr("报告"));
+    QAction* image_report_action = report_menu->addAction(
+        tr("导出图文报告…"), this, &CameraMainWindow::exportImageReport);
+    image_report_action->setObjectName(QStringLiteral("ExportImageReportAction"));
+    QAction* diagnostic_report_action = report_menu->addAction(
+        tr("导出诊断信息…"), this, &CameraMainWindow::exportDiagnosticReport);
+    diagnostic_report_action->setObjectName(QStringLiteral("ExportDiagnosticReportAction"));
+    report_menu->addSeparator();
+    QAction* design_report_action = report_menu->addAction(
+        tr("设计报告模板…"), this, &CameraMainWindow::showReportTemplateDesigner);
+    design_report_action->setObjectName(QStringLiteral("DesignReportTemplateAction"));
+    QAction* load_report_action = report_menu->addAction(
+        tr("载入报告模板…"), this, &CameraMainWindow::loadReportTemplate);
+    load_report_action->setObjectName(QStringLiteral("LoadReportTemplateAction"));
+    QAction* clear_report_action = report_menu->addAction(
+        tr("清除自定义模板"), this, &CameraMainWindow::clearReportTemplate);
+    clear_report_action->setObjectName(QStringLiteral("ClearReportTemplateAction"));
     file_menu->addSeparator();
     file_menu->addAction(tr("退出"), QKeySequence::Quit, this, &QWidget::close);
 
@@ -1701,14 +1687,48 @@ QWidget* CameraMainWindow::buildProjectPage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
+    auto* project_group = new QGroupBox(tr("项目"));
+    auto* project_layout = new QVBoxLayout(project_group);
     auto* open = addButton(layout, tr("打开项目…"));
     auto* save = addButton(layout, tr("保存项目…"));
+    layout->removeWidget(open);
+    layout->removeWidget(save);
+    project_layout->addWidget(open);
+    project_layout->addWidget(save);
     setButtonRole(save, "primary");
-    layout->addWidget(new QLabel(tr("项目文件保存标定、测量、染料、荧光通道配置以及处理参数。图像数据请单独导出。")));
-    layout->itemAt(2)->widget()->setProperty("wordWrap", true);
+    auto* project_hint = new QLabel(tr("项目文件保存标定、测量、染料、荧光通道配置以及处理参数。图像数据请单独导出。"));
+    project_hint->setWordWrap(true);
+    project_layout->addWidget(project_hint);
+    layout->addWidget(project_group);
+
+    auto* report_group = new QGroupBox(tr("报告"));
+    auto* report_layout = new QVBoxLayout(report_group);
+    auto* report_export = new QPushButton(tr("导出图文报告…"));
+    auto* report_design = new QPushButton(tr("设计报告模板…"));
+    auto* report_load = new QPushButton(tr("载入报告模板…"));
+    auto* report_clear = new QPushButton(tr("清除自定义模板"));
+    report_export->setObjectName(QStringLiteral("ProjectExportImageReportButton"));
+    report_design->setObjectName(QStringLiteral("ProjectDesignReportTemplateButton"));
+    report_load->setObjectName(QStringLiteral("ProjectLoadReportTemplateButton"));
+    report_clear->setObjectName(QStringLiteral("ProjectClearReportTemplateButton"));
+    setButtonRole(report_export, "primary");
+    report_layout->addWidget(report_export);
+    report_layout->addWidget(report_design);
+    auto* template_row = new QHBoxLayout;
+    template_row->addWidget(report_load);
+    template_row->addWidget(report_clear);
+    report_layout->addLayout(template_row);
+    auto* report_hint = new QLabel(tr("图文报告包含当前图像、标定信息和测量结果；模板设置会自动记忆。"));
+    report_hint->setWordWrap(true);
+    report_layout->addWidget(report_hint);
+    layout->addWidget(report_group);
     layout->addStretch();
     connect(open, &QPushButton::clicked, this, &CameraMainWindow::openProject);
     connect(save, &QPushButton::clicked, this, &CameraMainWindow::saveProject);
+    connect(report_export, &QPushButton::clicked, this, &CameraMainWindow::exportImageReport);
+    connect(report_design, &QPushButton::clicked, this, &CameraMainWindow::showReportTemplateDesigner);
+    connect(report_load, &QPushButton::clicked, this, &CameraMainWindow::loadReportTemplate);
+    connect(report_clear, &QPushButton::clicked, this, &CameraMainWindow::clearReportTemplate);
     return page;
 }
 
@@ -1808,6 +1828,251 @@ void CameraMainWindow::exportImage()
         return;
     }
     statusBar()->showMessage(tr("图像已导出：%1").arg(file_name), 5000);
+}
+
+DiagnosticReportActionInput CameraMainWindow::buildDiagnosticReportInput() const
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDate date = now.date();
+    const QTime time = now.time();
+    DiagnosticReportActionInput input;
+    input.generated = DiagnosticReportTimestamp{
+        date.year(), date.month(), date.day(), time.hour(), time.minute(), time.second()};
+    input.status = statusBar()->currentMessage().toStdWString();
+    input.preview_telemetry = preview_fps_label_ ? preview_fps_label_->text().toStdWString() : L"";
+    input.viewport_zoom = canvas_
+        ? QStringLiteral("%1%").arg(canvas_->zoom() * 100.0, 0, 'f', 0).toStdWString()
+        : L"";
+    input.preview_running = camera_open_;
+    input.processing_running = busy_;
+    input.sdk.loaded = camera_open_ || !camera_indices_.isEmpty();
+    input.sdk.last_error = camera_state_label_ ? camera_state_label_->text().toStdWString() : L"";
+    input.enumerated_cameras = camera_indices_.size();
+    input.selected_camera_index = device_combo_ ? device_combo_->currentIndex() : -1;
+    if (device_combo_) {
+        for (int row = 0; row < device_combo_->count(); ++row) {
+            CameraDevice device;
+            device.index = row < camera_indices_.size() ? camera_indices_.at(row) : row;
+            device.display_name = device_combo_->itemText(row).toStdWString();
+            input.enumerated_devices.push_back(std::move(device));
+        }
+    }
+    input.latest_frame_source = current_source_.toStdWString();
+    input.latest_frame = currentVisibleFrame();
+    input.objective_label = currentObjectiveLabel().toStdWString();
+    input.calibration = calibration_;
+    input.display_unit = display_unit_;
+    input.preview_display_mode = fusion_enabled_
+        ? L"Fluorescence fusion"
+        : PseudoColorMapper::Label(palette_);
+    input.pseudo_color = palette_;
+    input.dye_profiles = dyes_.size();
+    input.fluorescence_channels = channels_.size();
+    input.stitch_tiles = stitch_tiles_.size();
+    input.stitch_search_percent = stitch_overlap_slider_ ? stitch_overlap_slider_->value() : 0;
+    if (stitch_result_metadata_.available) {
+        input.stitch_result_backend = stitch_result_metadata_.backend;
+        input.stitch_result_layout = stitch_result_metadata_.layout_mode;
+        input.stitch_result_registration = stitch_result_metadata_.registration_method;
+        input.stitch_result_transform = stitch_result_metadata_.transform_model;
+        input.stitch_result_blend = stitch_result_metadata_.blend_mode;
+        input.stitch_result_overlap_percent = stitch_result_metadata_.overlap_percent;
+        input.stitch_result_tiles = stitch_result_metadata_.tiles.size();
+        input.stitch_result_relations = stitch_result_metadata_.relation_count;
+        QStringList positions;
+        for (int index = 0; index < static_cast<int>(stitch_result_metadata_.tiles.size()); ++index) {
+            const StitchResultTileMetadata& tile = stitch_result_metadata_.tiles[static_cast<std::size_t>(index)];
+            positions.push_back(tr("%1: %2x%3 @ %4,%5%6")
+                .arg(index + 1).arg(tile.width).arg(tile.height)
+                .arg(tile.offset_x).arg(tile.offset_y)
+                .arg(tile.estimated_position ? tr("（估计）") : QString{}));
+        }
+        input.stitch_result_tile_positions = positions.join(QStringLiteral("; ")).toStdWString();
+    }
+    input.edf_frames = edf_stack_.size();
+    input.edf_focus_radius = 1;
+    input.edf_composite_available = edf_result_.composite_frame.IsValid();
+    input.edf_focus_map_available = edf_result_.focus_map.IsValid();
+    if (stitch_result_.IsValid()) {
+        input.processing_result_visible = true;
+        input.processing_result_kind = L"Stitch";
+        input.processing_result_source = L"Stitch result";
+        input.processing_result_width = stitch_result_.width;
+        input.processing_result_height = stitch_result_.height;
+    } else if (edf_result_.composite_frame.IsValid()) {
+        input.processing_result_visible = true;
+        input.processing_result_kind = L"EDF";
+        input.processing_result_source = L"EDF composite";
+        input.processing_result_width = edf_result_.composite_frame.width;
+        input.processing_result_height = edf_result_.composite_frame.height;
+    }
+    return input;
+}
+
+void CameraMainWindow::exportImageReport()
+{
+    const ImageFrame report_frame = currentVisibleFrame();
+    if (!report_frame.IsValid()) {
+        QMessageBox::information(this, tr("导出图文报告"), tr("请先打开图像或启动相机预览。"));
+        return;
+    }
+
+    QString file_name = QFileDialog::getSaveFileName(
+        this, tr("导出图文报告"), QStringLiteral("CameraView-report.html"),
+        tr("HTML 报告 (*.html)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    if (QFileInfo(file_name).suffix().isEmpty()) {
+        file_name += QStringLiteral(".html");
+    }
+
+    const QFileInfo report_info(file_name);
+    const QString stem = report_info.completeBaseName().isEmpty()
+        ? QStringLiteral("CameraView-report")
+        : report_info.completeBaseName();
+    const QString image_name = stem + QStringLiteral("_image.png");
+    const QString image_file = report_info.dir().filePath(image_name);
+    const std::wstring display_mode = fusion_enabled_
+        ? L"Fluorescence fusion"
+        : PseudoColorMapper::Label(palette_);
+    const ExportActionResult image_result = ExportActions::SaveImage(
+        std::filesystem::path(image_file.toStdWString()), report_frame,
+        measurements_, display_mode, &calibration_);
+    if (!image_result.saved) {
+        QMessageBox::warning(this, tr("报告图像导出失败"),
+            QString::fromStdWString(image_result.message));
+        return;
+    }
+
+    const std::wstring report = DiagnosticReportActions::BuildImageReport(
+        buildDiagnosticReportInput(), measurements_, image_name.toStdWString(),
+        report_frame, report_template_text_);
+    const ExportActionResult report_result = ExportActions::SaveReportHtml(
+        std::filesystem::path(file_name.toStdWString()), report);
+    if (!report_result.saved) {
+        QMessageBox::warning(this, tr("报告导出失败"),
+            QString::fromStdWString(report_result.message));
+        return;
+    }
+    statusBar()->showMessage(
+        tr("图文报告已导出：%1（报告图像：%2）").arg(file_name, image_name), 7000);
+}
+
+void CameraMainWindow::exportDiagnosticReport()
+{
+    QString file_name = QFileDialog::getSaveFileName(
+        this, tr("导出诊断信息"), QStringLiteral("CameraView-diagnostics.txt"),
+        tr("文本文件 (*.txt)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    if (QFileInfo(file_name).suffix().isEmpty()) {
+        file_name += QStringLiteral(".txt");
+    }
+    const ExportActionResult result = ExportActions::SaveDiagnosticReport(
+        std::filesystem::path(file_name.toStdWString()),
+        DiagnosticReportActions::BuildReport(buildDiagnosticReportInput(), measurements_));
+    if (!result.saved) {
+        QMessageBox::warning(this, tr("诊断信息导出失败"),
+            QString::fromStdWString(result.message));
+        return;
+    }
+    statusBar()->showMessage(tr("诊断信息已导出：%1").arg(file_name), 5000);
+}
+
+void CameraMainWindow::showReportTemplateDesigner()
+{
+    ImageReportTemplateOptions parsed;
+    const bool visual_template = report_template_text_.empty() ||
+        DiagnosticReportActions::TryParseImageReportTemplateOptions(report_template_text_, parsed);
+    if (!visual_template && QMessageBox::question(
+            this, tr("替换自定义模板"),
+            tr("当前载入的是手写 HTML 模板，进入可视化设计并应用后会替换它。是否继续？"))
+            != QMessageBox::Yes) {
+        return;
+    }
+    if (visual_template && !report_template_text_.empty()) {
+        report_template_options_ = parsed;
+    }
+    ReportTemplateDialog dialog(report_template_options_, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    report_template_options_ = dialog.options();
+    report_template_text_ = DiagnosticReportActions::BuildImageReportTemplate(report_template_options_);
+    report_template_path_.clear();
+    saveReportTemplateSettings();
+    statusBar()->showMessage(tr("报告模板已应用并记忆"), 5000);
+}
+
+void CameraMainWindow::loadReportTemplate()
+{
+    const QString file_name = QFileDialog::getOpenFileName(
+        this, tr("载入报告模板"), report_template_path_,
+        tr("HTML 模板 (*.html *.htm);;所有文件 (*.*)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    QFile file(file_name);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("载入报告模板失败"), file.errorString());
+        return;
+    }
+    const QByteArray bytes = file.readAll();
+    QString text = QString::fromUtf8(bytes);
+    if (!text.isEmpty() && text.front() == QChar::ByteOrderMark) {
+        text.remove(0, 1);
+    }
+    if (text.trimmed().isEmpty()) {
+        QMessageBox::warning(this, tr("载入报告模板失败"), tr("模板文件为空。"));
+        return;
+    }
+    report_template_text_ = text.toStdWString();
+    report_template_path_ = file_name;
+    ImageReportTemplateOptions parsed;
+    const bool visual = DiagnosticReportActions::TryParseImageReportTemplateOptions(
+        report_template_text_, parsed);
+    report_template_options_ = visual ? parsed : ImageReportTemplateOptions{};
+    saveReportTemplateSettings();
+    statusBar()->showMessage(visual
+        ? tr("报告模板已载入，可在设计器中继续编辑：%1").arg(QFileInfo(file_name).fileName())
+        : tr("自定义 HTML 报告模板已载入：%1").arg(QFileInfo(file_name).fileName()), 6000);
+}
+
+void CameraMainWindow::clearReportTemplate()
+{
+    if (report_template_text_.empty()) {
+        statusBar()->showMessage(tr("当前已经使用默认报告模板"), 3000);
+        return;
+    }
+    report_template_text_.clear();
+    report_template_path_.clear();
+    report_template_options_ = ImageReportTemplateOptions{};
+    saveReportTemplateSettings();
+    statusBar()->showMessage(tr("已恢复默认报告模板"), 4000);
+}
+
+void CameraMainWindow::loadReportTemplateSettings()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Report"));
+    report_template_text_ = settings.value(QStringLiteral("templateText")).toString().toStdWString();
+    report_template_path_ = settings.value(QStringLiteral("templatePath")).toString();
+    settings.endGroup();
+    ImageReportTemplateOptions parsed;
+    if (DiagnosticReportActions::TryParseImageReportTemplateOptions(report_template_text_, parsed)) {
+        report_template_options_ = std::move(parsed);
+    }
+}
+
+void CameraMainWindow::saveReportTemplateSettings() const
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Report"));
+    settings.setValue(QStringLiteral("templateText"), QString::fromStdWString(report_template_text_));
+    settings.setValue(QStringLiteral("templatePath"), report_template_path_);
+    settings.endGroup();
 }
 
 void CameraMainWindow::saveProject()
