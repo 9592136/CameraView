@@ -217,17 +217,17 @@ void PointCloudDialog::buildUi()
     process_page->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* process_content = new QWidget;
     auto* process_layout = new QVBoxLayout(process_content);
-    auto* interactive_crop_group = new QGroupBox(tr("交互式框选裁剪"));
+    auto* interactive_crop_group = new QGroupBox(tr("自由选择裁剪"));
     auto* interactive_crop_layout = new QVBoxLayout(interactive_crop_group);
     crop_selection_label_ = new QLabel(tr("尚未选择点"));
     crop_selection_label_->setObjectName(QStringLiteral("PointCloudCropSelectionLabel"));
     crop_selection_label_->setWordWrap(true);
-    begin_crop_button_ = new QPushButton(tr("在视图中拖框选择"));
+    begin_crop_button_ = new QPushButton(tr("在视图中自由选择"));
     begin_crop_button_->setObjectName(QStringLiteral("PointCloudBeginInteractiveCropButton"));
     begin_crop_button_->setCheckable(true);
     keep_crop_button_ = new QPushButton(tr("保留框内"));
     keep_crop_button_->setObjectName(QStringLiteral("PointCloudKeepSelectionButton"));
-    remove_crop_button_ = new QPushButton(tr("移除框内"));
+    remove_crop_button_ = new QPushButton(tr("保留框外"));
     remove_crop_button_->setObjectName(QStringLiteral("PointCloudRemoveSelectionButton"));
     keep_crop_button_->setEnabled(false);
     remove_crop_button_->setEnabled(false);
@@ -905,11 +905,12 @@ void PointCloudDialog::runCloudTask(
         [this, watcher, progress, cancelled, revision, operation,
             completed = std::move(completed)]() mutable {
             PointCloud result = watcher->result();
+            const bool was_cancelled = cancelled->load(std::memory_order_relaxed);
             watcher->deleteLater();
             progress->close();
             progress->deleteLater();
             tabs_->setEnabled(true);
-            if (cancelled->load(std::memory_order_relaxed)) {
+            if (was_cancelled) {
                 workspace_status_->setText(tr("已取消%1").arg(operation));
                 return;
             }
@@ -1053,7 +1054,7 @@ void PointCloudDialog::applyInteractiveCrop(bool keep_selected)
     }
     const PointCloud cloud = current_cloud_;
     clearInteractiveCrop();
-    const QString operation = keep_selected ? tr("保留框选点") : tr("移除框选点");
+    const QString operation = keep_selected ? tr("保留选区内点") : tr("保留选区外点");
     runCloudTask(operation, [cloud, indices, keep_selected] {
         return PointCloudProcessor::SelectIndices(cloud, indices, keep_selected);
     });

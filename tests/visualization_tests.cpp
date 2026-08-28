@@ -509,5 +509,72 @@ int main(int argc, char* argv[])
             return fail("3D point-cloud workbench snapshot could not be rendered.");
         }
     }
+
+    auto waitForCloudSize = [&application](PointCloudDialog& dialog, std::size_t expected) {
+        QElapsedTimer timer;
+        timer.start();
+        while (dialog.cloud().Size() != expected && timer.elapsed() < 3000) {
+            application.processEvents();
+            QThread::msleep(10);
+        }
+        application.processEvents();
+        return dialog.cloud().Size() == expected;
+    };
+    auto selectCropRegion = [&application](PointCloudDialog& dialog) {
+        dialog.resize(1180, 760);
+        dialog.show();
+        application.processEvents();
+        auto* begin = dialog.findChild<QPushButton*>(
+            QStringLiteral("PointCloudBeginInteractiveCropButton"));
+        if (!begin) return QVector<int>{};
+        begin->click();
+        const QRectF rectangle(dialog.cloudWidget()->rect().adjusted(220, 160, -220, -160));
+        const QPolygonF polygon{rectangle.topLeft(), rectangle.topRight(),
+            rectangle.bottomRight(), rectangle.bottomLeft()};
+        const QVector<int> expected = dialog.cloudWidget()->indicesInScreenPolygon(polygon);
+        const std::array<QPointF, 5> positions{rectangle.topLeft(), rectangle.topRight(),
+            rectangle.bottomRight(), rectangle.bottomLeft(), rectangle.topLeft()};
+        QMouseEvent press(QEvent::MouseButtonPress, positions[0], positions[0],
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(dialog.cloudWidget(), &press);
+        for (int index = 1; index < 4; ++index) {
+            QMouseEvent move(QEvent::MouseMove, positions[index], positions[index],
+                Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(dialog.cloudWidget(), &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, positions[4], positions[4],
+            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(dialog.cloudWidget(), &release);
+        application.processEvents();
+        return expected;
+    };
+    PointCloudDialog keep_crop_dialog(point_cloud);
+    auto* keep_crop_action = keep_crop_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudKeepSelectionButton"));
+    const QVector<int> keep_subset = selectCropRegion(keep_crop_dialog);
+    if (keep_subset.isEmpty() || !keep_crop_action || !keep_crop_action->isEnabled()) {
+        return fail("Point-cloud keep-selection action did not receive the selection.");
+    }
+    keep_crop_action->click();
+    if (!waitForCloudSize(keep_crop_dialog, static_cast<std::size_t>(keep_subset.size()))) {
+        std::cerr << "Keep crop expected " << keep_subset.size() << ", actual "
+                  << keep_crop_dialog.cloud().Size() << '\n';
+        return fail("Point-cloud keep-inside action did not apply the crop.");
+    }
+    PointCloudDialog remove_crop_dialog(point_cloud);
+    auto* remove_crop_action = remove_crop_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudRemoveSelectionButton"));
+    const QVector<int> remove_subset = selectCropRegion(remove_crop_dialog);
+    if (remove_subset.isEmpty() || !remove_crop_action || !remove_crop_action->isEnabled()) {
+        return fail("Point-cloud remove-selection action did not receive the selection.");
+    }
+    remove_crop_action->click();
+    if (!waitForCloudSize(remove_crop_dialog,
+            point_cloud.Size() - static_cast<std::size_t>(remove_subset.size()))) {
+        std::cerr << "Remove crop expected "
+                  << point_cloud.Size() - static_cast<std::size_t>(remove_subset.size())
+                  << ", actual " << remove_crop_dialog.cloud().Size() << '\n';
+        return fail("Point-cloud keep-outside action did not apply the crop.");
+    }
     return 0;
 }
