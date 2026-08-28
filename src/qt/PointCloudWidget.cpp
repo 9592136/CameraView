@@ -11,11 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kRenderPointBudget = 120000;
+constexpr int kInteractivePointBudget = 32000;
 
 } // namespace
 
@@ -26,6 +28,13 @@ PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent)
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setCursor(Qt::OpenHandCursor);
+    interaction_idle_timer_.setSingleShot(true);
+    connect(&interaction_idle_timer_, &QTimer::timeout, this, [this] {
+        if (!interactive_rendering_) return;
+        interactive_rendering_ = false;
+        invalidateRenderProjection();
+        update();
+    });
 }
 
 void PointCloudWidget::initializeGL()
@@ -48,11 +57,13 @@ void PointCloudWidget::initializeGL()
 
 void PointCloudWidget::setCloud(const PointCloud& cloud, bool reset_view)
 {
+    interaction_idle_timer_.stop();
+    interactive_rendering_ = false;
     cloud_ = cloud;
     if (!cloud_.Empty() && !cloud_.bounds.valid) cloud_.RecalculateBounds();
     highlighted_indices_.clear();
     selection_preview_indices_.clear();
-    invalidateProjectionCache();
+    discardProjectionCaches();
     if (reset_view) resetView(); else update();
 }
 
@@ -65,6 +76,7 @@ void PointCloudWidget::setColorMode(PointCloudColorMode mode)
 void PointCloudWidget::setPointSize(double size)
 {
     point_size_ = std::clamp(size, 1.0, 12.0);
+    invalidateRenderProjection();
     update();
 }
 
@@ -126,10 +138,12 @@ void PointCloudWidget::setPickingEnabled(bool enabled)
     picking_enabled_ = enabled;
     if (enabled) {
         box_selection_enabled_ = false;
+        free_selection_enabled_ = false;
         section_selection_enabled_ = false;
     }
-    setCursor(enabled || box_selection_enabled_ || section_selection_enabled_
-        ? Qt::CrossCursor : Qt::OpenHandCursor);
+    hovered_point_index_ = -1;
+    updateInteractionCursor();
+    update();
 }
 
 void PointCloudWidget::setBoxSelectionEnabled(bool enabled)
@@ -137,10 +151,26 @@ void PointCloudWidget::setBoxSelectionEnabled(bool enabled)
     box_selection_enabled_ = enabled;
     if (enabled) {
         picking_enabled_ = false;
+        free_selection_enabled_ = false;
         section_selection_enabled_ = false;
     }
     box_selection_rect_ = {};
-    setCursor(enabled ? Qt::CrossCursor : Qt::OpenHandCursor);
+    hovered_point_index_ = -1;
+    updateInteractionCursor();
+    update();
+}
+
+void PointCloudWidget::setFreeSelectionEnabled(bool enabled)
+{
+    free_selection_enabled_ = enabled;
+    if (enabled) {
+        picking_enabled_ = false;
+        box_selection_enabled_ = false;
+        section_selection_enabled_ = false;
+    }
+    free_selection_path_.clear();
+    hovered_point_index_ = -1;
+    updateInteractionCursor();
     update();
 }
 
@@ -151,10 +181,12 @@ void PointCloudWidget::setSectionSelectionEnabled(bool enabled, double half_widt
     if (enabled) {
         picking_enabled_ = false;
         box_selection_enabled_ = false;
+        free_selection_enabled_ = false;
     }
     section_start_ = {};
     section_end_ = {};
-    setCursor(enabled ? Qt::CrossCursor : Qt::OpenHandCursor);
+    hovered_point_index_ = -1;
+    updateInteractionCursor();
     update();
 }
 
@@ -172,6 +204,8 @@ void PointCloudWidget::setSelectionPreviewIndices(const QVector<int>& indices)
 
 void PointCloudWidget::resetView()
 {
+    interaction_idle_timer_.stop();
+    interactive_rendering_ = false;
     yaw_degrees_ = -38.0;
     pitch_degrees_ = 26.0;
     view_scale_ = 1.0;
@@ -189,8 +223,60 @@ void PointCloudWidget::invalidateProjectionCache()
 {
     interaction_projection_valid_ = false;
     render_projection_valid_ = false;
+    hovered_point_index_ = -1;
+}
+
+void PointCloudWidget::discardProjectionCaches()
+{
+    invalidateProjectionCache();
+    projected_points_.clear();
     interaction_projected_points_.clear();
     screen_index_.clear();
+}
+
+void PointCloudWidget::invalidateRenderProjection()
+{
+    render_projection_valid_ = false;
+}
+
+int PointCloudWidget::currentRenderBudget() const
+{
+    if (!interactive_rendering_) return kRenderPointBudget;
+    const int base_budget = hardware_accelerated_ ? kInteractivePointBudget : 20000;
+    const double size_cost = std::max(1.0, point_size_ / 2.5);
+    const int adjusted = static_cast<int>(base_budget / size_cost);
+    return std::clamp(adjusted, 10000, base_budget);
+}
+
+void PointCloudWidget::beginInteractiveRendering()
+{
+    interaction_idle_timer_.stop();
+    if (interactive_rendering_) return;
+    interactive_rendering_ = true;
+    invalidateRenderProjection();
+}
+
+void PointCloudWidget::finishInteractiveRendering(int delay_ms)
+{
+    if (!interactive_rendering_) return;
+    interaction_idle_timer_.start(std::max(0, delay_ms));
+}
+
+void PointCloudWidget::updateInteractionCursor()
+{
+    if (drag_button_ != Qt::NoButton) {
+        if ((box_selection_enabled_ || free_selection_enabled_ ||
+                section_selection_enabled_ || picking_enabled_) &&
+            drag_button_ == Qt::LeftButton) {
+            setCursor(Qt::CrossCursor);
+        } else {
+            setCursor(drag_button_ == Qt::LeftButton ? Qt::ClosedHandCursor : Qt::SizeAllCursor);
+        }
+        return;
+    }
+    setCursor(picking_enabled_ || box_selection_enabled_ || free_selection_enabled_ ||
+        section_selection_enabled_
+        ? Qt::CrossCursor : Qt::OpenHandCursor);
 }
 
 void PointCloudWidget::ensureInteractionProjectionCache() const
@@ -199,10 +285,17 @@ void PointCloudWidget::ensureInteractionProjectionCache() const
     constexpr int cell_size = 24;
     interaction_projected_points_.resize(static_cast<int>(cloud_.points.size()));
     screen_index_.clear();
-    screen_index_.reserve(static_cast<int>(cloud_.points.size() / 8 + 1));
+    const int visible_cell_count = std::max(1,
+        (width() / cell_size + 3) * (height() / cell_size + 3));
+    screen_index_.reserve(std::min(visible_cell_count,
+        static_cast<int>(cloud_.points.size() / 8 + 1)));
     for (int index = 0; index < static_cast<int>(cloud_.points.size()); ++index) {
         const ProjectedPoint projected = projectPoint(index);
         interaction_projected_points_[index] = projected;
+        if (projected.position.x() < -cell_size || projected.position.x() > width() + cell_size ||
+            projected.position.y() < -cell_size || projected.position.y() > height() + cell_size) {
+            continue;
+        }
         const int cell_x = static_cast<int>(std::floor(projected.position.x() / cell_size));
         const int cell_y = static_cast<int>(std::floor(projected.position.y() / cell_size));
         screen_index_[screenCellKey(cell_x, cell_y)].push_back(index);
@@ -285,7 +378,7 @@ QColor PointCloudWidget::pointColor(const PointCloudPoint& point, int index) con
 void PointCloudWidget::paintGL()
 {
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, drag_button_ == Qt::NoButton);
+    painter.setRenderHint(QPainter::Antialiasing, !interactive_rendering_);
     QLinearGradient background(rect().topLeft(), rect().bottomRight());
     background.setColorAt(0.0, QColor(8, 13, 19));
     background.setColorAt(1.0, QColor(19, 29, 40));
@@ -372,17 +465,20 @@ void PointCloudWidget::paintGL()
 
     if (!render_projection_valid_) {
         projected_points_.clear();
+        const int render_budget = currentRenderBudget();
         const int stride = std::max(1, static_cast<int>(std::ceil(
-            cloud_.points.size() / static_cast<double>(kRenderPointBudget))));
+            cloud_.points.size() / static_cast<double>(render_budget))));
         projected_points_.reserve(
             static_cast<int>((cloud_.points.size() + stride - 1) / stride));
         for (int index = 0; index < static_cast<int>(cloud_.points.size()); index += stride) {
             projected_points_.push_back(projectPoint(index));
         }
-        std::sort(projected_points_.begin(), projected_points_.end(),
-            [](const ProjectedPoint& left, const ProjectedPoint& right) {
-                return left.depth > right.depth;
-            });
+        if (!interactive_rendering_) {
+            std::sort(projected_points_.begin(), projected_points_.end(),
+                [](const ProjectedPoint& left, const ProjectedPoint& right) {
+                    return left.depth > right.depth;
+                });
+        }
         render_projection_valid_ = true;
     }
     painter.setPen(Qt::NoPen);
@@ -392,6 +488,12 @@ void PointCloudWidget::paintGL()
         painter.drawEllipse(projected.position, point_size_, point_size_);
     }
     rendered_point_count_ = projected_points_.size();
+    if (reported_rendered_point_count_ != rendered_point_count_ ||
+        reported_interactive_rendering_ != interactive_rendering_) {
+        reported_rendered_point_count_ = rendered_point_count_;
+        reported_interactive_rendering_ = interactive_rendering_;
+        emit renderStatisticsChanged(rendered_point_count_, interactive_rendering_);
+    }
 
     drawGeometricModels(painter);
 
@@ -454,10 +556,19 @@ void PointCloudWidget::paintGL()
         }
     }
 
+    if (hovered_point_index_ >= 0 &&
+        hovered_point_index_ < static_cast<int>(cloud_.points.size())) {
+        const QPointF position = projectPoint(hovered_point_index_).position;
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5));
+        painter.setBrush(QColor(62, 159, 255, 130));
+        painter.drawEllipse(position, point_size_ + 4.0, point_size_ + 4.0);
+    }
+
 
     if (!selection_preview_indices_.isEmpty()) {
         const int stride = std::max(1, static_cast<int>(std::ceil(
-            selection_preview_indices_.size() / static_cast<double>(kRenderPointBudget))));
+            selection_preview_indices_.size() /
+            static_cast<double>(currentRenderBudget()))));
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(255, 211, 74, 220));
         for (int offset = 0; offset < selection_preview_indices_.size(); offset += stride) {
@@ -482,6 +593,25 @@ void PointCloudWidget::paintGL()
         painter.drawRect(box_selection_rect_);
     }
 
+    if (free_selection_enabled_ && free_selection_path_.size() > 1) {
+        const QPolygonF closed_path = free_selection_path_ + QPolygonF{free_selection_path_.front()};
+        if (free_selection_path_.size() > 2) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(255, 211, 74, 190));
+            for (const ProjectedPoint& projected : projected_points_) {
+                if (free_selection_path_.containsPoint(
+                        projected.position, Qt::OddEvenFill)) {
+                    painter.drawEllipse(projected.position,
+                        point_size_ + 1.5, point_size_ + 1.5);
+                }
+            }
+        }
+        painter.setPen(QPen(QColor(255, 211, 74), 2.0, Qt::SolidLine,
+            Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(QColor(255, 211, 74, 24));
+        painter.drawPolygon(closed_path, Qt::OddEvenFill);
+    }
+
     if (section_selection_enabled_ && section_start_ != section_end_) {
         const QLineF line(section_start_, section_end_);
         painter.setPen(QPen(QColor(255, 211, 74, 80), section_half_width_pixels_ * 2.0,
@@ -496,6 +626,8 @@ void PointCloudWidget::paintGL()
         Qt::AlignLeft | Qt::AlignVCenter,
         section_selection_enabled_
             ? tr("拖出截面线 · 线两侧带宽内的点将生成高度剖面")
+            : free_selection_enabled_
+            ? tr("左键绘制自由选区 · Shift 添加 · Ctrl 移除 · 右键平移")
             : box_selection_enabled_
             ? tr("拖出矩形选择点 · 右键拖动平移 · 滚轮缩放")
             : picking_enabled_
@@ -582,7 +714,11 @@ QVector<int> PointCloudWidget::indicesInScreenRect(const QRectF& rectangle) cons
     if (!hasCloud() || rectangle.isEmpty()) return indices;
     const QRectF normalized = rectangle.normalized();
     ensureInteractionProjectionCache();
-    indices.reserve(static_cast<int>(cloud_.points.size() / 4));
+    const double viewport_area = std::max(1.0, static_cast<double>(width()) * height());
+    const double selection_ratio = std::clamp(
+        normalized.width() * normalized.height() / viewport_area, 0.0, 1.0);
+    indices.reserve(std::min(static_cast<int>(cloud_.points.size()),
+        std::max(32, static_cast<int>(cloud_.points.size() * selection_ratio))));
     constexpr int cell_size = 24;
     const int minimum_x = static_cast<int>(std::floor(normalized.left() / cell_size));
     const int maximum_x = static_cast<int>(std::floor(normalized.right() / cell_size));
@@ -595,6 +731,24 @@ QVector<int> PointCloudWidget::indicesInScreenRect(const QRectF& rectangle) cons
             for (int index : entry.value()) {
                 if (normalized.contains(interaction_projected_points_[index].position)) indices.push_back(index);
             }
+        }
+    }
+    std::sort(indices.begin(), indices.end());
+    return indices;
+}
+
+QVector<int> PointCloudWidget::indicesInScreenPolygon(const QPolygonF& polygon) const
+{
+    QVector<int> indices;
+    if (!hasCloud() || polygon.size() < 3) return indices;
+    const QRectF bounds = polygon.boundingRect();
+    const QVector<int> candidates = indicesInScreenRect(bounds);
+    indices.reserve(candidates.size());
+    for (int index : candidates) {
+        if (index >= 0 && index < interaction_projected_points_.size() &&
+            polygon.containsPoint(interaction_projected_points_[index].position,
+                Qt::OddEvenFill)) {
+            indices.push_back(index);
         }
     }
     return indices;
@@ -634,6 +788,7 @@ int PointCloudWidget::pickNearest(const QPointF& position, double radius) const
 {
     int selected = -1;
     double best_distance = radius * radius;
+    double best_depth = std::numeric_limits<double>::max();
     ensureInteractionProjectionCache();
     constexpr int cell_size = 24;
     const int minimum_x = static_cast<int>(std::floor((position.x() - radius) / cell_size));
@@ -648,14 +803,43 @@ int PointCloudWidget::pickNearest(const QPointF& position, double radius) const
                 const ProjectedPoint& point = interaction_projected_points_[index];
                 const QPointF delta = point.position - position;
                 const double distance = delta.x() * delta.x() + delta.y() * delta.y();
-                if (distance <= best_distance) {
+                if (distance < best_distance - 0.01 ||
+                    (std::abs(distance - best_distance) <= 0.01 && point.depth < best_depth)) {
                     best_distance = distance;
+                    best_depth = point.depth;
                     selected = index;
                 }
             }
         }
     }
     return selected;
+}
+
+int PointCloudWidget::pickNearestRendered(const QPointF& position, double radius) const
+{
+    if (!render_projection_valid_) return -1;
+    int selected = -1;
+    double best_distance = radius * radius;
+    double best_depth = std::numeric_limits<double>::max();
+    for (const ProjectedPoint& point : projected_points_) {
+        const QPointF delta = point.position - position;
+        const double distance = delta.x() * delta.x() + delta.y() * delta.y();
+        if (distance < best_distance - 0.01 ||
+            (std::abs(distance - best_distance) <= 0.01 && point.depth < best_depth)) {
+            best_distance = distance;
+            best_depth = point.depth;
+            selected = point.index;
+        }
+    }
+    return selected;
+}
+
+void PointCloudWidget::updateHoveredPoint(const QPointF& position)
+{
+    const int hovered = picking_enabled_ ? pickNearestRendered(position, 10.0) : -1;
+    if (hovered == hovered_point_index_) return;
+    hovered_point_index_ = hovered;
+    update();
 }
 
 QPointF PointCloudWidget::screenPosition(int point_index) const
@@ -670,31 +854,62 @@ void PointCloudWidget::mousePressEvent(QMouseEvent* event)
     drag_button_ = event->button();
     press_position_ = last_mouse_ = event->pos();
     moved_since_press_ = false;
+    if (event->button() != Qt::LeftButton ||
+        (!box_selection_enabled_ && !free_selection_enabled_ &&
+            !section_selection_enabled_ && !picking_enabled_)) {
+        beginInteractiveRendering();
+    } else if (box_selection_enabled_ || free_selection_enabled_ ||
+        section_selection_enabled_) {
+        beginInteractiveRendering();
+    }
+    hovered_point_index_ = -1;
     if (box_selection_enabled_ && event->button() == Qt::LeftButton) {
+        selection_modifiers_ = event->modifiers();
         box_selection_start_ = event->position();
         box_selection_rect_ = QRectF(box_selection_start_, box_selection_start_);
+        updateInteractionCursor();
+        update();
+        return;
+    }
+    if (free_selection_enabled_ && event->button() == Qt::LeftButton) {
+        selection_modifiers_ = event->modifiers();
+        free_selection_path_.clear();
+        free_selection_path_ << event->position();
+        updateInteractionCursor();
         update();
         return;
     }
     if (section_selection_enabled_ && event->button() == Qt::LeftButton) {
         section_start_ = section_end_ = event->position();
+        updateInteractionCursor();
         update();
         return;
     }
     if (!picking_enabled_ || event->button() != Qt::LeftButton) {
-        setCursor(event->button() == Qt::LeftButton ? Qt::ClosedHandCursor : Qt::SizeAllCursor);
+        updateInteractionCursor();
     }
 }
 
 void PointCloudWidget::mouseMoveEvent(QMouseEvent* event)
 {
-    if (drag_button_ == Qt::NoButton) return;
+    if (drag_button_ == Qt::NoButton) {
+        updateHoveredPoint(event->position());
+        return;
+    }
     const QPoint delta = event->pos() - last_mouse_;
     last_mouse_ = event->pos();
     moved_since_press_ = moved_since_press_ ||
         (event->pos() - press_position_).manhattanLength() > 4;
     if (box_selection_enabled_ && drag_button_ == Qt::LeftButton) {
         box_selection_rect_ = QRectF(box_selection_start_, event->position()).normalized();
+        update();
+        return;
+    }
+    if (free_selection_enabled_ && drag_button_ == Qt::LeftButton) {
+        if (free_selection_path_.isEmpty() ||
+            QLineF(free_selection_path_.back(), event->position()).length() >= 2.0) {
+            free_selection_path_ << event->position();
+        }
         update();
         return;
     }
@@ -723,7 +938,22 @@ void PointCloudWidget::mouseReleaseEvent(QMouseEvent* event)
         box_selection_rect_ = {};
         drag_button_ = Qt::NoButton;
         emit boxSelectionFinished(selected);
-        setCursor(box_selection_enabled_ ? Qt::CrossCursor : Qt::OpenHandCursor);
+        updateInteractionCursor();
+        finishInteractiveRendering();
+        update();
+        return;
+    }
+    if (free_selection_enabled_ && event->button() == Qt::LeftButton) {
+        if (free_selection_path_.isEmpty() ||
+            QLineF(free_selection_path_.back(), event->position()).length() >= 1.0) {
+            free_selection_path_ << event->position();
+        }
+        const QVector<int> selected = indicesInScreenPolygon(free_selection_path_);
+        free_selection_path_.clear();
+        drag_button_ = Qt::NoButton;
+        emit boxSelectionFinished(selected);
+        updateInteractionCursor();
+        finishInteractiveRendering();
         update();
         return;
     }
@@ -736,7 +966,8 @@ void PointCloudWidget::mouseReleaseEvent(QMouseEvent* event)
         section_selection_enabled_ = false;
         drag_button_ = Qt::NoButton;
         emit sectionSelectionFinished(selected, first, second);
-        setCursor(Qt::OpenHandCursor);
+        updateInteractionCursor();
+        finishInteractiveRendering();
         update();
         return;
     }
@@ -745,8 +976,8 @@ void PointCloudWidget::mouseReleaseEvent(QMouseEvent* event)
         if (index >= 0) emit pointPicked(index);
     }
     drag_button_ = Qt::NoButton;
-    setCursor(picking_enabled_ || box_selection_enabled_ || section_selection_enabled_
-        ? Qt::CrossCursor : Qt::OpenHandCursor);
+    updateInteractionCursor();
+    finishInteractiveRendering();
     update();
 }
 
@@ -757,10 +988,24 @@ void PointCloudWidget::mouseDoubleClickEvent(QMouseEvent*)
 
 void PointCloudWidget::wheelEvent(QWheelEvent* event)
 {
-    const double factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
-    view_scale_ = std::clamp(view_scale_ * factor, 0.25, 8.0);
+    const QPoint angle_delta = event->angleDelta();
+    const QPoint pixel_delta = event->pixelDelta();
+    const double steps = !pixel_delta.isNull()
+        ? pixel_delta.y() / 120.0
+        : angle_delta.y() / 120.0;
+    if (std::abs(steps) < 1e-9) {
+        event->ignore();
+        return;
+    }
+    beginInteractiveRendering();
+    const double old_scale = view_scale_;
+    view_scale_ = std::clamp(view_scale_ * std::pow(1.12, steps), 0.25, 8.0);
+    const double applied_factor = view_scale_ / old_scale;
+    const QPointF cursor_offset = event->position() - QPointF(rect().center());
+    pan_ = cursor_offset - (cursor_offset - pan_) * applied_factor;
     invalidateProjectionCache();
     update();
+    finishInteractiveRendering(120);
     event->accept();
 }
 
@@ -768,12 +1013,17 @@ void PointCloudWidget::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape) {
         box_selection_enabled_ = false;
+        free_selection_enabled_ = false;
         section_selection_enabled_ = false;
         picking_enabled_ = false;
         box_selection_rect_ = {};
+        free_selection_path_.clear();
         section_start_ = section_end_ = {};
         drag_button_ = Qt::NoButton;
-        setCursor(Qt::OpenHandCursor);
+        interactive_rendering_ = false;
+        interaction_idle_timer_.stop();
+        invalidateRenderProjection();
+        updateInteractionCursor();
         update();
         emit interactionCancelled();
         event->accept();

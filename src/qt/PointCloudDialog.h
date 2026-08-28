@@ -118,6 +118,8 @@ private:
     QLabel* tolerance_summary_ = nullptr;
     QLabel* section_status_ = nullptr;
     QLabel* selection_status_ = nullptr;
+    QPushButton* navigation_button_ = nullptr;
+    QPushButton* free_selection_button_ = nullptr;
     QLabel* workspace_status_ = nullptr;
     QLabel* fit_status_ = nullptr;
     QLabel* model_details_ = nullptr;

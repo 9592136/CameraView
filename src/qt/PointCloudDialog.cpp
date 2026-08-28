@@ -29,6 +29,8 @@
 #include <QPushButton>
 #include <QProgressDialog>
 #include <QSettings>
+#include <QSignalBlocker>
+#include <QSet>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QSpinBox>
@@ -111,9 +113,20 @@ void PointCloudDialog::buildUi()
     toolbar->setObjectName(QStringLiteral("PointCloudWorkspaceToolbar"));
     auto* toolbar_layout = new QHBoxLayout(toolbar);
     toolbar_layout->setContentsMargins(8, 6, 8, 6);
-    auto* navigate_button = new QPushButton(tr("浏览"));
-    auto* select_button = new QPushButton(tr("框选"));
-    select_button->setCheckable(true);
+    navigation_button_ = new QPushButton(tr("浏览"));
+    navigation_button_->setObjectName(QStringLiteral("PointCloudWorkspaceNavigateButton"));
+    navigation_button_->setCheckable(true);
+    navigation_button_->setChecked(true);
+    free_selection_button_ = new QPushButton(tr("自由选择"));
+    free_selection_button_->setObjectName(QStringLiteral("PointCloudFreeSelectionButton"));
+    free_selection_button_->setCheckable(true);
+    free_selection_button_->setProperty("requiresCloud", true);
+    free_selection_button_->setToolTip(
+        tr("按住左键绘制任意轮廓；Shift 添加，Ctrl 移除"));
+    auto* workspace_mode_group = new QButtonGroup(this);
+    workspace_mode_group->setExclusive(true);
+    workspace_mode_group->addButton(navigation_button_);
+    workspace_mode_group->addButton(free_selection_button_);
     auto* clear_selection_button = new QPushButton(tr("清除选择"));
     undo_button_ = new QPushButton(tr("撤销"));
     undo_button_->setObjectName(QStringLiteral("PointCloudUndoButton"));
@@ -121,8 +134,8 @@ void PointCloudDialog::buildUi()
     redo_button_->setObjectName(QStringLiteral("PointCloudRedoButton"));
     selection_status_ = new QLabel(tr("选择 0"));
     workspace_status_ = new QLabel(tr("未载入点云"));
-    toolbar_layout->addWidget(navigate_button);
-    toolbar_layout->addWidget(select_button);
+    toolbar_layout->addWidget(navigation_button_);
+    toolbar_layout->addWidget(free_selection_button_);
     toolbar_layout->addWidget(clear_selection_button);
     toolbar_layout->addWidget(undo_button_);
     toolbar_layout->addWidget(redo_button_);
@@ -535,15 +548,22 @@ void PointCloudDialog::buildUi()
     root->addWidget(workspace_splitter_, 1);
 
     connect(open_button_, &QPushButton::clicked, this, &PointCloudDialog::openCloud);
-    connect(navigate_button, &QPushButton::clicked, this, [this, select_button] {
-        select_button->setChecked(false);
+    connect(navigation_button_, &QPushButton::clicked, this, [this] {
         setMeasureMode(PointCloudMeasureMode::Navigate);
         cloud_widget_->setBoxSelectionEnabled(false);
+        cloud_widget_->setFreeSelectionEnabled(false);
     });
-    connect(select_button, &QPushButton::toggled, this, [this](bool active) {
+    connect(free_selection_button_, &QPushButton::clicked, this, [this] {
         setMeasureMode(PointCloudMeasureMode::Navigate);
-        cloud_widget_->setBoxSelectionEnabled(active);
-        if (active) workspace_status_->setText(tr("拖动鼠标框选点；选择会保留供拟合、裁剪和分析复用"));
+        {
+            const QSignalBlocker navigation_blocker(navigation_button_);
+            const QSignalBlocker selection_blocker(free_selection_button_);
+            navigation_button_->setChecked(false);
+            free_selection_button_->setChecked(true);
+        }
+        cloud_widget_->setFreeSelectionEnabled(true);
+        workspace_status_->setText(
+            tr("按住左键绘制自由选区；选择会保留供拟合、裁剪和分析复用"));
     });
     connect(clear_selection_button, &QPushButton::clicked, this, [this] {
         clearInteractiveCrop();
@@ -576,6 +596,15 @@ void PointCloudDialog::buildUi()
             backend_label_->setText(hardware
                 ? tr("%1（硬件加速）").arg(description)
                 : tr("%1（软件回退）").arg(description));
+        });
+    connect(cloud_widget_, &PointCloudWidget::renderStatisticsChanged, this,
+        [this](int displayed, bool interactive) {
+            if (current_cloud_.Empty()) return;
+            workspace_status_->setText(interactive
+                ? tr("交互预览 · %1 / %2 点 · %3")
+                      .arg(displayed).arg(current_cloud_.Size()).arg(unitLabel())
+                : tr("%1 点 · 显示 %2 · %3")
+                      .arg(current_cloud_.Size()).arg(displayed).arg(unitLabel()));
         });
     connect(cloud_widget_, &PointCloudWidget::interactionCancelled, this, [this] {
         setMeasureMode(PointCloudMeasureMode::Navigate);
@@ -966,25 +995,49 @@ void PointCloudDialog::beginInteractiveCrop()
     }
     crop_selection_.clear();
     cloud_widget_->setSelectionPreviewIndices({});
-    cloud_widget_->setBoxSelectionEnabled(active);
+    cloud_widget_->setFreeSelectionEnabled(active);
+    if (free_selection_button_) {
+        const QSignalBlocker navigation_blocker(navigation_button_);
+        const QSignalBlocker selection_blocker(free_selection_button_);
+        navigation_button_->setChecked(!active);
+        free_selection_button_->setChecked(active);
+    }
     keep_crop_button_->setEnabled(false);
     remove_crop_button_->setEnabled(false);
     crop_selection_label_->setText(active
-        ? tr("在点云视图中按住左键拖出选区。")
+        ? tr("在点云视图中按住左键沿目标轮廓绘制自由选区。")
         : tr("尚未选择点"));
 }
 
 void PointCloudDialog::acceptBoxSelection(const QVector<int>& indices)
 {
-    crop_selection_ = indices;
+    const Qt::KeyboardModifiers modifiers = cloud_widget_->selectionModifiers();
+    if (modifiers.testFlag(Qt::ShiftModifier)) {
+        QSet<int> combined;
+        for (int index : crop_selection_) combined.insert(index);
+        for (int index : indices) combined.insert(index);
+        crop_selection_.clear();
+        crop_selection_.reserve(combined.size());
+        for (int index : combined) crop_selection_.push_back(index);
+        std::sort(crop_selection_.begin(), crop_selection_.end());
+    } else if (modifiers.testFlag(Qt::ControlModifier)) {
+        QSet<int> removed;
+        for (int index : indices) removed.insert(index);
+        crop_selection_.erase(std::remove_if(crop_selection_.begin(), crop_selection_.end(),
+            [&removed](int index) { return removed.contains(index); }), crop_selection_.end());
+    } else {
+        crop_selection_ = indices;
+    }
     cloud_widget_->setSelectionPreviewIndices(crop_selection_);
     begin_crop_button_->setChecked(false);
     cloud_widget_->setBoxSelectionEnabled(false);
+    const bool continue_selecting = free_selection_button_ && free_selection_button_->isChecked();
+    cloud_widget_->setFreeSelectionEnabled(continue_selecting);
     const bool valid = !crop_selection_.isEmpty();
     keep_crop_button_->setEnabled(valid);
     remove_crop_button_->setEnabled(valid && crop_selection_.size() < current_cloud_.Size());
     crop_selection_label_->setText(valid
-        ? tr("已选择 %1 / %2 个点，黄色为裁剪预览。")
+        ? tr("已选择 %1 / %2 个点；Shift 添加，Ctrl 移除。")
               .arg(crop_selection_.size()).arg(current_cloud_.Size())
         : tr("选区中没有点，请重新拖框。"));
     updateSelectionPresentation();
@@ -1011,9 +1064,16 @@ void PointCloudDialog::clearInteractiveCrop()
     crop_selection_.clear();
     if (cloud_widget_) {
         cloud_widget_->setBoxSelectionEnabled(false);
+        cloud_widget_->setFreeSelectionEnabled(false);
         cloud_widget_->setSelectionPreviewIndices({});
     }
     if (begin_crop_button_) begin_crop_button_->setChecked(false);
+    if (navigation_button_ && free_selection_button_) {
+        const QSignalBlocker navigation_blocker(navigation_button_);
+        const QSignalBlocker selection_blocker(free_selection_button_);
+        navigation_button_->setChecked(true);
+        free_selection_button_->setChecked(false);
+    }
     if (keep_crop_button_) keep_crop_button_->setEnabled(false);
     if (remove_crop_button_) remove_crop_button_->setEnabled(false);
     if (crop_selection_label_) crop_selection_label_->setText(tr("尚未选择点"));
@@ -1424,7 +1484,14 @@ void PointCloudDialog::restoreOriginal()
 void PointCloudDialog::setMeasureMode(PointCloudMeasureMode mode)
 {
     cloud_widget_->setBoxSelectionEnabled(false);
+    cloud_widget_->setFreeSelectionEnabled(false);
     cloud_widget_->setSectionSelectionEnabled(false);
+    if (free_selection_button_) {
+        const QSignalBlocker navigation_blocker(navigation_button_);
+        const QSignalBlocker selection_blocker(free_selection_button_);
+        navigation_button_->setChecked(true);
+        free_selection_button_->setChecked(false);
+    }
     measure_mode_ = mode;
     if (measurement_tool_group_) {
         if (auto* button = measurement_tool_group_->button(static_cast<int>(mode))) {

@@ -8,7 +8,9 @@
 #include <QHash>
 #include <QOpenGLWidget>
 #include <QPoint>
+#include <QPolygonF>
 #include <QRectF>
+#include <QTimer>
 #include <QVector>
 
 enum class PointCloudColorMode {
@@ -36,6 +38,7 @@ public:
     void setResidualColoringEnabled(bool enabled);
     void setPickingEnabled(bool enabled);
     void setBoxSelectionEnabled(bool enabled);
+    void setFreeSelectionEnabled(bool enabled);
     void setSectionSelectionEnabled(bool enabled, double halfWidthPixels = 10.0);
     void setSelectionPreviewIndices(const QVector<int>& indices);
     void setHighlightedIndices(const QVector<int>& indices);
@@ -51,12 +54,17 @@ public:
     bool residualColoringEnabled() const { return residual_coloring_enabled_; }
     bool pickingEnabled() const { return picking_enabled_; }
     bool boxSelectionEnabled() const { return box_selection_enabled_; }
+    bool freeSelectionEnabled() const { return free_selection_enabled_; }
+    Qt::KeyboardModifiers selectionModifiers() const { return selection_modifiers_; }
     bool sectionSelectionEnabled() const { return section_selection_enabled_; }
     int renderedPointCount() const { return rendered_point_count_; }
+    bool interactiveRendering() const { return interactive_rendering_; }
+    int hoveredPointIndex() const { return hovered_point_index_; }
     QString renderBackend() const { return render_backend_; }
     bool hardwareAccelerated() const { return hardware_accelerated_; }
     int pickNearest(const QPointF& position, double radius = 12.0) const;
     QVector<int> indicesInScreenRect(const QRectF& rectangle) const;
+    QVector<int> indicesInScreenPolygon(const QPolygonF& polygon) const;
     QVector<int> indicesNearScreenLine(
         const QPointF& first,
         const QPointF& second,
@@ -71,6 +79,7 @@ signals:
         const QPointF& first,
         const QPointF& second);
     void renderBackendChanged(const QString& description, bool hardwareAccelerated);
+    void renderStatisticsChanged(int renderedPointCount, bool interactive);
     void interactionCancelled();
 
 protected:
@@ -96,7 +105,15 @@ private:
     QColor pointColor(const PointCloudPoint& point, int index) const;
     void drawGeometricModels(QPainter& painter) const;
     void invalidateProjectionCache();
+    void discardProjectionCaches();
+    void invalidateRenderProjection();
     void ensureInteractionProjectionCache() const;
+    void beginInteractiveRendering();
+    void finishInteractiveRendering(int delayMs = 90);
+    void updateInteractionCursor();
+    void updateHoveredPoint(const QPointF& position);
+    int pickNearestRendered(const QPointF& position, double radius) const;
+    int currentRenderBudget() const;
     static qint64 screenCellKey(int x, int y);
 
     PointCloud cloud_;
@@ -126,13 +143,21 @@ private:
     double active_residual_scale_ = 1.0;
     bool picking_enabled_ = false;
     bool box_selection_enabled_ = false;
+    bool free_selection_enabled_ = false;
     bool section_selection_enabled_ = false;
+    bool interactive_rendering_ = false;
+    QTimer interaction_idle_timer_;
+    int hovered_point_index_ = -1;
     QPointF box_selection_start_;
     QRectF box_selection_rect_;
+    QPolygonF free_selection_path_;
+    Qt::KeyboardModifiers selection_modifiers_ = Qt::NoModifier;
     QPointF section_start_;
     QPointF section_end_;
     double section_half_width_pixels_ = 10.0;
     int rendered_point_count_ = 0;
+    int reported_rendered_point_count_ = -1;
+    bool reported_interactive_rendering_ = false;
     QString render_backend_ = QStringLiteral("OpenGL 正在初始化…");
     bool hardware_accelerated_ = false;
 };

@@ -19,6 +19,7 @@
 #include <QPushButton>
 #include <QPixmap>
 #include <QTabWidget>
+#include <QThread>
 
 #include <cmath>
 #include <cstring>
@@ -223,6 +224,51 @@ int main(int argc, char* argv[])
         return fail("3D point-cloud rendering or screen-space picking failed.");
     }
 
+    PointCloud large_point_cloud;
+    large_point_cloud.unit = PointCloudUnit::Millimeters;
+    large_point_cloud.points.reserve(160000);
+    for (int y = 0; y < 400; ++y) {
+        for (int x = 0; x < 400; ++x) {
+            large_point_cloud.points.push_back({
+                x * 0.02, y * 0.02,
+                0.3 * std::sin(x * 0.035) * std::cos(y * 0.035)});
+        }
+    }
+    large_point_cloud.RecalculateBounds();
+    point_cloud_view.setCloud(large_point_cloud);
+    point_cloud_view.grab();
+    const int full_point_count = point_cloud_view.renderedPointCount();
+    QMouseEvent cloud_drag_press(
+        QEvent::MouseButtonPress, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent cloud_drag_move(
+        QEvent::MouseMove, QPointF(350.0, 245.0), QPointF(350.0, 245.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &cloud_drag_press);
+    QApplication::sendEvent(&point_cloud_view, &cloud_drag_move);
+    point_cloud_view.grab();
+    const int interactive_point_count = point_cloud_view.renderedPointCount();
+    if (!point_cloud_view.interactiveRendering() ||
+        interactive_point_count >= full_point_count || interactive_point_count > 34000) {
+        return fail("Large point-cloud navigation did not activate adaptive rendering.");
+    }
+    QMouseEvent cloud_drag_release(
+        QEvent::MouseButtonRelease, QPointF(350.0, 245.0), QPointF(350.0, 245.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &cloud_drag_release);
+    QThread::msleep(130);
+    application.processEvents();
+    point_cloud_view.grab();
+    if (point_cloud_view.interactiveRendering() ||
+        point_cloud_view.renderedPointCount() != full_point_count) {
+        return fail("Full point-cloud quality was not restored after navigation.");
+    }
+    std::cout << "Point-cloud adaptive render: full " << full_point_count
+              << ", interactive " << interactive_point_count << " points\n";
+
+    point_cloud_view.setCloud(point_cloud);
+    point_cloud_view.grab();
+
     PointCloudDialog point_cloud_dialog(point_cloud);
     PointCloudDialog empty_point_cloud_dialog;
     auto* empty_export = empty_point_cloud_dialog.findChild<QPushButton*>(
@@ -311,10 +357,15 @@ int main(int argc, char* argv[])
     deviation_dialog->close();
     const QRectF point_cloud_selection_rect(
         point_cloud_dialog.cloudWidget()->rect().adjusted(120, 100, -120, -100));
+    const QPolygonF free_selection_polygon{
+        point_cloud_selection_rect.topLeft(),
+        point_cloud_selection_rect.topRight(),
+        point_cloud_selection_rect.bottomRight(),
+        point_cloud_selection_rect.bottomLeft()};
     const QVector<int> box_selected =
-        point_cloud_dialog.cloudWidget()->indicesInScreenRect(point_cloud_selection_rect);
+        point_cloud_dialog.cloudWidget()->indicesInScreenPolygon(free_selection_polygon);
     if (box_selected.isEmpty() || box_selected.size() >= point_cloud.Size()) {
-        return fail("3D point-cloud screen rectangle selection failed.");
+        return fail("3D point-cloud free-form selection failed.");
     }
     QVector<int> drag_selected;
     QObject::connect(point_cloud_dialog.cloudWidget(),
@@ -330,26 +381,34 @@ int main(int argc, char* argv[])
     begin_selection->click();
     auto* navigate_button = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudNavigateButton"));
-    if (!point_cloud_dialog.cloudWidget()->boxSelectionEnabled() ||
+    if (!point_cloud_dialog.cloudWidget()->freeSelectionEnabled() ||
         point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Navigate ||
         !navigate_button || !navigate_button->isChecked()) {
-        return fail("Interactive crop button did not enter box-selection mode.");
+        return fail("Interactive crop button did not enter free-selection mode.");
     }
     const QPointF selection_start = point_cloud_selection_rect.topLeft();
-    const QPointF selection_end = point_cloud_selection_rect.bottomRight();
+    const QPointF selection_top_right = point_cloud_selection_rect.topRight();
+    const QPointF selection_bottom_right = point_cloud_selection_rect.bottomRight();
+    const QPointF selection_bottom_left = point_cloud_selection_rect.bottomLeft();
     QMouseEvent selection_press(QEvent::MouseButtonPress,
         selection_start, selection_start, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QMouseEvent selection_move(QEvent::MouseMove,
-        selection_end, selection_end, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selection_move_top(QEvent::MouseMove,
+        selection_top_right, selection_top_right, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selection_move_right(QEvent::MouseMove,
+        selection_bottom_right, selection_bottom_right, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent selection_move_bottom(QEvent::MouseMove,
+        selection_bottom_left, selection_bottom_left, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
     QMouseEvent selection_release(QEvent::MouseButtonRelease,
-        selection_end, selection_end, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        selection_start, selection_start, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_press);
-    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_move);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_move_top);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_move_right);
+    QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_move_bottom);
     QApplication::sendEvent(point_cloud_dialog.cloudWidget(), &selection_release);
     if (drag_selected.size() != box_selected.size() ||
-        point_cloud_dialog.cloudWidget()->boxSelectionEnabled() ||
+        !point_cloud_dialog.cloudWidget()->freeSelectionEnabled() ||
         !keep_selection->isEnabled() || !remove_selection->isEnabled()) {
-        return fail("3D point-cloud drag selection did not emit its selected points.");
+        return fail("3D point-cloud free selection did not stay available after selection.");
     }
     point_cloud_dialog.setMeasurementMode(PointCloudMeasureMode::Distance);
     if (point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Distance ||
