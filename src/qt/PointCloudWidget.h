@@ -60,6 +60,8 @@ public:
     int renderedPointCount() const { return rendered_point_count_; }
     bool interactiveRendering() const { return interactive_rendering_; }
     int hoveredPointIndex() const { return hovered_point_index_; }
+    double yawDegrees() const { return yaw_degrees_; }
+    double pitchDegrees() const { return pitch_degrees_; }
     QString renderBackend() const { return render_backend_; }
     bool hardwareAccelerated() const { return hardware_accelerated_; }
     int pickNearest(const QPointF& position, double radius = 12.0) const;

@@ -263,6 +263,24 @@ int main(int argc, char* argv[])
         point_cloud_view.renderedPointCount() != full_point_count) {
         return fail("Full point-cloud quality was not restored after navigation.");
     }
+
+    point_cloud_view.resetView();
+    QMouseEvent continuous_pitch_press(
+        QEvent::MouseButtonPress, QPointF(300.0, 220.0), QPointF(300.0, 220.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent continuous_pitch_move(
+        QEvent::MouseMove, QPointF(300.0, -180.0), QPointF(300.0, -180.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent continuous_pitch_release(
+        QEvent::MouseButtonRelease, QPointF(300.0, -180.0), QPointF(300.0, -180.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &continuous_pitch_press);
+    QApplication::sendEvent(&point_cloud_view, &continuous_pitch_move);
+    QApplication::sendEvent(&point_cloud_view, &continuous_pitch_release);
+    if (std::abs(point_cloud_view.pitchDegrees()) <= 85.0 ||
+        std::abs(point_cloud_view.pitchDegrees()) > 180.0) {
+        return fail("Point-cloud pitch rotation stopped at the former pole limit.");
+    }
     std::cout << "Point-cloud adaptive render: full " << full_point_count
               << ", interactive " << interactive_point_count << " points\n";
 

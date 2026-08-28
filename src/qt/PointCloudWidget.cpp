@@ -19,6 +19,11 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr int kRenderPointBudget = 120000;
 constexpr int kInteractivePointBudget = 32000;
 
+double wrapDegrees(double degrees)
+{
+    return std::remainder(degrees, 360.0);
+}
+
 } // namespace
 
 PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent)
@@ -920,8 +925,8 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent* event)
     }
     if (picking_enabled_ && drag_button_ == Qt::LeftButton) return;
     if (drag_button_ == Qt::LeftButton) {
-        yaw_degrees_ += delta.x() * 0.55;
-        pitch_degrees_ = std::clamp(pitch_degrees_ - delta.y() * 0.4, -85.0, 85.0);
+        yaw_degrees_ = wrapDegrees(yaw_degrees_ + delta.x() * 0.55);
+        pitch_degrees_ = wrapDegrees(pitch_degrees_ - delta.y() * 0.4);
     } else {
         pan_ += QPointF(delta);
     }
