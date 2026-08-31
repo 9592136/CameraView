@@ -7,6 +7,7 @@
 #include "imaging/ProcessingParameterRules.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QComboBox>
@@ -23,15 +24,19 @@
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QToolButton>
+#include <QKeyEvent>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -209,6 +214,14 @@ int main(int argc, char* argv[])
     if (parser.isSet(import_yolo_manifest)) {
         return importYoloManifest(parser.value(import_yolo_manifest));
     }
+
+    const bool isolated_ui_run = parser.isSet(smoke_test) || parser.isSet(ui_snapshot) ||
+        parser.isSet(verify_measurement_toolbar) || parser.isSet(verify_measurement_overlay_editor) ||
+        parser.isSet(verify_preview_pipeline) || parser.isSet(verify_fluorescence_workflow) ||
+        parser.isSet(verify_point_cloud_workflow) || parser.isSet(verify_numeric_sliders) ||
+        parser.isSet(verify_stitch_workflow) || parser.isSet(verify_stitch_execution) ||
+        parser.isSet(verify_report_workflow) || parser.isSet(verify_camera_panel);
+    if (isolated_ui_run) QStandardPaths::setTestModeEnabled(true);
 
     CameraMainWindow window;
     if (parser.isSet(verify_camera_panel)) {
@@ -413,7 +426,7 @@ int main(int argc, char* argv[])
         }
         auto* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
         auto* list = window.findChild<QListWidget*>(QStringLiteral("MeasurementResultList"));
-        auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
+        auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("MainToolbar"));
         auto* color = window.findChild<QToolButton*>(
             QStringLiteral("MeasurementColorToolButton"));
         auto* reset_color = window.findChild<QToolButton*>(
@@ -423,15 +436,9 @@ int main(int argc, char* argv[])
         QImage frame(100, 100, QImage::Format_RGB32);
         frame.fill(Qt::black);
         const QVector<QPointF> measurement_points{{20.0, 20.0}, {40.0, 20.0}};
-        QAction* length_action = nullptr;
-        if (toolbar) {
-            for (QAction* action : toolbar->actions()) {
-                if (action->data().toInt() == static_cast<int>(CanvasTool::Length)) {
-                    length_action = action;
-                    break;
-                }
-            }
-        }
+        QAction* length_action = window.findChild<QAction*>(
+            QStringLiteral("MeasurementToolbarTool%1")
+                .arg(static_cast<int>(CanvasTool::Length)));
         if (!canvas || !list || !toolbar || !length_action || !selection ||
             !color || !reset_color ||
             !color->isEnabled() ||
@@ -764,14 +771,58 @@ int main(int argc, char* argv[])
         return application.exec();
     }
     if (parser.isSet(verify_measurement_toolbar)) {
-        QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
-        const QStringList expected{
-            QStringLiteral("标定"), QStringLiteral("点坐标"), QStringLiteral("长度"), QStringLiteral("折线"),
-            QStringLiteral("角度"), QStringLiteral("矩形"), QStringLiteral("多边形"), QStringLiteral("圆"),
-            QStringLiteral("椭圆"), QStringLiteral("剖线"), QStringLiteral("选择"),
-            QStringLiteral("重命名"), QStringLiteral("设置颜色"), QStringLiteral("默认颜色"),
-            QStringLiteral("删除选中"), QStringLiteral("清空测量"), QStringLiteral("导出 CSV"),
-            QStringLiteral("智能框选"), QStringLiteral("开始计数"), QStringLiteral("自动寻边")};
+        QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MainToolbar"));
+        QMenu* display_menu = window.findChild<QMenu*>(QStringLiteral("ToolbarDisplayMenu"));
+        QAction* more_action = window.findChild<QAction*>(QStringLiteral("ToolbarMoreAction"));
+        QMenu* more_menu = window.findChild<QMenu*>(QStringLiteral("ToolbarMoreMenu"));
+        if (!toolbar || !display_menu || !more_action || !more_menu ||
+            window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar")) ||
+            window.findChildren<QToolBar*>().size() != 1) {
+            qCritical() << "The application must expose exactly one unified toolbar.";
+            return 51;
+        }
+        for (QAction* action : display_menu->actions()) {
+            if (action->data().toInt() == 0) {
+                action->trigger();
+                break;
+            }
+        }
+
+        const QStringList required_actions{
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Calibration)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Point)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Length)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Polyline)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Angle)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Rectangle)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Polygon)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Circle)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Ellipse)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::ProfileLine)),
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::None)),
+            QStringLiteral("RenameMeasurementAction"), QStringLiteral("MeasurementColorAction"),
+            QStringLiteral("ResetMeasurementColorAction"), QStringLiteral("DeleteMeasurementAction"),
+            QStringLiteral("ClearMeasurementsAction"), QStringLiteral("ExportMeasurementsAction"),
+            QStringLiteral("SmartSampleAction"), QStringLiteral("SmartCountRunAction"),
+            QStringLiteral("EdgeSnapAction")};
+        for (const QString& name : required_actions) {
+            QAction* action = window.findChild<QAction*>(name);
+            if (!action || action->icon().isNull() || action->toolTip().isEmpty()) {
+                qCritical() << "Unified toolbar action is incomplete:" << name;
+                return 52;
+            }
+        }
+        if (window.findChild<QAction*>(QStringLiteral("ExportImageAction"))->isEnabled() ||
+            window.findChild<QAction*>(QStringLiteral("MeasurementToolbarTool%1")
+                .arg(static_cast<int>(CanvasTool::Calibration)))->isEnabled() ||
+            window.findChild<QAction*>(QStringLiteral("MeasurementToolbarTool%1")
+                .arg(static_cast<int>(CanvasTool::None)))->isEnabled() ||
+            window.findChild<QAction*>(QStringLiteral("ClearMeasurementsAction"))->isEnabled() ||
+            window.findChild<QAction*>(QStringLiteral("ExportMeasurementsAction"))->isEnabled()) {
+            qCritical() << "Image and measurement actions must start disabled without data.";
+            return 52;
+        }
+
         const QStringList expected_panel_buttons{
             QStringLiteral("MeasurementPointButton"),
             QStringLiteral("MeasurementLengthButton"),
@@ -789,49 +840,141 @@ int main(int argc, char* argv[])
             QStringLiteral("MeasurementDeleteToolButton"),
             QStringLiteral("MeasurementClearToolButton"),
             QStringLiteral("MeasurementExportToolButton")};
-        QStringList actual;
-        QStringList aligned_panel_buttons;
-        bool icons_complete = toolbar != nullptr;
-        bool presentation_aligned = toolbar != nullptr;
-        int presentation_error = toolbar ? 0 : 1;
-        if (toolbar) {
-            for (QAction* action : toolbar->actions()) {
-                if (action->isSeparator()) continue;
-                actual.push_back(action->text());
-                icons_complete = icons_complete && !action->icon().isNull();
-                const QString panel_name = action->property("measurementPanelButton").toString();
-                if (panel_name.isEmpty()) continue;
-                aligned_panel_buttons.push_back(panel_name);
-                const auto* panel_button = window.findChild<QToolButton*>(panel_name);
-                const auto* toolbar_button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
-                if (!panel_button) presentation_error = 2;
-                else if (!toolbar_button) presentation_error = 3;
-                else if (action->text() != panel_button->text()) presentation_error = 4;
-                else if (action->toolTip() != panel_button->toolTip()) presentation_error = 5;
-                else if (action->isCheckable() != panel_button->isCheckable()) presentation_error = 6;
-                else if (toolbar_button->iconSize() != panel_button->iconSize()) {
-                    presentation_error = 7;
-                }
-                else if (toolbar_button->toolButtonStyle() != panel_button->toolButtonStyle()) presentation_error = 8;
-                else if (toolbar_button->property("role") != panel_button->property("role")) presentation_error = 9;
-                presentation_aligned = presentation_aligned && presentation_error == 0;
+        for (const QString& panel_name : expected_panel_buttons) {
+            auto* panel_button = window.findChild<QToolButton*>(panel_name);
+            QAction* action = panel_button ? panel_button->defaultAction() : nullptr;
+            if (!panel_button || !action ||
+                action->property("measurementPanelButton").toString() != panel_name ||
+                panel_button->text() != action->text() ||
+                panel_button->toolTip() != action->toolTip() ||
+                panel_button->isCheckable() != action->isCheckable() ||
+                panel_button->property("role") != action->property("role")) {
+                qCritical() << "Measurement panel does not share its toolbar action:" << panel_name;
+                return 53;
             }
         }
-        if (!icons_complete || actual != expected) {
-            qCritical() << "Measurement toolbar action, order, or icon coverage is incomplete."
-                        << "expected=" << expected << "actual=" << actual;
-            return 51;
+
+        const auto direct_texts = [toolbar] {
+            QStringList values;
+            for (QAction* action : toolbar->actions()) {
+                if (!action->isSeparator()) values.push_back(action->text());
+            }
+            return values;
+        };
+        window.show();
+        QCoreApplication::processEvents();
+        window.resize(960, 640);
+        QCoreApplication::processEvents();
+        const QStringList compact_expected{
+            QStringLiteral("打开图像…"), QStringLiteral("适合窗口"), QStringLiteral("选择"),
+            QStringLiteral("点坐标"), QStringLiteral("长度"), QStringLiteral("角度"),
+            QStringLiteral("矩形"), QStringLiteral("圆"), QStringLiteral("更多")};
+        if (direct_texts() != compact_expected ||
+            toolbar->toolButtonStyle() != Qt::ToolButtonIconOnly ||
+            !window.findChild<QToolButton*>(QStringLiteral("ToolbarMoreButton"))) {
+            qCritical() << "Compact toolbar presentation is incorrect:" << direct_texts();
+            return 54;
         }
-        if (!presentation_aligned || aligned_panel_buttons != expected_panel_buttons) {
-            qCritical() << "Measurement toolbar and panel buttons are not aligned."
-                        << "expected=" << expected_panel_buttons
-                        << "actual=" << aligned_panel_buttons;
-            return presentation_error > 100 ? presentation_error
-                : (presentation_error == 0 ? 70 : 60 + presentation_error);
+        window.resize(1280, 800);
+        QCoreApplication::processEvents();
+        const QStringList standard_expected{
+            QStringLiteral("打开图像…"), QStringLiteral("导出当前图像…"),
+            QStringLiteral("3D 点云工作台…"), QStringLiteral("适合窗口"),
+            QStringLiteral("3D 高度图…"), QStringLiteral("标定"), QStringLiteral("选择"),
+            QStringLiteral("点坐标"), QStringLiteral("长度"), QStringLiteral("角度"),
+            QStringLiteral("矩形"), QStringLiteral("圆"), QStringLiteral("更多")};
+        if (direct_texts() != standard_expected ||
+            toolbar->toolButtonStyle() != Qt::ToolButtonTextUnderIcon) {
+            qCritical() << "Standard toolbar presentation is incorrect:" << direct_texts();
+            return 55;
         }
-        if (window.toolBarBreak(toolbar)) {
-            qCritical() << "Measurement toolbar must share one row with the main toolbar.";
-            return 53;
+        window.showNormal();
+        window.setGeometry(0, 0, 1920, 1080);
+        QCoreApplication::processEvents();
+        QStringList expanded_expected = standard_expected;
+        expanded_expected.removeLast();
+        expanded_expected.append({QStringLiteral("设置颜色"), QStringLiteral("删除选中"),
+            QStringLiteral("清空测量"), QStringLiteral("导出 CSV"), QStringLiteral("更多")});
+        const QStringList wide_expected = window.width() >= 1680
+            ? expanded_expected : standard_expected;
+        if (direct_texts() != wide_expected) {
+            qCritical() << "Expanded toolbar presentation is incorrect:" << direct_texts();
+            return 56;
+        }
+
+        const QStringList more_groups{
+            QStringLiteral("绘制工具"), QStringLiteral("测量管理"),
+            QStringLiteral("智能测量"), QStringLiteral("视图功能")};
+        QStringList actual_groups;
+        for (QAction* action : more_menu->actions()) {
+            if (action->menu()) actual_groups.push_back(action->text());
+        }
+        if (actual_groups != more_groups) {
+            qCritical() << "More menu groups are incomplete:" << actual_groups;
+            return 57;
+        }
+
+        auto* canvas = window.findChild<ImageCanvas*>(QStringLiteral("ImageCanvas"));
+        auto* list = window.findChild<QListWidget*>(QStringLiteral("MeasurementResultList"));
+        QAction* calibration = window.findChild<QAction*>(
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Calibration)));
+        QAction* length = window.findChild<QAction*>(
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Length)));
+        QAction* polyline = window.findChild<QAction*>(
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::Polyline)));
+        QAction* selection = window.findChild<QAction*>(
+            QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(CanvasTool::None)));
+        QAction* rename = window.findChild<QAction*>(QStringLiteral("RenameMeasurementAction"));
+        QAction* remove = window.findChild<QAction*>(QStringLiteral("DeleteMeasurementAction"));
+        QAction* clear = window.findChild<QAction*>(QStringLiteral("ClearMeasurementsAction"));
+        QAction* csv = window.findChild<QAction*>(QStringLiteral("ExportMeasurementsAction"));
+        if (!canvas || !list || !calibration || !length || !polyline || !selection ||
+            !rename || !remove || !clear || !csv) {
+            qCritical() << "Unified toolbar actions are missing.";
+            return 58;
+        }
+        QImage frame(100, 100, QImage::Format_RGB32);
+        frame.fill(Qt::black);
+        if (!QMetaObject::invokeMethod(&window, "onCameraFrame", Qt::DirectConnection,
+                Q_ARG(QImage, frame), Q_ARG(quint64, 1), Q_ARG(quint32, 0)) ||
+            !length->isEnabled() || selection->isEnabled()) {
+            qCritical() << "Image availability did not update shared actions.";
+            return 59;
+        }
+        length->trigger();
+        const QVector<QPointF> points{{10.0, 10.0}, {40.0, 10.0}};
+        if (!QMetaObject::invokeMethod(&window, "onCanvasPoints", Qt::DirectConnection,
+                Q_ARG(CanvasTool, CanvasTool::Length), Q_ARG(QVector<QPointF>, points)) ||
+            list->count() != 1 || !selection->isEnabled() || !rename->isEnabled() ||
+            !remove->isEnabled() || !clear->isEnabled() || !csv->isEnabled()) {
+            qCritical() << "Measurement availability did not update shared actions.";
+            return 60;
+        }
+        window.resize(960, 640);
+        QCoreApplication::processEvents();
+        polyline->trigger();
+        if (!more_action->isChecked() || more_action->text() != QStringLiteral("折线") ||
+            !polyline->isChecked()) {
+            qCritical() << "A hidden active tool is not reflected by the More button.";
+            return 61;
+        }
+        QKeyEvent escape_event(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(canvas, &escape_event);
+        if (canvas->tool() != CanvasTool::None || !selection->isChecked() || more_action->isChecked()) {
+            qCritical() << "Escape did not restore the shared selection state.";
+            return 62;
+        }
+        const int selected_row = list->currentRow();
+        QTimer::singleShot(0, [] {
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+                box->done(QMessageBox::Cancel);
+            }
+        });
+        clear->trigger();
+        if (list->count() != 1 || list->currentRow() != selected_row ||
+            canvas->tool() != CanvasTool::None) {
+            qCritical() << "Canceling Clear changed measurement or tool state.";
+            return 63;
         }
         return 0;
     }

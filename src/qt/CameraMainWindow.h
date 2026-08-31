@@ -22,6 +22,8 @@
 
 #include <QMainWindow>
 #include <QElapsedTimer>
+#include <QHash>
+#include <QIcon>
 #include <QStringList>
 #include <QThread>
 
@@ -39,6 +41,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
 class QGroupBox;
+class QMenu;
 class QToolButton;
 class QLabel;
 class QListWidget;
@@ -49,6 +52,7 @@ class QSpinBox;
 class QTabWidget;
 class QTimer;
 class QToolBar;
+class QResizeEvent;
 
 class CameraMainWindow final : public QMainWindow {
     Q_OBJECT
@@ -61,6 +65,7 @@ protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void openImage();
@@ -112,6 +117,10 @@ private slots:
 private:
     void setupUi();
     void setupMenusAndToolbar();
+    void updateToolbarPresentation();
+    void updateToolbarActionStates();
+    void updateToolbarToolState(CanvasTool tool);
+    void bindMeasurementPanelActions();
     QWidget* buildCameraPage();
     QWidget* buildImagePage();
     QWidget* buildFluorescencePage();
@@ -212,6 +221,18 @@ private:
     void restoreToolAfterCameraRoi(const QString& message);
     void applyCameraRoiInputs();
     void resetCameraRoi();
+
+    enum class ToolbarDisplayPreference {
+        Automatic,
+        IconsAndText,
+        IconsOnly
+    };
+
+    enum class ToolbarPresentationMode {
+        Expanded,
+        Standard,
+        Compact
+    };
 
     ImageCanvas* canvas_ = nullptr;
     QDockWidget* function_dock_ = nullptr;
@@ -318,9 +339,31 @@ private:
     QPushButton* smart_count_button_ = nullptr;
     QProgressBar* smart_count_progress_ = nullptr;
     QListWidget* smart_result_list_ = nullptr;
+    QAction* open_action_ = nullptr;
     QAction* export_action_ = nullptr;
+    QAction* point_cloud_action_ = nullptr;
+    QAction* fit_action_ = nullptr;
+    QAction* surface_action_ = nullptr;
+    QAction* calibration_action_ = nullptr;
+    QAction* selection_action_ = nullptr;
+    QAction* rename_measurement_action_ = nullptr;
     QAction* measurement_color_action_ = nullptr;
-    QToolBar* measurement_toolbar_ = nullptr;
+    QAction* reset_measurement_color_action_ = nullptr;
+    QAction* delete_measurement_action_ = nullptr;
+    QAction* clear_measurements_action_ = nullptr;
+    QAction* export_measurements_action_ = nullptr;
+    QAction* smart_sample_action_ = nullptr;
+    QAction* smart_run_action_ = nullptr;
+    QAction* edge_snap_action_ = nullptr;
+    QAction* toolbar_more_action_ = nullptr;
+    QHash<int, QAction*> measurement_tool_actions_;
+    QToolBar* main_toolbar_ = nullptr;
+    QMenu* toolbar_more_menu_ = nullptr;
+    ToolbarDisplayPreference toolbar_display_preference_ =
+        ToolbarDisplayPreference::Automatic;
+    ToolbarPresentationMode toolbar_presentation_mode_ =
+        ToolbarPresentationMode::Standard;
+    QIcon toolbar_more_default_icon_;
 
     QThread camera_thread_;
     CameraWorker* camera_worker_ = nullptr;

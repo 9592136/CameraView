@@ -54,10 +54,20 @@ void applyCameraViewTheme(QApplication& application)
             background: #151c25;
             border: 0;
             border-bottom: 1px solid #273241;
-            padding: 6px 9px;
-            spacing: 5px;
+            padding: 4px 8px;
+            spacing: 4px;
         }
         QToolBar::separator { width: 1px; background: #344152; margin: 4px 7px; }
+        QToolBar#MainToolbar { min-height: 66px; }
+        QToolBar#MainToolbar QToolButton {
+            min-width: 44px;
+            min-height: 56px;
+            padding: 4px 7px;
+        }
+        QToolBar#MainToolbar[presentationMode="compact"] QToolButton {
+            min-width: 42px;
+            padding: 4px 6px;
+        }
         QToolButton {
             background: transparent;
             border: 1px solid transparent;
@@ -67,7 +77,10 @@ void applyCameraViewTheme(QApplication& application)
         QToolButton:hover { background: #222d3a; border-color: #344456; }
         QToolButton:pressed, QToolButton:checked { background: #253b5a; border-color: #397fdf; }
         QToolButton[role="measurementTool"],
-        QToolButton[role="measurementAction"] {
+        QToolButton[role="measurementAction"],
+        QToolButton[role="toolbarCommand"],
+        QToolButton[role="toolbarMore"],
+        QToolButton[role="dangerAction"] {
             background: #1d2733;
             border: 1px solid #354558;
             border-radius: 8px;
@@ -75,11 +88,14 @@ void applyCameraViewTheme(QApplication& application)
             font-weight: 500;
         }
         QToolButton[role="measurementTool"]:hover,
-        QToolButton[role="measurementAction"]:hover {
+        QToolButton[role="measurementAction"]:hover,
+        QToolButton[role="toolbarCommand"]:hover,
+        QToolButton[role="toolbarMore"]:hover {
             background: #263548;
             border-color: #52729a;
         }
-        QToolButton[role="measurementTool"]:checked {
+        QToolButton[role="measurementTool"]:checked,
+        QToolButton[role="toolbarMore"][hiddenActiveTool="true"] {
             background: #25558f;
             border-color: #69a7ff;
             color: #ffffff;
@@ -89,8 +105,20 @@ void applyCameraViewTheme(QApplication& application)
             background: #253b5a;
             border-color: #397fdf;
         }
+        QToolButton[role="dangerAction"]:hover {
+            background: #3a2228;
+            border-color: #b94b5b;
+            color: #ffd7dc;
+        }
+        QToolButton[role="dangerAction"]:pressed {
+            background: #5a2630;
+            border-color: #ef6477;
+            color: #ffffff;
+        }
         QToolButton[role="measurementTool"]:disabled,
-        QToolButton[role="measurementAction"]:disabled {
+        QToolButton[role="measurementAction"]:disabled,
+        QToolButton[role="toolbarCommand"]:disabled,
+        QToolButton[role="dangerAction"]:disabled {
             background: #171e27;
             color: #657184;
             border-color: #28323e;

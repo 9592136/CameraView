@@ -72,7 +72,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPainter>
-#include <QShortcut>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSettings>
@@ -239,6 +239,18 @@ QString imageFilterStepDescription(const ImageFilterStep& step)
     }
 }
 
+QIcon toolbarMoreIcon()
+{
+    QPixmap pixmap(30, 30);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(132, 190, 255));
+    for (int x : {8, 15, 22}) painter.drawEllipse(QPointF(x, 15), 2.1, 2.1);
+    return QIcon(pixmap);
+}
+
 } // namespace
 
 CameraMainWindow::CameraMainWindow(QWidget* parent)
@@ -264,17 +276,11 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("state")).toByteArray());
     settings.endGroup();
-    if (measurement_toolbar_) {
-        removeToolBarBreak(measurement_toolbar_);
-        // Older saved QMainWindow state can restore the former 24 px toolbar size.
-        // Re-apply the shared measurement-button size after restoring the layout.
-        measurement_toolbar_->setIconSize(QSize(30, 30));
-        for (QAction* action : measurement_toolbar_->actions()) {
-            if (auto* button = qobject_cast<QToolButton*>(
-                    measurement_toolbar_->widgetForAction(action))) {
-                button->setIconSize(QSize(30, 30));
-            }
-        }
+    if (main_toolbar_) {
+        removeToolBarBreak(main_toolbar_);
+        main_toolbar_->setIconSize(QSize(30, 30));
+        updateToolbarPresentation();
+        updateToolbarActionStates();
     }
     setAcceptDrops(true);
 
@@ -507,7 +513,7 @@ void CameraMainWindow::setupUi()
 void CameraMainWindow::setupMenusAndToolbar()
 {
     QMenu* file_menu = menuBar()->addMenu(tr("文件(&F)"));
-    QAction* open_action = file_menu->addAction(tr("打开图像…"), QKeySequence::Open, this, &CameraMainWindow::openImage);
+    open_action_ = file_menu->addAction(tr("打开图像…"), QKeySequence::Open, this, &CameraMainWindow::openImage);
     export_action_ = file_menu->addAction(tr("导出当前图像…"), QKeySequence::SaveAs, this, &CameraMainWindow::exportImage);
     file_menu->addSeparator();
     file_menu->addAction(tr("打开项目…"), this, &CameraMainWindow::openProject);
@@ -566,23 +572,62 @@ void CameraMainWindow::setupMenusAndToolbar()
         transform_frame(QTransform().rotate(-90.0), QObject::tr("逆时针旋转结果"));
     });
     image_menu->addSeparator();
-    QAction* surface_action = image_menu->addAction(tr("3D 高度图…"), this, &CameraMainWindow::show3DView);
-    surface_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
+    surface_action_ = image_menu->addAction(tr("3D 高度图…"), this, &CameraMainWindow::show3DView);
+    surface_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
     QAction* profile_action = image_menu->addAction(tr("剖线测量"), this, &CameraMainWindow::startProfileMeasurement);
     profile_action->setShortcut(QKeySequence(Qt::Key_P));
 
     QMenu* three_d_menu = menuBar()->addMenu(tr("3D(&D)"));
-    QAction* point_cloud_action = three_d_menu->addAction(
+    point_cloud_action_ = three_d_menu->addAction(
         tr("3D 点云工作台…"), this, &CameraMainWindow::showPointCloudWorkspace);
-    point_cloud_action->setObjectName(QStringLiteral("PointCloudWorkspaceAction"));
-    point_cloud_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+3")));
-    point_cloud_action->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
-    three_d_menu->addAction(surface_action);
+    point_cloud_action_->setObjectName(QStringLiteral("PointCloudWorkspaceAction"));
+    point_cloud_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+3")));
+    point_cloud_action_->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
+    three_d_menu->addAction(surface_action_);
 
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
-    view_menu->addAction(tr("适合窗口"), QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
+    fit_action_ = view_menu->addAction(
+        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"),
+        QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
+    fit_action_->setObjectName(QStringLiteral("FitToViewAction"));
     view_menu->addSeparator();
     view_menu->addAction(function_dock_->toggleViewAction());
+    QMenu* toolbar_display_menu = view_menu->addMenu(tr("工具栏显示"));
+    toolbar_display_menu->setObjectName(QStringLiteral("ToolbarDisplayMenu"));
+    auto* toolbar_display_group = new QActionGroup(this);
+    toolbar_display_group->setExclusive(true);
+    auto add_toolbar_display_action = [this, toolbar_display_menu, toolbar_display_group](
+        const QString& text, ToolbarDisplayPreference preference) {
+        QAction* action = toolbar_display_menu->addAction(text);
+        action->setCheckable(true);
+        action->setData(static_cast<int>(preference));
+        toolbar_display_group->addAction(action);
+        action->setChecked(toolbar_display_preference_ == preference);
+        connect(action, &QAction::triggered, this, [this, preference] {
+            toolbar_display_preference_ = preference;
+            QSettings settings;
+            settings.beginGroup(QStringLiteral("MainWindow"));
+            settings.setValue(QStringLiteral("toolbarDisplay"), static_cast<int>(preference));
+            settings.setValue(QStringLiteral("toolbarLayoutVersion"), 2);
+            settings.endGroup();
+            updateToolbarPresentation();
+        });
+    };
+    {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("MainWindow"));
+        const int saved_preference = settings.value(
+            QStringLiteral("toolbarDisplay"),
+            static_cast<int>(ToolbarDisplayPreference::Automatic)).toInt();
+        settings.endGroup();
+        toolbar_display_preference_ = static_cast<ToolbarDisplayPreference>(
+            std::clamp(saved_preference,
+                static_cast<int>(ToolbarDisplayPreference::Automatic),
+                static_cast<int>(ToolbarDisplayPreference::IconsOnly)));
+    }
+    add_toolbar_display_action(tr("自动"), ToolbarDisplayPreference::Automatic);
+    add_toolbar_display_action(tr("图标和文字"), ToolbarDisplayPreference::IconsAndText);
+    add_toolbar_display_action(tr("仅图标"), ToolbarDisplayPreference::IconsOnly);
 
     QMenu* help_menu = menuBar()->addMenu(tr("帮助(&H)"));
     help_menu->addAction(tr("关于"), this, [this] {
@@ -594,70 +639,58 @@ void CameraMainWindow::setupMenusAndToolbar()
                "<p>Copyright © 2026 栗远</p>"));
     });
 
-    QToolBar* toolbar = addToolBar(tr("主工具栏"));
-    toolbar->setObjectName(QStringLiteral("MainToolbar"));
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(18, 18));
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    open_action->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    main_toolbar_ = addToolBar(tr("主工具栏"));
+    main_toolbar_->setObjectName(QStringLiteral("MainToolbar"));
+    main_toolbar_->setMovable(false);
+    main_toolbar_->setFloatable(false);
+    main_toolbar_->setIconSize(QSize(30, 30));
+    main_toolbar_->setMinimumHeight(66);
+    main_toolbar_->setAllowedAreas(Qt::TopToolBarArea);
+    open_action_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    open_action_->setObjectName(QStringLiteral("OpenImageAction"));
     export_action_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    export_action_->setObjectName(QStringLiteral("ExportImageAction"));
     export_action_->setEnabled(false);
-    toolbar->addAction(open_action);
-    toolbar->addAction(export_action_);
-    toolbar->addSeparator();
-    toolbar->addAction(point_cloud_action);
-    toolbar->addSeparator();
-    QAction* fit_action = toolbar->addAction(
-        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
-    fit_action->setShortcut(QKeySequence(Qt::Key_F));
-    toolbar->addSeparator();
-    toolbar->addAction(surface_action);
+    surface_action_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    surface_action_->setObjectName(QStringLiteral("ImageSurface3DAction"));
 
-    measurement_toolbar_ = new QToolBar(tr("测量工具栏"), this);
-    measurement_toolbar_->setObjectName(QStringLiteral("MeasurementToolbar"));
-    measurement_toolbar_->setMovable(false);
-    measurement_toolbar_->setIconSize(QSize(30, 30));
-    measurement_toolbar_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    addToolBar(Qt::TopToolBarArea, measurement_toolbar_);
-    removeToolBarBreak(measurement_toolbar_);
-
-    auto* measurement_actions = new QActionGroup(measurement_toolbar_);
-    measurement_actions->setExclusive(true);
-    auto align_toolbar_button = [this](
-        QAction* action,
-        const QString& role,
-        const QString& panelButtonObjectName = {}) {
+    auto configure_action = [](QAction* action, const QString& description,
+                                const QString& role = QStringLiteral("toolbarCommand")) {
         if (!action) return;
-        if (!panelButtonObjectName.isEmpty()) {
-            action->setProperty("measurementPanelButton", panelButtonObjectName);
+        QString tooltip = description;
+        if (!action->shortcut().isEmpty()) {
+            tooltip += QObject::tr("（%1）").arg(action->shortcut().toString(QKeySequence::NativeText));
         }
-        if (auto* button = qobject_cast<QToolButton*>(measurement_toolbar_->widgetForAction(action))) {
-            button->setProperty("role", role);
-            button->setProperty("measurementPanelButton", panelButtonObjectName);
-            button->setIconSize(QSize(30, 30));
-            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            button->setMinimumHeight(64);
-            button->setAccessibleName(action->text());
-            button->setAccessibleDescription(action->toolTip());
-        }
+        action->setToolTip(tooltip);
+        action->setStatusTip(description);
+        action->setProperty("baseToolTip", tooltip);
+        action->setProperty("role", role);
     };
-    auto add_canvas_action = [this, measurement_actions, align_toolbar_button](
+    configure_action(open_action_, tr("打开本地图像"));
+    configure_action(export_action_, tr("导出当前显示图像"));
+    configure_action(point_cloud_action_, tr("打开 3D 点云工作台"));
+    configure_action(fit_action_, tr("让图像完整适合当前窗口"));
+    configure_action(surface_action_, tr("根据当前图像生成 3D 高度图"));
+
+    auto* measurement_actions = new QActionGroup(this);
+    measurement_actions->setExclusive(true);
+    auto add_canvas_action = [this, measurement_actions, configure_action](
         MeasurementToolGlyph glyph,
         CanvasTool tool,
         const QString& text,
         const QString& status,
         const QString& panelButtonObjectName,
         const QKeySequence& shortcut = {}) {
-        QAction* action = measurement_toolbar_->addAction(measurementToolIcon(glyph), text);
+        auto* action = new QAction(measurementToolIcon(glyph), text, this);
         action->setCheckable(true);
         action->setData(static_cast<int>(tool));
-        action->setToolTip(status);
-        action->setStatusTip(status);
         action->setObjectName(QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(tool)));
         if (!shortcut.isEmpty()) action->setShortcut(shortcut);
+        configure_action(action, status, QStringLiteral("measurementTool"));
+        action->setProperty("measurementPanelButton", panelButtonObjectName);
         measurement_actions->addAction(action);
         action->setChecked(canvas_->tool() == tool);
-        align_toolbar_button(action, QStringLiteral("measurementTool"), panelButtonObjectName);
+        measurement_tool_actions_.insert(static_cast<int>(tool), action);
         connect(action, &QAction::triggered, this, [this, tool, status] {
             if (tool == CanvasTool::None) {
                 enterMeasurementSelectionMode();
@@ -667,9 +700,8 @@ void CameraMainWindow::setupMenusAndToolbar()
         });
         return action;
     };
-    add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
+    calibration_action_ = add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
         tr("标定"), tr("在图像上选择标定线的两个端点"), {});
-    measurement_toolbar_->addSeparator();
     add_canvas_action(MeasurementToolGlyph::Point, CanvasTool::Point,
         tr("点坐标"), tr("记录图像中一个点的坐标"),
         QStringLiteral("MeasurementPointButton"));
@@ -697,87 +729,352 @@ void CameraMainWindow::setupMenusAndToolbar()
     add_canvas_action(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
         tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"),
         QStringLiteral("MeasurementProfileButton"));
-    add_canvas_action(MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
+    selection_action_ = add_canvas_action(MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
         tr("选择"), tr("进入选择模式：选择、拖动或编辑测量对象"),
         QStringLiteral("MeasurementSelectionButton"));
 
-    measurement_toolbar_->addSeparator();
-    QAction* rename_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::RenameMeasurement), tr("重命名"));
-    rename_action->setToolTip(tr("重命名当前选中的测量结果"));
-    align_toolbar_button(rename_action, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementRenameToolButton"));
-    connect(rename_action, &QAction::triggered,
+    rename_measurement_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::RenameMeasurement), tr("重命名"), this);
+    rename_measurement_action_->setObjectName(QStringLiteral("RenameMeasurementAction"));
+    rename_measurement_action_->setShortcut(QKeySequence(Qt::Key_F2));
+    rename_measurement_action_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    rename_measurement_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementRenameToolButton"));
+    configure_action(rename_measurement_action_, tr("重命名当前选中的测量结果"),
+        QStringLiteral("measurementAction"));
+    connect(rename_measurement_action_, &QAction::triggered,
         this, &CameraMainWindow::renameSelectedMeasurement);
-    measurement_color_action_ = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::MeasurementColor), tr("设置颜色"));
-    measurement_color_action_->setToolTip(tr("设置全部测量统一使用的全局颜色"));
-    align_toolbar_button(measurement_color_action_, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementColorToolButton"));
+    measurement_color_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::MeasurementColor), tr("设置颜色"), this);
+    measurement_color_action_->setObjectName(QStringLiteral("MeasurementColorAction"));
+    measurement_color_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementColorToolButton"));
+    configure_action(measurement_color_action_, tr("设置全部测量统一使用的全局颜色"),
+        QStringLiteral("measurementAction"));
     connect(measurement_color_action_, &QAction::triggered,
         this, &CameraMainWindow::chooseSelectedMeasurementColor);
-    QAction* reset_color_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ResetMeasurementColor), tr("默认颜色"));
-    reset_color_action->setToolTip(tr("恢复系统默认的全局测量颜色"));
-    align_toolbar_button(reset_color_action, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementResetColorToolButton"));
-    connect(reset_color_action, &QAction::triggered,
+    reset_measurement_color_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ResetMeasurementColor), tr("默认颜色"), this);
+    reset_measurement_color_action_->setObjectName(QStringLiteral("ResetMeasurementColorAction"));
+    reset_measurement_color_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementResetColorToolButton"));
+    configure_action(reset_measurement_color_action_, tr("恢复系统默认的全局测量颜色"),
+        QStringLiteral("measurementAction"));
+    connect(reset_measurement_color_action_, &QAction::triggered,
         this, &CameraMainWindow::resetSelectedMeasurementColor);
-    QAction* delete_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除选中"));
-    delete_action->setToolTip(tr("删除当前选中的测量结果"));
-    align_toolbar_button(delete_action, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementDeleteToolButton"));
-    connect(delete_action, &QAction::triggered,
+    delete_measurement_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除选中"), this);
+    delete_measurement_action_->setObjectName(QStringLiteral("DeleteMeasurementAction"));
+    delete_measurement_action_->setShortcut(QKeySequence::Delete);
+    delete_measurement_action_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    delete_measurement_action_->setProperty("role", QStringLiteral("dangerAction"));
+    delete_measurement_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementDeleteToolButton"));
+    configure_action(delete_measurement_action_, tr("删除当前选中的测量结果"),
+        QStringLiteral("dangerAction"));
+    connect(delete_measurement_action_, &QAction::triggered,
         this, &CameraMainWindow::deleteSelectedMeasurement);
-    QAction* clear_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空测量"));
-    clear_action->setToolTip(tr("清空全部测量结果"));
-    align_toolbar_button(clear_action, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementClearToolButton"));
-    connect(clear_action, &QAction::triggered, this, &CameraMainWindow::clearMeasurements);
-    QAction* export_measurements_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"));
-    export_measurements_action->setToolTip(tr("导出全部测量结果为 CSV"));
-    align_toolbar_button(export_measurements_action, QStringLiteral("measurementAction"),
-        QStringLiteral("MeasurementExportToolButton"));
-    connect(export_measurements_action, &QAction::triggered,
+    clear_measurements_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空测量"), this);
+    clear_measurements_action_->setObjectName(QStringLiteral("ClearMeasurementsAction"));
+    clear_measurements_action_->setProperty("role", QStringLiteral("dangerAction"));
+    clear_measurements_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementClearToolButton"));
+    configure_action(clear_measurements_action_, tr("清空全部测量结果"),
+        QStringLiteral("dangerAction"));
+    connect(clear_measurements_action_, &QAction::triggered,
+        this, &CameraMainWindow::clearMeasurements);
+    export_measurements_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"), this);
+    export_measurements_action_->setObjectName(QStringLiteral("ExportMeasurementsAction"));
+    export_measurements_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementExportToolButton"));
+    configure_action(export_measurements_action_, tr("导出全部测量结果为 CSV"),
+        QStringLiteral("measurementAction"));
+    connect(export_measurements_action_, &QAction::triggered,
         this, &CameraMainWindow::exportMeasurements);
 
-    measurement_toolbar_->addSeparator();
-    QAction* smart_sample_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"));
-    smart_sample_action->setCheckable(true);
-    smart_sample_action->setData(static_cast<int>(CanvasTool::SmartCountSample));
-    smart_sample_action->setToolTip(tr("连续框选典型目标作为自动计数样本"));
-    measurement_actions->addAction(smart_sample_action);
-    align_toolbar_button(smart_sample_action, QStringLiteral("measurementTool"));
-    connect(smart_sample_action, &QAction::triggered,
+    smart_sample_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"), this);
+    smart_sample_action_->setObjectName(QStringLiteral("SmartSampleAction"));
+    smart_sample_action_->setCheckable(true);
+    smart_sample_action_->setData(static_cast<int>(CanvasTool::SmartCountSample));
+    configure_action(smart_sample_action_, tr("连续框选典型目标作为自动计数样本"),
+        QStringLiteral("measurementTool"));
+    measurement_actions->addAction(smart_sample_action_);
+    connect(smart_sample_action_, &QAction::triggered,
         this, &CameraMainWindow::startSmartTargetSampleSelection);
 
-    connect(canvas_, &ImageCanvas::toolChanged, measurement_toolbar_,
-        [measurement_actions](CanvasTool tool) {
+    connect(canvas_, &ImageCanvas::toolChanged, this,
+        [this, measurement_actions](CanvasTool tool) {
             measurement_actions->setExclusive(false);
             for (QAction* action : measurement_actions->actions()) {
                 action->setChecked(action->data().toInt() == static_cast<int>(tool));
             }
             measurement_actions->setExclusive(true);
+            updateToolbarToolState(tool);
+            updateToolbarActionStates();
         });
 
-    QAction* smart_run_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"));
-    smart_run_action->setToolTip(tr("根据已框选样本自动查找并统计目标"));
-    align_toolbar_button(smart_run_action, QStringLiteral("measurementAction"));
-    connect(smart_run_action, &QAction::triggered, this, &CameraMainWindow::runSmartTargetCounting);
+    smart_run_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"), this);
+    smart_run_action_->setObjectName(QStringLiteral("SmartCountRunAction"));
+    configure_action(smart_run_action_, tr("根据已框选样本自动查找并统计目标"),
+        QStringLiteral("measurementAction"));
+    connect(smart_run_action_, &QAction::triggered,
+        this, &CameraMainWindow::runSmartTargetCounting);
 
-    QAction* edge_snap_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"));
-    edge_snap_action->setCheckable(true);
-    edge_snap_action->setToolTip(tr("将测量落点吸附到附近最清晰的边缘"));
-    align_toolbar_button(edge_snap_action, QStringLiteral("measurementAction"));
-    connect(edge_snap_action, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
-    connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action, &QAction::setChecked);
+    edge_snap_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"), this);
+    edge_snap_action_->setObjectName(QStringLiteral("EdgeSnapAction"));
+    edge_snap_action_->setCheckable(true);
+    edge_snap_action_->setChecked(edge_snap_check_ && edge_snap_check_->isChecked());
+    configure_action(edge_snap_action_, tr("将测量落点吸附到附近最清晰的边缘"),
+        QStringLiteral("measurementAction"));
+    connect(edge_snap_action_, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
+    connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action_, &QAction::setChecked);
+
+    toolbar_more_default_icon_ = toolbarMoreIcon();
+    toolbar_more_menu_ = new QMenu(tr("更多命令"), this);
+    toolbar_more_menu_->setObjectName(QStringLiteral("ToolbarMoreMenu"));
+    QMenu* drawing_menu = toolbar_more_menu_->addMenu(tr("绘制工具"));
+    drawing_menu->addAction(calibration_action_);
+    drawing_menu->addSeparator();
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polyline)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polygon)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Ellipse)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::ProfileLine)));
+    QMenu* management_menu = toolbar_more_menu_->addMenu(tr("测量管理"));
+    management_menu->addActions({rename_measurement_action_, measurement_color_action_,
+        reset_measurement_color_action_});
+    management_menu->addSeparator();
+    management_menu->addActions({delete_measurement_action_, clear_measurements_action_,
+        export_measurements_action_});
+    QMenu* smart_menu = toolbar_more_menu_->addMenu(tr("智能测量"));
+    smart_menu->addActions({smart_sample_action_, smart_run_action_, edge_snap_action_});
+    QMenu* view_functions_menu = toolbar_more_menu_->addMenu(tr("视图功能"));
+    view_functions_menu->addActions({point_cloud_action_, fit_action_, surface_action_});
+    toolbar_more_action_ = new QAction(toolbar_more_default_icon_, tr("更多"), this);
+    toolbar_more_action_->setObjectName(QStringLiteral("ToolbarMoreAction"));
+    toolbar_more_action_->setMenu(toolbar_more_menu_);
+    toolbar_more_action_->setCheckable(true);
+    toolbar_more_action_->setProperty("role", QStringLiteral("toolbarMore"));
+    toolbar_more_action_->setToolTip(tr("更多工具与命令"));
+
+    bindMeasurementPanelActions();
+    measurement_list_->addAction(rename_measurement_action_);
+    measurement_list_->addAction(delete_measurement_action_);
+    updateToolbarPresentation();
+    updateToolbarToolState(canvas_->tool());
+    updateToolbarActionStates();
     updateMeasurementStyleUi();
+}
+
+void CameraMainWindow::bindMeasurementPanelActions()
+{
+    const QList<QAction*> shared_actions{
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Point)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Length)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polyline)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Angle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Rectangle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polygon)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Circle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Ellipse)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::ProfileLine)),
+        selection_action_, rename_measurement_action_, measurement_color_action_,
+        reset_measurement_color_action_, delete_measurement_action_, clear_measurements_action_,
+        export_measurements_action_};
+
+    for (QAction* action : shared_actions) {
+        if (!action) continue;
+        const QString object_name = action->property("measurementPanelButton").toString();
+        auto* button = findChild<QToolButton*>(object_name);
+        if (!button) continue;
+        QObject::disconnect(button, nullptr, this, nullptr);
+        button->setDefaultAction(action);
+        button->setObjectName(object_name);
+        button->setProperty("role", action->property("role"));
+        button->setIconSize(QSize(30, 30));
+        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+    }
+
+    auto bind_push_button = [this](const QString& object_name, QAction* action) {
+        auto* button = findChild<QPushButton*>(object_name);
+        if (!button || !action) return;
+        QObject::disconnect(button, nullptr, this, nullptr);
+        button->setIcon(action->icon());
+        button->setToolTip(action->toolTip());
+        button->setEnabled(action->isEnabled());
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+        connect(button, &QPushButton::clicked, action, &QAction::trigger);
+        connect(action, &QAction::changed, button, [button, action] {
+            button->setIcon(action->icon());
+            button->setToolTip(action->toolTip());
+            button->setEnabled(action->isEnabled());
+            button->setAccessibleDescription(action->toolTip());
+        });
+    };
+    bind_push_button(QStringLiteral("CalibrationStartButton"), calibration_action_);
+    bind_push_button(QStringLiteral("SmartCountSelectButton"), smart_sample_action_);
+    bind_push_button(QStringLiteral("SmartCountRunButton"), smart_run_action_);
+}
+
+void CameraMainWindow::updateToolbarPresentation()
+{
+    if (!main_toolbar_ || !toolbar_more_action_) return;
+
+    ToolbarPresentationMode mode = ToolbarPresentationMode::Standard;
+    if (width() < 1280) mode = ToolbarPresentationMode::Compact;
+    else if (width() >= 1680) mode = ToolbarPresentationMode::Expanded;
+
+    Qt::ToolButtonStyle button_style = Qt::ToolButtonTextUnderIcon;
+    if (toolbar_display_preference_ == ToolbarDisplayPreference::IconsOnly ||
+        (toolbar_display_preference_ == ToolbarDisplayPreference::Automatic &&
+         mode == ToolbarPresentationMode::Compact)) {
+        button_style = Qt::ToolButtonIconOnly;
+    }
+
+    const int presentation_key = static_cast<int>(mode) * 10 + static_cast<int>(button_style);
+    if (main_toolbar_->property("presentationKey").toInt() == presentation_key &&
+        main_toolbar_->property("presentationReady").toBool()) {
+        updateToolbarToolState(canvas_ ? canvas_->tool() : CanvasTool::None);
+        return;
+    }
+
+    toolbar_presentation_mode_ = mode;
+    main_toolbar_->setProperty("presentationKey", presentation_key);
+    main_toolbar_->setProperty("presentationReady", true);
+    main_toolbar_->setProperty("presentationMode",
+        mode == ToolbarPresentationMode::Compact ? QStringLiteral("compact") :
+        (mode == ToolbarPresentationMode::Expanded ? QStringLiteral("expanded") :
+                                                     QStringLiteral("standard")));
+    main_toolbar_->setToolButtonStyle(button_style);
+    main_toolbar_->setIconSize(QSize(30, 30));
+    main_toolbar_->clear();
+
+    const auto tool_action = [this](CanvasTool tool) {
+        return measurement_tool_actions_.value(static_cast<int>(tool));
+    };
+    auto add_group = [this](const QList<QAction*>& actions) {
+        if (actions.isEmpty()) return;
+        if (!main_toolbar_->actions().isEmpty()) main_toolbar_->addSeparator();
+        for (QAction* action : actions) {
+            if (action) main_toolbar_->addAction(action);
+        }
+    };
+
+    if (mode == ToolbarPresentationMode::Compact) {
+        add_group({open_action_, fit_action_});
+        add_group({selection_action_, tool_action(CanvasTool::Point),
+            tool_action(CanvasTool::Length), tool_action(CanvasTool::Angle),
+            tool_action(CanvasTool::Rectangle), tool_action(CanvasTool::Circle)});
+    } else {
+        add_group({open_action_, export_action_, point_cloud_action_, fit_action_, surface_action_});
+        add_group({calibration_action_, selection_action_, tool_action(CanvasTool::Point),
+            tool_action(CanvasTool::Length), tool_action(CanvasTool::Angle),
+            tool_action(CanvasTool::Rectangle), tool_action(CanvasTool::Circle)});
+        if (mode == ToolbarPresentationMode::Expanded) {
+            add_group({measurement_color_action_, delete_measurement_action_,
+                clear_measurements_action_, export_measurements_action_});
+        }
+    }
+    main_toolbar_->addSeparator();
+    main_toolbar_->addAction(toolbar_more_action_);
+
+    for (QAction* action : main_toolbar_->actions()) {
+        if (action->isSeparator()) continue;
+        auto* button = qobject_cast<QToolButton*>(main_toolbar_->widgetForAction(action));
+        if (!button) continue;
+        button->setProperty("role", action->property("role"));
+        button->setIconSize(QSize(30, 30));
+        button->setToolButtonStyle(button_style);
+        button->setMinimumHeight(60);
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+        if (action == toolbar_more_action_) {
+            button->setObjectName(QStringLiteral("ToolbarMoreButton"));
+            button->setPopupMode(QToolButton::InstantPopup);
+        }
+    }
+    main_toolbar_->style()->unpolish(main_toolbar_);
+    main_toolbar_->style()->polish(main_toolbar_);
+    updateToolbarToolState(canvas_ ? canvas_->tool() : CanvasTool::None);
+}
+
+void CameraMainWindow::updateToolbarToolState(CanvasTool tool)
+{
+    if (!toolbar_more_action_ || !main_toolbar_) return;
+    QAction* active_action = tool == CanvasTool::SmartCountSample
+        ? smart_sample_action_
+        : measurement_tool_actions_.value(static_cast<int>(tool));
+    const bool hidden_active = active_action && tool != CanvasTool::None &&
+        !main_toolbar_->actions().contains(active_action);
+    if (hidden_active) {
+        toolbar_more_action_->setIcon(active_action->icon());
+        toolbar_more_action_->setText(active_action->text());
+        toolbar_more_action_->setToolTip(tr("当前工具：%1；点击打开更多命令").arg(active_action->text()));
+    } else {
+        toolbar_more_action_->setIcon(toolbar_more_default_icon_);
+        toolbar_more_action_->setText(tr("更多"));
+        toolbar_more_action_->setToolTip(tr("更多工具与命令"));
+    }
+    toolbar_more_action_->setChecked(hidden_active);
+    toolbar_more_action_->setProperty("hiddenActiveTool", hidden_active);
+    if (auto* button = qobject_cast<QToolButton*>(
+            main_toolbar_->widgetForAction(toolbar_more_action_))) {
+        button->setProperty("hiddenActiveTool", hidden_active);
+        button->setAccessibleName(toolbar_more_action_->text());
+        button->setAccessibleDescription(toolbar_more_action_->toolTip());
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+    }
+}
+
+void CameraMainWindow::updateToolbarActionStates()
+{
+    const bool has_image = currentVisibleFrame().IsValid();
+    const bool has_measurements = !measurements_.Empty();
+    const bool has_selection = measurement_list_ && measurement_list_->currentRow() >= 0;
+
+    auto set_available = [](QAction* action, bool enabled, const QString& reason = {}) {
+        if (!action) return;
+        action->setEnabled(enabled);
+        const QString base = action->property("baseToolTip").toString();
+        action->setToolTip(enabled || reason.isEmpty() ? base : base + QStringLiteral("\n") + reason);
+    };
+    const QString image_reason = tr("当前不可用：请先打开图像或连接相机");
+    const QString measurement_reason = tr("当前不可用：还没有测量结果");
+    const QString selection_reason = tr("当前不可用：请先选择一项测量结果");
+
+    set_available(export_action_, has_image, image_reason);
+    set_available(surface_action_, has_image, image_reason);
+    set_available(calibration_action_, has_image, image_reason);
+    for (auto it = measurement_tool_actions_.cbegin(); it != measurement_tool_actions_.cend(); ++it) {
+        if (it.key() == static_cast<int>(CanvasTool::None)) continue;
+        set_available(it.value(), has_image, image_reason);
+    }
+    set_available(selection_action_, has_measurements, measurement_reason);
+    set_available(rename_measurement_action_, has_selection, selection_reason);
+    set_available(delete_measurement_action_, has_selection, selection_reason);
+    set_available(clear_measurements_action_, has_measurements, measurement_reason);
+    set_available(export_measurements_action_, has_measurements, measurement_reason);
+    set_available(edge_snap_action_, has_image, image_reason);
+    set_available(smart_sample_action_, has_image && !smart_count_running_,
+        smart_count_running_ ? tr("当前不可用：智能计数任务正在运行") : image_reason);
+    const bool can_run_smart = smart_count_running_ ||
+        (has_image && SmartTargetCounter::IsAvailable() && !smart_target_samples_.empty());
+    set_available(smart_run_action_, can_run_smart,
+        smart_target_samples_.empty() ? tr("当前不可用：请先框选至少一个样本") : image_reason);
+    if (smart_run_action_) {
+        smart_run_action_->setText(smart_count_running_ ? tr("取消计数") : tr("开始计数"));
+        smart_run_action_->setIcon(measurementToolIcon(
+            smart_count_running_ ? MeasurementToolGlyph::ClearMeasurements
+                                 : MeasurementToolGlyph::SmartCountRun));
+    }
 }
 
 QString cameraFrameFormatName(int format)
@@ -2041,14 +2338,10 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         [this](int) {
             rebuildOverlays();
             updateMeasurementStyleUi();
+            updateToolbarActionStates();
         });
     connect(measurement_list_, &QListWidget::itemDoubleClicked, this,
         [this](QListWidgetItem*) { focusSelectedMeasurement(); });
-    auto* rename_shortcut = new QShortcut(QKeySequence(Qt::Key_F2), measurement_list_);
-    connect(rename_shortcut, &QShortcut::activated,
-        this, &CameraMainWindow::renameSelectedMeasurement);
-    auto* delete_shortcut = new QShortcut(QKeySequence::Delete, measurement_list_);
-    connect(delete_shortcut, &QShortcut::activated, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(delete_tool, &QToolButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(clear_tool, &QToolButton::clicked, this, &CameraMainWindow::clearMeasurements);
     connect(export_tool, &QToolButton::clicked, this, &CameraMainWindow::exportMeasurements);
@@ -3106,7 +3399,10 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
     if (camera_open_) {
         QMetaObject::invokeMethod(camera_worker_, "frameConsumed", Qt::QueuedConnection);
     }
-    if (first_frame) updateCameraControlAvailability();
+    if (first_frame) {
+        updateCameraControlAvailability();
+        updateToolbarActionStates();
+    }
 }
 
 void CameraMainWindow::presentLiveCameraImage()
@@ -3141,6 +3437,7 @@ void CameraMainWindow::presentLiveCameraImage()
             latest_camera_image_, current_source_, current_source_identity_);
     }
     updateLiveHistogram();
+    if (source_changed) updateToolbarActionStates();
 }
 
 bool CameraMainWindow::hasNeutralPresentation() const
@@ -3209,13 +3506,12 @@ void CameraMainWindow::setCurrentFrame(
     current_frame_ = std::move(frame);
     current_source_ = source;
     current_source_identity_ = new_identity;
-    if (export_action_) export_action_->setEnabled(current_frame_.IsValid());
     source_label_->setText(tr("%1 · %2 × %3")
         .arg(source)
         .arg(current_frame_.width)
         .arg(current_frame_.height));
-    export_action_->setEnabled(current_frame_.IsValid());
     updateImagePresentation();
+    updateToolbarActionStates();
 }
 
 void CameraMainWindow::updateImageFilterControls()
@@ -3569,7 +3865,7 @@ void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
 {
     if (!currentVisibleFrame().IsValid()) {
         canvas_->setTool(CanvasTool::None);
-        QMessageBox::information(this, tr("测量"), tr("请先打开图像或连接相机。"));
+        statusBar()->showMessage(tr("请先打开图像或连接相机"), 3000);
         return;
     }
     ai_annotation_active_ = false;
@@ -3595,6 +3891,7 @@ void CameraMainWindow::updateMeasurementList()
     }
     updateMeasurementStyleUi();
     rebuildOverlays();
+    updateToolbarActionStates();
 }
 
 void CameraMainWindow::updateCalibrationUi()
@@ -3920,9 +4217,10 @@ void CameraMainWindow::updateMeasurementStyleUi()
     if (measurement_color_action_) {
         measurement_color_action_->setIcon(QIcon(swatch));
         measurement_color_action_->setToolTip(tool_tip);
-        if (measurement_toolbar_) {
+        measurement_color_action_->setProperty("baseToolTip", tool_tip);
+        if (main_toolbar_) {
             if (auto* toolbar_button = qobject_cast<QToolButton*>(
-                    measurement_toolbar_->widgetForAction(measurement_color_action_))) {
+                    main_toolbar_->widgetForAction(measurement_color_action_))) {
                 toolbar_button->setIconSize(swatch.size());
             }
         }
@@ -4000,6 +4298,16 @@ void CameraMainWindow::rebuildOverlays()
 
 void CameraMainWindow::clearMeasurements()
 {
+    if (measurements_.Empty()) return;
+    if (QMessageBox::question(
+            this, tr("清空全部测量"),
+            tr("确定清空全部 %1 项测量结果吗？此操作无法撤销。")
+                .arg(static_cast<qulonglong>(measurements_.Count())),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) != QMessageBox::Yes) {
+        statusBar()->showMessage(tr("已取消清空，当前工具和选择保持不变"), 2500);
+        return;
+    }
     measurements_.Clear();
     profile_line_points_.clear();
     updateMeasurementList();
@@ -4053,6 +4361,7 @@ void CameraMainWindow::updateSmartTargetUi()
     if (smart_similarity_slider_) smart_similarity_slider_->setEnabled(!smart_count_running_);
     if (smart_scale_tolerance_slider_) smart_scale_tolerance_slider_->setEnabled(!smart_count_running_);
     if (smart_count_progress_) smart_count_progress_->setVisible(smart_count_running_);
+    updateToolbarActionStates();
 }
 
 void CameraMainWindow::startSmartTargetSampleSelection()
@@ -5256,11 +5565,20 @@ void CameraMainWindow::closeEvent(QCloseEvent* event)
     settings.beginGroup(QStringLiteral("MainWindow"));
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
     settings.setValue(QStringLiteral("state"), saveState());
+    settings.setValue(QStringLiteral("toolbarDisplay"),
+        static_cast<int>(toolbar_display_preference_));
+    settings.setValue(QStringLiteral("toolbarLayoutVersion"), 2);
     settings.endGroup();
     if (camera_thread_.isRunning()) {
         QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::BlockingQueuedConnection);
     }
     event->accept();
+}
+
+void CameraMainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    updateToolbarPresentation();
 }
 
 void CameraMainWindow::dragEnterEvent(QDragEnterEvent* event)
