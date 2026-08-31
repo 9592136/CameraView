@@ -50,6 +50,8 @@ private:
         int height,
         uint32_t timestamp,
         uint64_t sequence,
+        bool vertical_flip,
+        bool horizontal_mirror,
         ImageFrame& output);
 
     void CloseLocked();

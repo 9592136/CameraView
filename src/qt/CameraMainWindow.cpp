@@ -337,7 +337,9 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
                 "feedbackState", success ? QStringLiteral("success") : QStringLiteral("error"));
             camera_feedback_label_->style()->unpolish(camera_feedback_label_);
             camera_feedback_label_->style()->polish(camera_feedback_label_);
-            if (success) saveCameraProfile();
+            // Save the actual configuration after both success and rollback so
+            // an unsupported saved value cannot fail again on every startup.
+            saveCameraProfile();
             updateCameraControlAvailability();
             if (camera_roi_selection_pending_) {
                 camera_roi_selection_pending_ = false;

@@ -191,8 +191,12 @@ bool MUCamCameraDriver::Open(int device_index, float initial_exposure_ms)
     capabilities_.has_white_balance = sdk_.HasWhiteBalanceControl() && capabilities_.color;
     capabilities_.has_roi = sdk_.HasRoiControl();
     capabilities_.has_trigger = sdk_.HasTriggerControl();
-    capabilities_.has_flip = sdk_.HasFlipControl();
-    capabilities_.has_mirror = sdk_.HasMirrorControl();
+    // Output orientation is implemented in the display-frame conversion.  A
+    // number of MUCam models export setFlip/setMirror but reject the calls (or
+    // silently ignore them), so advertising the SDK entry point as a device
+    // capability is not reliable.
+    capabilities_.has_flip = true;
+    capabilities_.has_mirror = true;
     for (int index = 0; index < binning_count; ++index) {
         capabilities_.resolutions.push_back({index, widths[index], heights[index]});
     }
@@ -262,6 +266,27 @@ bool MUCamCameraDriver::Configure(const CameraConfiguration& configuration)
     }
 
     const CameraConfiguration previous = configuration_;
+    const bool roi_unchanged =
+        configuration.roi.x == previous.roi.x &&
+        configuration.roi.y == previous.roi.y &&
+        configuration.roi.width == previous.roi.width &&
+        configuration.roi.height == previous.roi.height;
+    const bool only_orientation_changed =
+        configuration.resolution_index == previous.resolution_index &&
+        roi_unchanged &&
+        configuration.trigger_mode == previous.trigger_mode &&
+        std::abs(configuration.exposure_ms - previous.exposure_ms) < 0.0001f &&
+        std::abs(configuration.red_gain - previous.red_gain) < 0.0001f &&
+        std::abs(configuration.green_gain - previous.green_gain) < 0.0001f &&
+        std::abs(configuration.blue_gain - previous.blue_gain) < 0.0001f &&
+        configuration.red_offset == previous.red_offset &&
+        configuration.green_offset == previous.green_offset &&
+        configuration.blue_offset == previous.blue_offset;
+    if (only_orientation_changed) {
+        configuration_.vertical_flip = configuration.vertical_flip;
+        configuration_.horizontal_mirror = configuration.horizontal_mirror;
+        return true;
+    }
     if (ApplyConfigurationLocked(configuration)) {
         return true;
     }
@@ -408,6 +433,8 @@ bool MUCamCameraDriver::GrabFrame(uint64_t sequence, ImageFrame& frame)
         open_info_.height,
         timestamp,
         sequence,
+        configuration_.vertical_flip,
+        configuration_.horizontal_mirror,
         frame);
 }
 
@@ -429,6 +456,8 @@ bool MUCamCameraDriver::BuildDisplayFrame(
     int height,
     uint32_t timestamp,
     uint64_t sequence,
+    bool vertical_flip,
+    bool horizontal_mirror,
     ImageFrame& output)
 {
     if (!source || width <= 0 || height <= 0) {
@@ -446,38 +475,45 @@ bool MUCamCameraDriver::BuildDisplayFrame(
 
     for (int y = 0; y < height; ++y) {
         unsigned char* dst = output.bgr.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(output.stride);
+        const int source_y = vertical_flip ? height - 1 - y : y;
         if (source_format == MUCamApi::MUCAM_FORMAT_COLOR_BGR) {
             const unsigned char* src =
-                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U *
+                source + static_cast<std::size_t>(source_y) * static_cast<std::size_t>(width) * 3U *
                 static_cast<std::size_t>(bytes_per_channel);
-            if (bytes_per_channel == 1) {
+            if (bytes_per_channel == 1 && !horizontal_mirror) {
                 std::memcpy(dst, src, static_cast<std::size_t>(width) * 3U);
             } else {
                 for (int x = 0; x < width; ++x) {
-                    const std::size_t pixel = static_cast<std::size_t>(x) * 3U * 2U;
+                    const int source_x = horizontal_mirror ? width - 1 - x : x;
+                    const std::size_t pixel = static_cast<std::size_t>(source_x) * 3U *
+                        static_cast<std::size_t>(bytes_per_channel);
                     dst[x * 3 + 0] = SampleTo8Bit(src + pixel + 0U, bytes_per_channel);
-                    dst[x * 3 + 1] = SampleTo8Bit(src + pixel + 2U, bytes_per_channel);
-                    dst[x * 3 + 2] = SampleTo8Bit(src + pixel + 4U, bytes_per_channel);
+                    dst[x * 3 + 1] = SampleTo8Bit(
+                        src + pixel + static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
+                    dst[x * 3 + 2] = SampleTo8Bit(
+                        src + pixel + 2U * static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
                 }
             }
         } else if (source_format == MUCamApi::MUCAM_FORMAT_COLOR_RGB) {
             const unsigned char* src =
-                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 3U *
+                source + static_cast<std::size_t>(source_y) * static_cast<std::size_t>(width) * 3U *
                 static_cast<std::size_t>(bytes_per_channel);
             for (int x = 0; x < width; ++x) {
+                const int source_x = horizontal_mirror ? width - 1 - x : x;
                 const std::size_t pixel =
-                    static_cast<std::size_t>(x) * 3U * static_cast<std::size_t>(bytes_per_channel);
+                    static_cast<std::size_t>(source_x) * 3U * static_cast<std::size_t>(bytes_per_channel);
                 dst[x * 3 + 0] = SampleTo8Bit(src + pixel + 2U * static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
                 dst[x * 3 + 1] = SampleTo8Bit(src + pixel + 1U * static_cast<std::size_t>(bytes_per_channel), bytes_per_channel);
                 dst[x * 3 + 2] = SampleTo8Bit(src + pixel + 0U, bytes_per_channel);
             }
         } else {
             const unsigned char* src =
-                source + static_cast<std::size_t>(y) * static_cast<std::size_t>(width) *
+                source + static_cast<std::size_t>(source_y) * static_cast<std::size_t>(width) *
                 static_cast<std::size_t>(bytes_per_channel);
             for (int x = 0; x < width; ++x) {
+                const int source_x = horizontal_mirror ? width - 1 - x : x;
                 const unsigned char gray = SampleTo8Bit(
-                    src + static_cast<std::size_t>(x) * static_cast<std::size_t>(bytes_per_channel),
+                    src + static_cast<std::size_t>(source_x) * static_cast<std::size_t>(bytes_per_channel),
                     bytes_per_channel);
                 dst[x * 3 + 0] = gray;
                 dst[x * 3 + 1] = gray;
@@ -546,6 +582,7 @@ bool MUCamCameraDriver::ApplyConfigurationLocked(const CameraConfiguration& requ
         return false;
     }
 
+    const CameraConfiguration previous = configuration_;
     CameraConfiguration actual = requested;
     actual.resolution_index = resolution->index;
     open_info_.width = resolution->width;
@@ -578,18 +615,9 @@ bool MUCamCameraDriver::ApplyConfigurationLocked(const CameraConfiguration& requ
         !sdk_.SetTriggerType(camera_, static_cast<int>(requested.trigger_mode))) {
         return false;
     }
-    if (requested.vertical_flip && !capabilities_.has_flip) {
-        return false;
-    }
-    if (capabilities_.has_flip && !sdk_.SetFlip(camera_, requested.vertical_flip)) {
-        return false;
-    }
-    if (requested.horizontal_mirror && !capabilities_.has_mirror) {
-        return false;
-    }
-    if (capabilities_.has_mirror && !sdk_.SetMirror(camera_, requested.horizontal_mirror)) {
-        return false;
-    }
+    // Flip and mirror are applied while building the BGR display frame.  This
+    // keeps their behavior consistent across MUCam models and avoids a full
+    // configuration rollback when firmware rejects the optional SDK calls.
 
     float exposure_minimum = capabilities_.exposure_minimum;
     float exposure_maximum = capabilities_.exposure_maximum;
@@ -605,7 +633,9 @@ bool MUCamCameraDriver::ApplyConfigurationLocked(const CameraConfiguration& requ
         return false;
     }
 
-    if (capabilities_.color && capabilities_.has_gain) {
+    const bool gain_changed = actual.red_gain != previous.red_gain ||
+        actual.green_gain != previous.green_gain || actual.blue_gain != previous.blue_gain;
+    if (capabilities_.color && capabilities_.has_gain && gain_changed) {
         actual.red_gain = NearestSupportedGain(actual.red_gain, capabilities_.gain_values);
         actual.green_gain = NearestSupportedGain(actual.green_gain, capabilities_.gain_values);
         actual.blue_gain = NearestSupportedGain(actual.blue_gain, capabilities_.gain_values);
@@ -618,7 +648,9 @@ bool MUCamCameraDriver::ApplyConfigurationLocked(const CameraConfiguration& requ
             return false;
         }
     }
-    if (capabilities_.color && capabilities_.has_offset) {
+    const bool offset_changed = actual.red_offset != previous.red_offset ||
+        actual.green_offset != previous.green_offset || actual.blue_offset != previous.blue_offset;
+    if (capabilities_.color && capabilities_.has_offset && offset_changed) {
         actual.red_offset = std::clamp(
             actual.red_offset, capabilities_.offset_minimum, capabilities_.offset_maximum);
         actual.green_offset = std::clamp(
