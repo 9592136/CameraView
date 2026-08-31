@@ -30,6 +30,8 @@
 #include <QToolButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSlider>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -143,6 +145,10 @@ int main(int argc, char* argv[])
         QStringLiteral("workspace-tab"),
         QStringLiteral("Select the workspace tab by zero-based index."),
         QStringLiteral("index"));
+    const QCommandLineOption ui_size(
+        QStringLiteral("ui-size"),
+        QStringLiteral("Resize the UI snapshot window using WIDTHxHEIGHT."),
+        QStringLiteral("size"));
     const QCommandLineOption focus_widget(
         QStringLiteral("focus-widget"),
         QStringLiteral("Scroll a named widget into view before rendering a UI snapshot."),
@@ -174,6 +180,9 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_report_workflow(
         QStringLiteral("verify-report-workflow"),
         QStringLiteral("Verify the migrated report export and template design workflow."));
+    const QCommandLineOption verify_camera_panel(
+        QStringLiteral("verify-camera-panel"),
+        QStringLiteral("Verify the capability-driven camera panel and ROI controls."));
     const QCommandLineOption live_camera_report(
         QStringLiteral("live-camera-report"),
         QStringLiteral("Open the first camera, exercise the live Qt preview, and write a JSON report."),
@@ -182,6 +191,7 @@ int main(int argc, char* argv[])
     parser.addOption(import_yolo_manifest);
     parser.addOption(ui_snapshot);
     parser.addOption(workspace_tab);
+    parser.addOption(ui_size);
     parser.addOption(focus_widget);
     parser.addOption(verify_measurement_toolbar);
     parser.addOption(verify_measurement_overlay_editor);
@@ -192,6 +202,7 @@ int main(int argc, char* argv[])
     parser.addOption(verify_stitch_workflow);
     parser.addOption(verify_stitch_execution);
     parser.addOption(verify_report_workflow);
+    parser.addOption(verify_camera_panel);
     parser.addOption(live_camera_report);
     parser.process(application);
 
@@ -200,6 +211,59 @@ int main(int argc, char* argv[])
     }
 
     CameraMainWindow window;
+    if (parser.isSet(verify_camera_panel)) {
+        const QStringList required_controls{
+            QStringLiteral("CameraStatusCard"),
+            QStringLiteral("CameraStateBadge"),
+            QStringLiteral("CameraStateLabel"),
+            QStringLiteral("CameraDeviceSummary"),
+            QStringLiteral("CameraTelemetry"),
+            QStringLiteral("CameraDeviceCombo"),
+            QStringLiteral("CameraRefreshButton"),
+            QStringLiteral("CameraConnectionButton"),
+            QStringLiteral("CameraExposureSlider"),
+            QStringLiteral("CameraExposureSpin"),
+            QStringLiteral("CameraGainSlider"),
+            QStringLiteral("CameraGainSpin"),
+            QStringLiteral("CameraAutoExposureButton"),
+            QStringLiteral("CameraWhiteBalanceButton"),
+            QStringLiteral("CameraColorControls"),
+            QStringLiteral("CameraResolutionCombo"),
+            QStringLiteral("CameraTriggerCombo"),
+            QStringLiteral("CameraSingleFrameButton"),
+            QStringLiteral("CameraRoiSelectButton"),
+            QStringLiteral("CameraRoiApplyButton"),
+            QStringLiteral("CameraRoiResetButton"),
+            QStringLiteral("CameraInlineFeedback")};
+        for (const QString& name : required_controls) {
+            if (!window.findChild<QWidget*>(name)) {
+                qCritical().noquote() << QStringLiteral(
+                    "Camera panel control is missing: %1").arg(name);
+                return 14;
+            }
+        }
+        auto* exposure_slider = window.findChild<QSlider*>(QStringLiteral("CameraExposureSlider"));
+        auto* exposure_spin = window.findChild<QDoubleSpinBox*>(QStringLiteral("CameraExposureSpin"));
+        auto* gain_slider = window.findChild<QSlider*>(QStringLiteral("CameraGainSlider"));
+        auto* gain_spin = window.findChild<QDoubleSpinBox*>(QStringLiteral("CameraGainSpin"));
+        auto* connection = window.findChild<QPushButton*>(QStringLiteral("CameraConnectionButton"));
+        auto* single_frame = window.findChild<QPushButton*>(QStringLiteral("CameraSingleFrameButton"));
+        if (!exposure_slider || !exposure_spin || !gain_slider || !gain_spin ||
+            !connection || !single_frame || !single_frame->isHidden() ||
+            connection->text().isEmpty() || exposure_slider->maximum() != 1000 ||
+            gain_slider->maximum() <= gain_slider->minimum()) {
+            qCritical() << "Camera parameter linkage or trigger visibility is invalid.";
+            return 14;
+        }
+        for (const QString& axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                 QStringLiteral("宽"), QStringLiteral("高")}) {
+            if (!window.findChild<QSpinBox*>(QStringLiteral("CameraRoi%1Spin").arg(axis))) {
+                qCritical().noquote() << QStringLiteral("Camera ROI input is missing: %1").arg(axis);
+                return 14;
+            }
+        }
+        return 0;
+    }
     if (parser.isSet(verify_report_workflow)) {
         const QStringList required_actions{
             QStringLiteral("ExportImageReportAction"),
@@ -701,34 +765,73 @@ int main(int argc, char* argv[])
     }
     if (parser.isSet(verify_measurement_toolbar)) {
         QToolBar* toolbar = window.findChild<QToolBar*>(QStringLiteral("MeasurementToolbar"));
-        const QStringList required{
-            QStringLiteral("标定"), QStringLiteral("点"), QStringLiteral("长度"), QStringLiteral("折线"),
+        const QStringList expected{
+            QStringLiteral("标定"), QStringLiteral("点坐标"), QStringLiteral("长度"), QStringLiteral("折线"),
             QStringLiteral("角度"), QStringLiteral("矩形"), QStringLiteral("多边形"), QStringLiteral("圆"),
-            QStringLiteral("椭圆"), QStringLiteral("剖线测量"), QStringLiteral("智能框选"),
-            QStringLiteral("开始计数"), QStringLiteral("自动寻边"), QStringLiteral("删除"),
-            QStringLiteral("清空"), QStringLiteral("导出 CSV")};
+            QStringLiteral("椭圆"), QStringLiteral("剖线"), QStringLiteral("选择"),
+            QStringLiteral("重命名"), QStringLiteral("设置颜色"), QStringLiteral("默认颜色"),
+            QStringLiteral("删除选中"), QStringLiteral("清空测量"), QStringLiteral("导出 CSV"),
+            QStringLiteral("智能框选"), QStringLiteral("开始计数"), QStringLiteral("自动寻边")};
+        const QStringList expected_panel_buttons{
+            QStringLiteral("MeasurementPointButton"),
+            QStringLiteral("MeasurementLengthButton"),
+            QStringLiteral("MeasurementPolylineButton"),
+            QStringLiteral("MeasurementAngleButton"),
+            QStringLiteral("MeasurementRectangleButton"),
+            QStringLiteral("MeasurementPolygonButton"),
+            QStringLiteral("MeasurementCircleButton"),
+            QStringLiteral("MeasurementEllipseButton"),
+            QStringLiteral("MeasurementProfileButton"),
+            QStringLiteral("MeasurementSelectionButton"),
+            QStringLiteral("MeasurementRenameToolButton"),
+            QStringLiteral("MeasurementColorToolButton"),
+            QStringLiteral("MeasurementResetColorToolButton"),
+            QStringLiteral("MeasurementDeleteToolButton"),
+            QStringLiteral("MeasurementClearToolButton"),
+            QStringLiteral("MeasurementExportToolButton")};
         QStringList actual;
+        QStringList aligned_panel_buttons;
         bool icons_complete = toolbar != nullptr;
+        bool presentation_aligned = toolbar != nullptr;
+        int presentation_error = toolbar ? 0 : 1;
         if (toolbar) {
-            for (const QAction* action : toolbar->actions()) {
+            for (QAction* action : toolbar->actions()) {
                 if (action->isSeparator()) continue;
                 actual.push_back(action->text());
                 icons_complete = icons_complete && !action->icon().isNull();
+                const QString panel_name = action->property("measurementPanelButton").toString();
+                if (panel_name.isEmpty()) continue;
+                aligned_panel_buttons.push_back(panel_name);
+                const auto* panel_button = window.findChild<QToolButton*>(panel_name);
+                const auto* toolbar_button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
+                if (!panel_button) presentation_error = 2;
+                else if (!toolbar_button) presentation_error = 3;
+                else if (action->text() != panel_button->text()) presentation_error = 4;
+                else if (action->toolTip() != panel_button->toolTip()) presentation_error = 5;
+                else if (action->isCheckable() != panel_button->isCheckable()) presentation_error = 6;
+                else if (toolbar_button->iconSize() != panel_button->iconSize()) {
+                    presentation_error = 7;
+                }
+                else if (toolbar_button->toolButtonStyle() != panel_button->toolButtonStyle()) presentation_error = 8;
+                else if (toolbar_button->property("role") != panel_button->property("role")) presentation_error = 9;
+                presentation_aligned = presentation_aligned && presentation_error == 0;
             }
         }
-        for (const QString& name : required) {
-            if (!actual.contains(name)) {
-                qCritical().noquote() << QStringLiteral("Measurement toolbar is missing: %1").arg(name);
-                return 5;
-            }
+        if (!icons_complete || actual != expected) {
+            qCritical() << "Measurement toolbar action, order, or icon coverage is incomplete."
+                        << "expected=" << expected << "actual=" << actual;
+            return 51;
         }
-        if (!icons_complete || actual.size() != required.size()) {
-            qCritical() << "Measurement toolbar action or icon coverage is incomplete.";
-            return 5;
+        if (!presentation_aligned || aligned_panel_buttons != expected_panel_buttons) {
+            qCritical() << "Measurement toolbar and panel buttons are not aligned."
+                        << "expected=" << expected_panel_buttons
+                        << "actual=" << aligned_panel_buttons;
+            return presentation_error > 100 ? presentation_error
+                : (presentation_error == 0 ? 70 : 60 + presentation_error);
         }
         if (window.toolBarBreak(toolbar)) {
             qCritical() << "Measurement toolbar must share one row with the main toolbar.";
-            return 5;
+            return 53;
         }
         return 0;
     }
@@ -739,6 +842,16 @@ int main(int argc, char* argv[])
             valid && tabs && index >= 0 && index < tabs->count()) {
             tabs->setCurrentIndex(index);
         }
+    }
+    if (parser.isSet(ui_size)) {
+        const QRegularExpressionMatch match = QRegularExpression(
+            QStringLiteral("^(\\d{3,4})x(\\d{3,4})$"),
+            QRegularExpression::CaseInsensitiveOption).match(parser.value(ui_size));
+        if (!match.hasMatch()) {
+            qCritical() << "Invalid --ui-size value; expected WIDTHxHEIGHT.";
+            return 3;
+        }
+        window.resize(match.captured(1).toInt(), match.captured(2).toInt());
     }
     if (parser.isSet(ui_snapshot)) {
         window.show();

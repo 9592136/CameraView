@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -265,6 +266,36 @@ int main(int argc, char* argv[])
     if (committed_tool != CanvasTool::Circle || committed_points.size() != 2 ||
         canvas.tool() != CanvasTool::Circle) {
         return fail("Circle canvas interaction did not support consecutive measurements.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    canvas.setTool(CanvasTool::CameraRoi);
+    QMouseEvent roi_press(
+        QEvent::MouseButtonPress, QPointF(50.0, 75.0), QPointF(50.0, 75.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent roi_move(
+        QEvent::MouseMove, QPointF(300.0, 350.0), QPointF(300.0, 350.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent roi_release(
+        QEvent::MouseButtonRelease, QPointF(300.0, 350.0), QPointF(300.0, 350.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &roi_press);
+    QApplication::sendEvent(&canvas, &roi_move);
+    QApplication::sendEvent(&canvas, &roi_release);
+    if (committed_tool != CanvasTool::CameraRoi || committed_points.size() != 2 ||
+        !near(committed_points[0].x(), 10.0) || !near(committed_points[0].y(), 15.0) ||
+        !near(committed_points[1].x(), 60.0) || !near(committed_points[1].y(), 70.0)) {
+        return fail("Camera ROI tool did not commit a free drag in image coordinates.");
+    }
+    CanvasTool cancelled_tool = CanvasTool::None;
+    QObject::connect(&canvas, &ImageCanvas::toolCancelled,
+        [&cancelled_tool](CanvasTool tool) { cancelled_tool = tool; });
+    canvas.setTool(CanvasTool::CameraRoi);
+    QKeyEvent cancel_roi(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &cancel_roi);
+    if (cancelled_tool != CanvasTool::CameraRoi || canvas.tool() != CanvasTool::None) {
+        return fail("Camera ROI tool did not cancel with Escape.");
     }
 
     committed_tool = CanvasTool::None;

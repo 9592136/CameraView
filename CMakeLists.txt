@@ -569,6 +569,23 @@ if(CAMERAVIEW_BUILD_TESTS)
     endif()
     add_test(NAME CameraViewImageFilterTests COMMAND CameraViewImageFilterTests)
 
+    add_executable(CameraViewCameraWorkerTests
+        tests/camera_worker_tests.cpp
+        src/qt/CameraWorker.cpp
+        src/qt/CameraWorker.h
+        src/qt/CameraQtTypes.h
+        src/camera/MUCamCameraDriver.cpp
+        src/camera/MUCamCameraDriver.h
+        src/MUCamApi.cpp
+        src/MUCamApi.h
+    )
+    target_include_directories(CameraViewCameraWorkerTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewCameraWorkerTests PRIVATE cxx_std_17)
+    target_compile_definitions(CameraViewCameraWorkerTests PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(CameraViewCameraWorkerTests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME CameraViewCameraWorkerTests COMMAND CameraViewCameraWorkerTests)
+
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewMeasurementToolbarCoverage
@@ -597,6 +614,28 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewQtReportWorkflow
         COMMAND CameraView --verify-report-workflow)
     set_tests_properties(CameraViewQtReportWorkflow PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtCameraPanel
+        COMMAND CameraView --verify-camera-panel)
+    set_tests_properties(CameraViewQtCameraPanel PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtCameraPanelSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-ui.png"
+            --workspace-tab 0
+            --ui-size 1280x800)
+    set_tests_properties(CameraViewQtCameraPanelSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtCameraPanelCompactSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-960x640.png"
+            --workspace-tab 0
+            --ui-size 960x640)
+    set_tests_properties(CameraViewQtCameraPanelCompactSnapshot PROPERTIES
+        TIMEOUT 20 ENVIRONMENT "QT_SCALE_FACTOR=1.25")
+    add_test(NAME CameraViewQtCameraPanelFullHdSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-1920x1080.png"
+            --workspace-tab 0
+            --ui-size 1920x1080)
+    set_tests_properties(CameraViewQtCameraPanelFullHdSnapshot PROPERTIES TIMEOUT 20)
     add_test(NAME CameraViewQtUiSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"

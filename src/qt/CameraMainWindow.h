@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ImageCanvas.h"
+#include "CameraQtTypes.h"
 #include "app/DiagnosticReportActions.h"
 #include "camera/CameraDevice.h"
 #include "domain/CalibrationProfile.h"
@@ -25,6 +26,7 @@
 #include <QThread>
 
 #include <atomic>
+#include <array>
 #include <memory>
 
 class CameraWorker;
@@ -102,6 +104,10 @@ private slots:
     void updateImageFilterControls();
     void updateImagePresentation();
     void updateMeasurementList();
+    void onCameraCapabilities(
+        CameraCapabilities capabilities,
+        CameraConfiguration configuration,
+        CameraOpenInfo openInfo);
 
 private:
     void setupUi();
@@ -124,6 +130,8 @@ private:
     QVector<CanvasOverlay> smartTargetOverlays() const;
     QRectF measurementBounds(MeasurementReference reference) const;
     void focusSelectedMeasurement();
+    void enterMeasurementSelectionMode();
+    void renameSelectedMeasurement();
     void chooseSelectedMeasurementColor();
     void resetSelectedMeasurementColor();
     void updateMeasurementStyleUi();
@@ -180,6 +188,30 @@ private:
     DiagnosticReportActionInput buildDiagnosticReportInput() const;
     void loadReportTemplateSettings();
     void saveReportTemplateSettings() const;
+    enum class CameraPanelState {
+        Initializing,
+        NoDevice,
+        Ready,
+        Connecting,
+        Previewing,
+        Reconfiguring,
+        WaitingTrigger,
+        Disconnected,
+        Error
+    };
+    void setCameraPanelState(CameraPanelState state, const QString& message);
+    void updateCameraControlAvailability();
+    void scheduleCameraParameterApply();
+    void applyPendingCameraParameters();
+    void applyCameraConfigurationFromUi(bool includeRoi = true);
+    void updateCameraConfigurationUi(const CameraConfiguration& configuration);
+    void loadCameraProfile();
+    void saveCameraProfile() const;
+    QString currentCameraDeviceKey() const;
+    void startCameraRoiSelection();
+    void restoreToolAfterCameraRoi(const QString& message);
+    void applyCameraRoiInputs();
+    void resetCameraRoi();
 
     ImageCanvas* canvas_ = nullptr;
     QDockWidget* function_dock_ = nullptr;
@@ -191,9 +223,33 @@ private:
     QLabel* zoom_label_ = nullptr;
     QLabel* preview_fps_label_ = nullptr;
     QLabel* camera_state_label_ = nullptr;
+    QLabel* camera_state_badge_ = nullptr;
+    QLabel* camera_device_summary_label_ = nullptr;
+    QLabel* camera_telemetry_label_ = nullptr;
+    QLabel* camera_feedback_label_ = nullptr;
     QComboBox* device_combo_ = nullptr;
+    QPushButton* camera_refresh_button_ = nullptr;
+    QPushButton* camera_connection_button_ = nullptr;
+    QPushButton* camera_auto_exposure_button_ = nullptr;
+    QPushButton* camera_white_balance_button_ = nullptr;
+    QPushButton* camera_single_frame_button_ = nullptr;
     QDoubleSpinBox* exposure_spin_ = nullptr;
     QDoubleSpinBox* gain_spin_ = nullptr;
+    QSlider* camera_exposure_slider_ = nullptr;
+    QSlider* camera_gain_slider_ = nullptr;
+    QGroupBox* camera_color_group_ = nullptr;
+    QCheckBox* camera_link_channels_check_ = nullptr;
+    std::array<QDoubleSpinBox*, 3> camera_rgb_gain_spins_{};
+    std::array<QSpinBox*, 3> camera_rgb_offset_spins_{};
+    QComboBox* camera_resolution_combo_ = nullptr;
+    QComboBox* camera_trigger_combo_ = nullptr;
+    QCheckBox* camera_flip_check_ = nullptr;
+    QCheckBox* camera_mirror_check_ = nullptr;
+    std::array<QSpinBox*, 4> camera_roi_spins_{};
+    QPushButton* camera_roi_select_button_ = nullptr;
+    QPushButton* camera_roi_apply_button_ = nullptr;
+    QPushButton* camera_roi_reset_button_ = nullptr;
+    QTimer* camera_parameter_timer_ = nullptr;
     QComboBox* palette_combo_ = nullptr;
     QComboBox* histogram_channel_combo_ = nullptr;
     QComboBox* image_filter_combo_ = nullptr;
@@ -263,12 +319,28 @@ private:
     QProgressBar* smart_count_progress_ = nullptr;
     QListWidget* smart_result_list_ = nullptr;
     QAction* export_action_ = nullptr;
+    QAction* measurement_color_action_ = nullptr;
     QToolBar* measurement_toolbar_ = nullptr;
 
     QThread camera_thread_;
     CameraWorker* camera_worker_ = nullptr;
     QVector<int> camera_indices_;
     bool camera_open_ = false;
+    CameraPanelState camera_panel_state_ = CameraPanelState::Initializing;
+    CameraCapabilities camera_capabilities_;
+    CameraConfiguration camera_configuration_;
+    CameraConfiguration camera_profile_configuration_;
+    CameraOpenInfo camera_open_info_;
+    bool camera_ui_updating_ = false;
+    bool camera_profile_loaded_ = false;
+    bool camera_profile_reconfigure_pending_ = false;
+    bool camera_roi_selection_pending_ = false;
+    bool startup_auto_connect_attempted_ = false;
+    CanvasTool camera_roi_previous_tool_ = CanvasTool::None;
+    bool camera_roi_previous_edge_snapping_ = false;
+    double last_sent_exposure_ = -1.0;
+    std::array<double, 3> last_sent_rgb_gain_{{-1.0, -1.0, -1.0}};
+    std::array<int, 3> last_sent_rgb_offset_{{-1000000, -1000000, -1000000}};
     QElapsedTimer preview_fps_timer_;
     QElapsedTimer live_histogram_timer_;
     int preview_frames_since_sample_ = 0;

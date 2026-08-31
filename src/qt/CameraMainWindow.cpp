@@ -264,7 +264,18 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("state")).toByteArray());
     settings.endGroup();
-    if (measurement_toolbar_) removeToolBarBreak(measurement_toolbar_);
+    if (measurement_toolbar_) {
+        removeToolBarBreak(measurement_toolbar_);
+        // Older saved QMainWindow state can restore the former 24 px toolbar size.
+        // Re-apply the shared measurement-button size after restoring the layout.
+        measurement_toolbar_->setIconSize(QSize(30, 30));
+        for (QAction* action : measurement_toolbar_->actions()) {
+            if (auto* button = qobject_cast<QToolButton*>(
+                    measurement_toolbar_->widgetForAction(action))) {
+                button->setIconSize(QSize(30, 30));
+            }
+        }
+    }
     setAcceptDrops(true);
 
     camera_worker_ = new CameraWorker;
@@ -273,22 +284,68 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     connect(&camera_thread_, &QThread::finished, camera_worker_, &QObject::deleteLater);
     connect(camera_worker_, &CameraWorker::devicesReady, this, &CameraMainWindow::onDevicesReady);
     connect(camera_worker_, &CameraWorker::frameReady, this, &CameraMainWindow::onCameraFrame);
+    connect(camera_worker_, &CameraWorker::cameraCapabilitiesChanged,
+        this, &CameraMainWindow::onCameraCapabilities);
     connect(camera_worker_, &CameraWorker::cameraStateChanged, this,
         [this](bool opened, const QString& message) {
             camera_open_ = opened;
             if (!opened && live_stitch_active_) stopLiveStitch(false);
+            if (!opened && canvas_->tool() == CanvasTool::CameraRoi) {
+                restoreToolAfterCameraRoi(tr("相机已断开，ROI 框选已取消"));
+            }
             preview_fps_timer_.invalidate();
             preview_frames_since_sample_ = 0;
-            const QString display_message = opened ? tr("%1 · -- FPS").arg(message) : message;
-            camera_state_label_->setText(display_message);
+            if (opened && message.contains(tr("正在重配置"))) {
+                setCameraPanelState(CameraPanelState::Reconfiguring, message);
+            } else if (opened && message.contains(tr("等待"))) {
+                setCameraPanelState(CameraPanelState::WaitingTrigger, message);
+            } else if (opened) {
+                setCameraPanelState(CameraPanelState::Previewing, message);
+            } else if (message.contains(tr("断开"))) {
+                setCameraPanelState(CameraPanelState::Disconnected, message);
+            } else if (message.contains(tr("失败"))) {
+                setCameraPanelState(CameraPanelState::Error, message);
+            } else {
+                setCameraPanelState(
+                    camera_indices_.isEmpty() ? CameraPanelState::NoDevice : CameraPanelState::Ready,
+                    message);
+            }
             preview_fps_label_->setText(opened ? tr("FPS --") : tr("FPS —"));
-            statusBar()->showMessage(display_message, 5000);
+            statusBar()->showMessage(message, 5000);
+            updateCameraControlAvailability();
         });
     connect(camera_worker_, &CameraWorker::operationFinished, this,
         [this](const QString& message, bool success) {
             statusBar()->showMessage(message, 5000);
-            if (!success) {
-                camera_state_label_->setText(message);
+            camera_feedback_label_->setText(message);
+            camera_feedback_label_->setProperty(
+                "feedbackState", success ? QStringLiteral("success") : QStringLiteral("error"));
+            camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+            camera_feedback_label_->style()->polish(camera_feedback_label_);
+        });
+    connect(camera_worker_, &CameraWorker::configurationFinished, this,
+        [this](CameraConfiguration configuration, bool success, const QString& message) {
+            camera_configuration_ = configuration;
+            updateCameraConfigurationUi(configuration);
+            last_sent_exposure_ = configuration.exposure_ms;
+            last_sent_rgb_gain_ = {
+                configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+            last_sent_rgb_offset_ = {
+                configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+            camera_feedback_label_->setText(message);
+            camera_feedback_label_->setProperty(
+                "feedbackState", success ? QStringLiteral("success") : QStringLiteral("error"));
+            camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+            camera_feedback_label_->style()->polish(camera_feedback_label_);
+            if (success) saveCameraProfile();
+            updateCameraControlAvailability();
+            if (camera_roi_selection_pending_) {
+                camera_roi_selection_pending_ = false;
+                if (success) {
+                    QTimer::singleShot(0, this, &CameraMainWindow::startCameraRoiSelection);
+                } else {
+                    camera_feedback_label_->setText(tr("无法恢复全幅，ROI 框选未开始"));
+                }
             }
         });
     connect(camera_worker_, &CameraWorker::exposureApplied, this,
@@ -319,12 +376,17 @@ void CameraMainWindow::setupUi()
 {
     setWindowTitle(tr("CameraView · Qt 工业相机与显微测量"));
     resize(1360, 850);
-    setMinimumSize(980, 640);
+    setMinimumSize(960, 640);
 
     canvas_ = new ImageCanvas;
     canvas_->setObjectName(QStringLiteral("ImageCanvas"));
     setCentralWidget(canvas_);
     connect(canvas_, &ImageCanvas::pointsCommitted, this, &CameraMainWindow::onCanvasPoints);
+    connect(canvas_, &ImageCanvas::toolCancelled, this, [this](CanvasTool tool) {
+        if (tool == CanvasTool::CameraRoi) {
+            restoreToolAfterCameraRoi(tr("已取消 ROI 框选"));
+        }
+    });
     connect(canvas_, &ImageCanvas::imagePositionChanged, this, [this](const QPointF& point) {
         coordinate_label_->setText(tr("X %1  Y %2").arg(point.x(), 0, 'f', 1).arg(point.y(), 0, 'f', 1));
     });
@@ -552,63 +614,142 @@ void CameraMainWindow::setupMenusAndToolbar()
     measurement_toolbar_ = new QToolBar(tr("测量工具栏"), this);
     measurement_toolbar_->setObjectName(QStringLiteral("MeasurementToolbar"));
     measurement_toolbar_->setMovable(false);
-    measurement_toolbar_->setIconSize(QSize(24, 24));
+    measurement_toolbar_->setIconSize(QSize(30, 30));
     measurement_toolbar_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     addToolBar(Qt::TopToolBarArea, measurement_toolbar_);
     removeToolBarBreak(measurement_toolbar_);
 
     auto* measurement_actions = new QActionGroup(measurement_toolbar_);
     measurement_actions->setExclusive(true);
-    auto add_canvas_action = [this, measurement_actions](
+    auto align_toolbar_button = [this](
+        QAction* action,
+        const QString& role,
+        const QString& panelButtonObjectName = {}) {
+        if (!action) return;
+        if (!panelButtonObjectName.isEmpty()) {
+            action->setProperty("measurementPanelButton", panelButtonObjectName);
+        }
+        if (auto* button = qobject_cast<QToolButton*>(measurement_toolbar_->widgetForAction(action))) {
+            button->setProperty("role", role);
+            button->setProperty("measurementPanelButton", panelButtonObjectName);
+            button->setIconSize(QSize(30, 30));
+            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            button->setMinimumHeight(64);
+            button->setAccessibleName(action->text());
+            button->setAccessibleDescription(action->toolTip());
+        }
+    };
+    auto add_canvas_action = [this, measurement_actions, align_toolbar_button](
         MeasurementToolGlyph glyph,
         CanvasTool tool,
         const QString& text,
         const QString& status,
+        const QString& panelButtonObjectName,
         const QKeySequence& shortcut = {}) {
         QAction* action = measurement_toolbar_->addAction(measurementToolIcon(glyph), text);
         action->setCheckable(true);
         action->setData(static_cast<int>(tool));
         action->setToolTip(status);
         action->setStatusTip(status);
+        action->setObjectName(QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(tool)));
         if (!shortcut.isEmpty()) action->setShortcut(shortcut);
         measurement_actions->addAction(action);
+        action->setChecked(canvas_->tool() == tool);
+        align_toolbar_button(action, QStringLiteral("measurementTool"), panelButtonObjectName);
         connect(action, &QAction::triggered, this, [this, tool, status] {
-            setMeasurementTool(tool, status);
+            if (tool == CanvasTool::None) {
+                enterMeasurementSelectionMode();
+            } else {
+                setMeasurementTool(tool, status);
+            }
         });
         return action;
     };
     add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
-        tr("标定"), tr("在图像上选择标定线的两个端点"));
+        tr("标定"), tr("在图像上选择标定线的两个端点"), {});
+    measurement_toolbar_->addSeparator();
     add_canvas_action(MeasurementToolGlyph::Point, CanvasTool::Point,
-        tr("点"), tr("记录图像中一个点的坐标"));
+        tr("点坐标"), tr("记录图像中一个点的坐标"),
+        QStringLiteral("MeasurementPointButton"));
     add_canvas_action(MeasurementToolGlyph::Length, CanvasTool::Length,
-        tr("长度"), tr("选择两个端点测量直线长度"), QKeySequence(Qt::Key_L));
+        tr("长度"), tr("选择两个端点测量直线长度"),
+        QStringLiteral("MeasurementLengthButton"), QKeySequence(Qt::Key_L));
     add_canvas_action(MeasurementToolGlyph::Polyline, CanvasTool::Polyline,
-        tr("折线"), tr("依次选择节点，双击完成折线长度测量"));
+        tr("折线"), tr("依次选择节点，双击完成折线长度测量"),
+        QStringLiteral("MeasurementPolylineButton"));
     add_canvas_action(MeasurementToolGlyph::Angle, CanvasTool::Angle,
-        tr("角度"), tr("依次选择端点、顶点和端点"));
+        tr("角度"), tr("依次选择端点、顶点和端点"),
+        QStringLiteral("MeasurementAngleButton"));
     add_canvas_action(MeasurementToolGlyph::Rectangle, CanvasTool::Rectangle,
-        tr("矩形"), tr("选择两个对角点测量矩形"));
+        tr("矩形"), tr("选择两个对角点测量宽、高、周长和面积"),
+        QStringLiteral("MeasurementRectangleButton"));
     add_canvas_action(MeasurementToolGlyph::Polygon, CanvasTool::Polygon,
-        tr("多边形"), tr("依次选择顶点，双击完成多边形测量"));
+        tr("多边形"), tr("依次选择顶点，双击完成面积测量"),
+        QStringLiteral("MeasurementPolygonButton"));
     add_canvas_action(MeasurementToolGlyph::Circle, CanvasTool::Circle,
-        tr("圆"), tr("选择圆心和圆周上一点"));
+        tr("圆"), tr("选择圆心和圆周上一点"),
+        QStringLiteral("MeasurementCircleButton"));
     add_canvas_action(MeasurementToolGlyph::Ellipse, CanvasTool::Ellipse,
-        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"));
+        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"),
+        QStringLiteral("MeasurementEllipseButton"));
+    add_canvas_action(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
+        tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"),
+        QStringLiteral("MeasurementProfileButton"));
+    add_canvas_action(MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
+        tr("选择"), tr("进入选择模式：选择、拖动或编辑测量对象"),
+        QStringLiteral("MeasurementSelectionButton"));
 
-    profile_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Profile));
-    profile_action->setCheckable(true);
-    profile_action->setData(static_cast<int>(CanvasTool::ProfileLine));
-    profile_action->setToolTip(tr("选择两个端点分析亮度与 RGB 强度曲线"));
-    measurement_actions->addAction(profile_action);
-    measurement_toolbar_->addAction(profile_action);
+    measurement_toolbar_->addSeparator();
+    QAction* rename_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::RenameMeasurement), tr("重命名"));
+    rename_action->setToolTip(tr("重命名当前选中的测量结果"));
+    align_toolbar_button(rename_action, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementRenameToolButton"));
+    connect(rename_action, &QAction::triggered,
+        this, &CameraMainWindow::renameSelectedMeasurement);
+    measurement_color_action_ = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::MeasurementColor), tr("设置颜色"));
+    measurement_color_action_->setToolTip(tr("设置全部测量统一使用的全局颜色"));
+    align_toolbar_button(measurement_color_action_, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementColorToolButton"));
+    connect(measurement_color_action_, &QAction::triggered,
+        this, &CameraMainWindow::chooseSelectedMeasurementColor);
+    QAction* reset_color_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::ResetMeasurementColor), tr("默认颜色"));
+    reset_color_action->setToolTip(tr("恢复系统默认的全局测量颜色"));
+    align_toolbar_button(reset_color_action, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementResetColorToolButton"));
+    connect(reset_color_action, &QAction::triggered,
+        this, &CameraMainWindow::resetSelectedMeasurementColor);
+    QAction* delete_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除选中"));
+    delete_action->setToolTip(tr("删除当前选中的测量结果"));
+    align_toolbar_button(delete_action, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementDeleteToolButton"));
+    connect(delete_action, &QAction::triggered,
+        this, &CameraMainWindow::deleteSelectedMeasurement);
+    QAction* clear_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空测量"));
+    clear_action->setToolTip(tr("清空全部测量结果"));
+    align_toolbar_button(clear_action, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementClearToolButton"));
+    connect(clear_action, &QAction::triggered, this, &CameraMainWindow::clearMeasurements);
+    QAction* export_measurements_action = measurement_toolbar_->addAction(
+        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"));
+    export_measurements_action->setToolTip(tr("导出全部测量结果为 CSV"));
+    align_toolbar_button(export_measurements_action, QStringLiteral("measurementAction"),
+        QStringLiteral("MeasurementExportToolButton"));
+    connect(export_measurements_action, &QAction::triggered,
+        this, &CameraMainWindow::exportMeasurements);
 
+    measurement_toolbar_->addSeparator();
     QAction* smart_sample_action = measurement_toolbar_->addAction(
         measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"));
     smart_sample_action->setCheckable(true);
     smart_sample_action->setData(static_cast<int>(CanvasTool::SmartCountSample));
     smart_sample_action->setToolTip(tr("连续框选典型目标作为自动计数样本"));
     measurement_actions->addAction(smart_sample_action);
+    align_toolbar_button(smart_sample_action, QStringLiteral("measurementTool"));
     connect(smart_sample_action, &QAction::triggered,
         this, &CameraMainWindow::startSmartTargetSampleSelection);
 
@@ -621,88 +762,341 @@ void CameraMainWindow::setupMenusAndToolbar()
             measurement_actions->setExclusive(true);
         });
 
-    measurement_toolbar_->addSeparator();
     QAction* smart_run_action = measurement_toolbar_->addAction(
         measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"));
     smart_run_action->setToolTip(tr("根据已框选样本自动查找并统计目标"));
+    align_toolbar_button(smart_run_action, QStringLiteral("measurementAction"));
     connect(smart_run_action, &QAction::triggered, this, &CameraMainWindow::runSmartTargetCounting);
 
     QAction* edge_snap_action = measurement_toolbar_->addAction(
         measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"));
     edge_snap_action->setCheckable(true);
     edge_snap_action->setToolTip(tr("将测量落点吸附到附近最清晰的边缘"));
+    align_toolbar_button(edge_snap_action, QStringLiteral("measurementAction"));
     connect(edge_snap_action, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
     connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action, &QAction::setChecked);
+    updateMeasurementStyleUi();
+}
 
-    measurement_toolbar_->addSeparator();
-    QAction* delete_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除"));
-    delete_action->setToolTip(tr("删除当前选中的测量结果"));
-    connect(delete_action, &QAction::triggered, this, &CameraMainWindow::deleteSelectedMeasurement);
-    QAction* clear_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空"));
-    clear_action->setToolTip(tr("清空全部测量结果"));
-    connect(clear_action, &QAction::triggered, this, &CameraMainWindow::clearMeasurements);
-    QAction* export_measurements_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"));
-    export_measurements_action->setToolTip(tr("导出全部测量结果为 CSV"));
-    connect(export_measurements_action, &QAction::triggered, this, &CameraMainWindow::exportMeasurements);
+QString cameraFrameFormatName(int format)
+{
+    switch (format) {
+    case 0: return QObject::tr("Bayer GR/BG");
+    case 1: return QObject::tr("Bayer BG/GR");
+    case 2: return QObject::tr("Bayer GB/RG");
+    case 3: return QObject::tr("Bayer RG/GB");
+    case 4: return QObject::tr("RGB");
+    case 5: return QObject::tr("BGR");
+    case 6: return QObject::tr("单色");
+    default: return QObject::tr("未知");
+    }
+}
+
+QWidget* addCollapsibleSection(
+    QBoxLayout* parentLayout,
+    const QString& title,
+    bool expanded = true)
+{
+    auto* container = new QWidget;
+    container->setProperty("cameraSection", true);
+    auto* layout = new QVBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    auto* header = new QToolButton;
+    header->setText(title);
+    header->setCheckable(true);
+    header->setChecked(expanded);
+    header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+    header->setProperty("cameraSectionHeader", true);
+    auto* body = new QWidget;
+    body->setVisible(expanded);
+    layout->addWidget(header);
+    layout->addWidget(body);
+    QObject::connect(header, &QToolButton::toggled, body, &QWidget::setVisible);
+    QObject::connect(header, &QToolButton::toggled, header,
+        [header](bool checked) {
+            header->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
+        });
+    parentLayout->addWidget(container);
+    return body;
 }
 
 QWidget* CameraMainWindow::buildCameraPage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
-    auto* form = new QFormLayout;
-    device_combo_ = new QComboBox;
-    device_combo_->setObjectName(QStringLiteral("CameraDeviceCombo"));
-    form->addRow(tr("设备"), device_combo_);
-    exposure_spin_ = new QDoubleSpinBox;
-    exposure_spin_->setRange(0.01, 10000.0);
-    exposure_spin_->setValue(10.0);
-    exposure_spin_->setSuffix(tr(" ms"));
-    form->addRow(tr("曝光"), exposure_spin_);
-    gain_spin_ = new QDoubleSpinBox;
-    gain_spin_->setRange(0.01, 100.0);
-    gain_spin_->setValue(1.0);
-    form->addRow(tr("增益"), gain_spin_);
-    layout->addLayout(form);
 
-    auto* refresh = new QPushButton(tr("刷新"));
-    auto* open = new QPushButton(tr("打开"));
-    auto* stop = new QPushButton(tr("停止"));
-    refresh->setObjectName(QStringLiteral("CameraRefreshButton"));
-    open->setObjectName(QStringLiteral("CameraOpenButton"));
-    stop->setObjectName(QStringLiteral("CameraStopButton"));
-    setButtonRole(open, "primary");
-    setButtonRole(stop, "danger");
-    layout->addWidget(buttonRow({refresh, open, stop}));
-    connect(refresh, &QPushButton::clicked, this, &CameraMainWindow::refreshDevices);
-    connect(open, &QPushButton::clicked, this, &CameraMainWindow::openSelectedCamera);
-    connect(stop, &QPushButton::clicked, this, &CameraMainWindow::stopCamera);
-
-    auto* apply_exposure = addButton(layout, tr("应用曝光"));
-    auto* auto_exposure = addButton(layout, tr("自动曝光"));
-    auto* apply_gain = addButton(layout, tr("应用增益"));
-    auto* white_balance = addButton(layout, tr("白平衡"));
-    connect(apply_exposure, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
-            Q_ARG(double, exposure_spin_->value()));
-    });
-    connect(auto_exposure, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "autoExposure", Qt::QueuedConnection);
-    });
-    connect(apply_gain, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "setGain", Qt::QueuedConnection,
-            Q_ARG(double, gain_spin_->value()));
-    });
-    connect(white_balance, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "whiteBalance", Qt::QueuedConnection);
-    });
+    auto* status_card = new QFrame;
+    status_card->setObjectName(QStringLiteral("CameraStatusCard"));
+    status_card->setProperty("cameraStatusCard", true);
+    auto* status_layout = new QVBoxLayout(status_card);
+    status_layout->setContentsMargins(12, 10, 12, 10);
+    status_layout->setSpacing(5);
+    auto* status_header = new QHBoxLayout;
+    camera_state_badge_ = new QLabel(tr("初始化"));
+    camera_state_badge_->setObjectName(QStringLiteral("CameraStateBadge"));
+    camera_state_badge_->setProperty("cameraState", QStringLiteral("busy"));
     camera_state_label_ = new QLabel(tr("正在初始化 MUCam SDK…"));
     camera_state_label_->setObjectName(QStringLiteral("CameraStateLabel"));
     camera_state_label_->setWordWrap(true);
-    layout->addWidget(camera_state_label_);
+    status_header->addWidget(camera_state_badge_);
+    status_header->addWidget(camera_state_label_, 1);
+    status_layout->addLayout(status_header);
+    camera_device_summary_label_ = new QLabel(tr("尚未选择设备"));
+    camera_device_summary_label_->setObjectName(QStringLiteral("CameraDeviceSummary"));
+    camera_device_summary_label_->setWordWrap(true);
+    camera_telemetry_label_ = new QLabel(tr("分辨率 —  ·  FPS —  ·  像素格式 —  ·  8 位"));
+    camera_telemetry_label_->setObjectName(QStringLiteral("CameraTelemetry"));
+    camera_telemetry_label_->setWordWrap(true);
+    status_layout->addWidget(camera_device_summary_label_);
+    status_layout->addWidget(camera_telemetry_label_);
+    layout->addWidget(status_card);
+
+    QWidget* device_body = addCollapsibleSection(layout, tr("设备与连接"));
+    auto* device_layout = new QVBoxLayout(device_body);
+    device_layout->setContentsMargins(0, 0, 0, 0);
+    device_layout->setSpacing(7);
+    device_combo_ = new QComboBox;
+    device_combo_->setObjectName(QStringLiteral("CameraDeviceCombo"));
+    device_combo_->setPlaceholderText(tr("选择相机设备"));
+    device_layout->addWidget(device_combo_);
+    camera_refresh_button_ = new QPushButton(tr("刷新设备"));
+    camera_connection_button_ = new QPushButton(tr("连接相机"));
+    camera_refresh_button_->setObjectName(QStringLiteral("CameraRefreshButton"));
+    camera_connection_button_->setObjectName(QStringLiteral("CameraConnectionButton"));
+    camera_refresh_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    camera_connection_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    setButtonRole(camera_connection_button_, "primary");
+    device_layout->addWidget(buttonRow({camera_refresh_button_, camera_connection_button_}));
+
+    QWidget* basic_body = addCollapsibleSection(layout, tr("基础参数"));
+    auto* basic_layout = new QVBoxLayout(basic_body);
+    basic_layout->setContentsMargins(0, 0, 0, 0);
+    basic_layout->setSpacing(7);
+    exposure_spin_ = new QDoubleSpinBox;
+    exposure_spin_->setObjectName(QStringLiteral("CameraExposureSpin"));
+    exposure_spin_->setDecimals(3);
+    exposure_spin_->setRange(0.01, 10000.0);
+    exposure_spin_->setValue(10.0);
+    exposure_spin_->setSuffix(tr(" ms"));
+    camera_exposure_slider_ = new QSlider(Qt::Horizontal);
+    camera_exposure_slider_->setObjectName(QStringLiteral("CameraExposureSlider"));
+    camera_exposure_slider_->setRange(0, 1000);
+    auto* exposure_row = new QWidget;
+    auto* exposure_row_layout = new QHBoxLayout(exposure_row);
+    exposure_row_layout->setContentsMargins(0, 0, 0, 0);
+    exposure_row_layout->addWidget(camera_exposure_slider_, 1);
+    exposure_row_layout->addWidget(exposure_spin_);
+    basic_layout->addWidget(new QLabel(tr("曝光时间")));
+    basic_layout->addWidget(exposure_row);
+    gain_spin_ = new QDoubleSpinBox;
+    gain_spin_->setObjectName(QStringLiteral("CameraGainSpin"));
+    gain_spin_->setDecimals(3);
+    gain_spin_->setRange(0.01, 100.0);
+    gain_spin_->setValue(1.0);
+    camera_gain_slider_ = new QSlider(Qt::Horizontal);
+    camera_gain_slider_->setObjectName(QStringLiteral("CameraGainSlider"));
+    camera_gain_slider_->setRange(1, 10000);
+    camera_gain_slider_->setValue(100);
+    auto* gain_row = new QWidget;
+    auto* gain_row_layout = new QHBoxLayout(gain_row);
+    gain_row_layout->setContentsMargins(0, 0, 0, 0);
+    gain_row_layout->addWidget(camera_gain_slider_, 1);
+    gain_row_layout->addWidget(gain_spin_);
+    basic_layout->addWidget(new QLabel(tr("总增益")));
+    basic_layout->addWidget(gain_row);
+    camera_auto_exposure_button_ = new QPushButton(tr("自动曝光一次"));
+    camera_white_balance_button_ = new QPushButton(tr("白平衡一次"));
+    camera_auto_exposure_button_->setObjectName(QStringLiteral("CameraAutoExposureButton"));
+    camera_white_balance_button_->setObjectName(QStringLiteral("CameraWhiteBalanceButton"));
+    camera_auto_exposure_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    camera_white_balance_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    basic_layout->addWidget(buttonRow({camera_auto_exposure_button_, camera_white_balance_button_}));
+
+    QWidget* color_body = addCollapsibleSection(layout, tr("颜色控制"), false);
+    camera_color_group_ = new QGroupBox;
+    camera_color_group_->setObjectName(QStringLiteral("CameraColorControls"));
+    auto* color_layout = new QGridLayout(camera_color_group_);
+    color_layout->setContentsMargins(0, 0, 0, 0);
+    camera_link_channels_check_ = new QCheckBox(tr("通道联动"));
+    camera_link_channels_check_->setChecked(true);
+    color_layout->addWidget(camera_link_channels_check_, 0, 0, 1, 3);
+    const QStringList channel_names{tr("R"), tr("G"), tr("B")};
+    for (int channel = 0; channel < 3; ++channel) {
+        color_layout->addWidget(new QLabel(channel_names[channel]), channel + 1, 0);
+        camera_rgb_gain_spins_[channel] = new QDoubleSpinBox;
+        camera_rgb_gain_spins_[channel]->setDecimals(3);
+        camera_rgb_gain_spins_[channel]->setRange(0.01, 100.0);
+        camera_rgb_gain_spins_[channel]->setValue(1.0);
+        camera_rgb_gain_spins_[channel]->setPrefix(tr("增益 "));
+        camera_rgb_offset_spins_[channel] = new QSpinBox;
+        camera_rgb_offset_spins_[channel]->setRange(-255, 255);
+        camera_rgb_offset_spins_[channel]->setPrefix(tr("偏移 "));
+        color_layout->addWidget(camera_rgb_gain_spins_[channel], channel + 1, 1);
+        color_layout->addWidget(camera_rgb_offset_spins_[channel], channel + 1, 2);
+    }
+    auto* color_outer_layout = new QVBoxLayout(color_body);
+    color_outer_layout->setContentsMargins(0, 0, 0, 0);
+    color_outer_layout->addWidget(camera_color_group_);
+
+    QWidget* capture_body = addCollapsibleSection(layout, tr("采集参数"), false);
+    auto* capture_form = new QFormLayout(capture_body);
+    capture_form->setContentsMargins(0, 0, 0, 0);
+    camera_resolution_combo_ = new QComboBox;
+    camera_resolution_combo_->setObjectName(QStringLiteral("CameraResolutionCombo"));
+    camera_trigger_combo_ = new QComboBox;
+    camera_trigger_combo_->setObjectName(QStringLiteral("CameraTriggerCombo"));
+    camera_trigger_combo_->addItem(tr("自由采集"), static_cast<int>(CameraTriggerMode::Free));
+    camera_trigger_combo_->addItem(tr("软件触发"), static_cast<int>(CameraTriggerMode::Software));
+    camera_trigger_combo_->addItem(tr("硬件触发（上升沿）"), static_cast<int>(CameraTriggerMode::HardwareRise));
+    camera_trigger_combo_->addItem(tr("硬件触发（下降沿）"), static_cast<int>(CameraTriggerMode::HardwareFall));
+    camera_flip_check_ = new QCheckBox(tr("垂直翻转"));
+    camera_mirror_check_ = new QCheckBox(tr("水平镜像"));
+    camera_single_frame_button_ = new QPushButton(tr("采集一帧"));
+    camera_single_frame_button_->setObjectName(QStringLiteral("CameraSingleFrameButton"));
+    camera_single_frame_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    capture_form->addRow(tr("分辨率 / Binning"), camera_resolution_combo_);
+    capture_form->addRow(tr("触发模式"), camera_trigger_combo_);
+    capture_form->addRow(camera_flip_check_);
+    capture_form->addRow(camera_mirror_check_);
+    capture_form->addRow(camera_single_frame_button_);
+
+    QWidget* roi_body = addCollapsibleSection(layout, tr("ROI"), false);
+    auto* roi_layout = new QVBoxLayout(roi_body);
+    roi_layout->setContentsMargins(0, 0, 0, 0);
+    auto* roi_grid = new QGridLayout;
+    const QStringList roi_names{tr("X"), tr("Y"), tr("宽"), tr("高")};
+    for (int index = 0; index < 4; ++index) {
+        camera_roi_spins_[index] = new QSpinBox;
+        camera_roi_spins_[index]->setRange(0, 100000);
+        camera_roi_spins_[index]->setObjectName(
+            QStringLiteral("CameraRoi%1Spin").arg(roi_names[index]));
+        roi_grid->addWidget(new QLabel(roi_names[index]), index / 2, (index % 2) * 2);
+        roi_grid->addWidget(camera_roi_spins_[index], index / 2, (index % 2) * 2 + 1);
+    }
+    roi_layout->addLayout(roi_grid);
+    camera_roi_select_button_ = new QPushButton(tr("在画面框选 ROI"));
+    camera_roi_apply_button_ = new QPushButton(tr("应用数值 ROI"));
+    camera_roi_reset_button_ = new QPushButton(tr("恢复全幅"));
+    camera_roi_select_button_->setObjectName(QStringLiteral("CameraRoiSelectButton"));
+    camera_roi_apply_button_->setObjectName(QStringLiteral("CameraRoiApplyButton"));
+    camera_roi_reset_button_->setObjectName(QStringLiteral("CameraRoiResetButton"));
+    camera_roi_select_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    camera_roi_apply_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    camera_roi_reset_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    roi_layout->addWidget(camera_roi_select_button_);
+    roi_layout->addWidget(buttonRow({camera_roi_apply_button_, camera_roi_reset_button_}));
+
+    camera_feedback_label_ = new QLabel(tr("参数可在连接前预设，连接后自动应用"));
+    camera_feedback_label_->setObjectName(QStringLiteral("CameraInlineFeedback"));
+    camera_feedback_label_->setWordWrap(true);
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    layout->addWidget(camera_feedback_label_);
+
+    camera_parameter_timer_ = new QTimer(page);
+    camera_parameter_timer_->setSingleShot(true);
+    camera_parameter_timer_->setInterval(250);
+    connect(camera_parameter_timer_, &QTimer::timeout,
+        this, &CameraMainWindow::applyPendingCameraParameters);
+    connect(camera_refresh_button_, &QPushButton::clicked, this, &CameraMainWindow::refreshDevices);
+    connect(camera_connection_button_, &QPushButton::clicked, this, [this] {
+        camera_open_ ? stopCamera() : openSelectedCamera();
+    });
+    connect(device_combo_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (!camera_open_ && !camera_ui_updating_) loadCameraProfile();
+        updateCameraControlAvailability();
+    });
+    connect(camera_auto_exposure_button_, &QPushButton::clicked, this, [this] {
+        camera_feedback_label_->setText(tr("正在执行自动曝光…"));
+        QMetaObject::invokeMethod(camera_worker_, "autoExposure", Qt::QueuedConnection);
+    });
+    connect(camera_white_balance_button_, &QPushButton::clicked, this, [this] {
+        camera_feedback_label_->setText(tr("正在执行白平衡…"));
+        QMetaObject::invokeMethod(camera_worker_, "whiteBalance", Qt::QueuedConnection);
+    });
+    connect(camera_single_frame_button_, &QPushButton::clicked, this, [this] {
+        QMetaObject::invokeMethod(camera_worker_, "captureOneFrame", Qt::QueuedConnection);
+    });
+    connect(camera_roi_select_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::startCameraRoiSelection);
+    connect(camera_roi_apply_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::applyCameraRoiInputs);
+    connect(camera_roi_reset_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::resetCameraRoi);
+
+    connect(exposure_spin_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (camera_ui_updating_) return;
+        const double minimum = exposure_spin_->minimum();
+        const double span = exposure_spin_->maximum() - minimum;
+        const QSignalBlocker blocker(camera_exposure_slider_);
+        camera_exposure_slider_->setValue(span > 0.0
+            ? qRound((value - minimum) * 1000.0 / span) : 0);
+        scheduleCameraParameterApply();
+    });
+    connect(camera_exposure_slider_, &QSlider::valueChanged, this, [this](int value) {
+        if (camera_ui_updating_) return;
+        const double target = exposure_spin_->minimum() +
+            (exposure_spin_->maximum() - exposure_spin_->minimum()) * value / 1000.0;
+        const QSignalBlocker blocker(exposure_spin_);
+        exposure_spin_->setValue(target);
+        scheduleCameraParameterApply();
+    });
+    connect(gain_spin_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (camera_ui_updating_) return;
+        {
+            const QSignalBlocker blocker(camera_gain_slider_);
+            camera_gain_slider_->setValue(qRound(value * 100.0));
+        }
+        if (camera_link_channels_check_->isChecked()) {
+            for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+                const QSignalBlocker blocker(spin);
+                spin->setValue(value);
+            }
+        }
+        scheduleCameraParameterApply();
+    });
+    connect(camera_gain_slider_, &QSlider::valueChanged, this, [this](int value) {
+        if (camera_ui_updating_) return;
+        gain_spin_->setValue(value / 100.0);
+    });
+    for (int channel = 0; channel < 3; ++channel) {
+        connect(camera_rgb_gain_spins_[channel], &QDoubleSpinBox::valueChanged,
+            this, [this, channel](double value) {
+                if (camera_ui_updating_) return;
+                if (camera_link_channels_check_->isChecked()) {
+                    for (int other = 0; other < 3; ++other) {
+                        if (other == channel) continue;
+                        const QSignalBlocker blocker(camera_rgb_gain_spins_[other]);
+                        camera_rgb_gain_spins_[other]->setValue(value);
+                    }
+                    const QSignalBlocker blocker(gain_spin_);
+                    gain_spin_->setValue(value);
+                }
+                scheduleCameraParameterApply();
+            });
+        connect(camera_rgb_offset_spins_[channel], &QSpinBox::valueChanged,
+            this, [this](int) {
+                if (!camera_ui_updating_) scheduleCameraParameterApply();
+            });
+    }
+    auto structural_change = [this] {
+        if (!camera_ui_updating_) applyCameraConfigurationFromUi();
+    };
+    connect(camera_resolution_combo_, &QComboBox::currentIndexChanged,
+        this, [structural_change](int) { structural_change(); });
+    connect(camera_trigger_combo_, &QComboBox::currentIndexChanged,
+        this, [structural_change](int) { structural_change(); });
+    connect(camera_flip_check_, &QCheckBox::toggled,
+        this, [structural_change](bool) { structural_change(); });
+    connect(camera_mirror_check_, &QCheckBox::toggled,
+        this, [structural_change](bool) { structural_change(); });
+
+    setCameraPanelState(CameraPanelState::Initializing, tr("正在初始化 MUCam SDK…"));
+    updateCameraControlAvailability();
     layout->addStretch();
     return page;
 }
@@ -1595,13 +1989,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(polyline, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
     connect(circle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
     connect(ellipse, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
-    connect(select_tool, &QToolButton::clicked, this, [this] {
-        ai_annotation_active_ = false;
-        canvas_->setTool(CanvasTool::None);
-        canvas_->setFocus(Qt::OtherFocusReason);
-        statusBar()->showMessage(
-            tr("选择模式：单击选择测量，拖动控制点修改形状，拖动对象整体移动"), 5000);
-    });
+    connect(select_tool, &QToolButton::clicked,
+        this, &CameraMainWindow::enterMeasurementSelectionMode);
     connect(canvas_, &ImageCanvas::toolChanged, page, [tool_buttons](CanvasTool tool) {
         tool_buttons->setExclusive(false);
         for (QAbstractButton* button : tool_buttons->buttons()) {
@@ -1644,22 +2033,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
             (index == 1 ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters);
         updateMeasurementList();
     });
-    auto rename_current = [this] {
-        const int row = measurement_list_->currentRow();
-        const std::optional<MeasurementReference> reference = row >= 0
-            ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
-        if (!reference) {
-            return;
-        }
-        bool accepted = false;
-        const QString name = QInputDialog::getText(
-            this, tr("重命名测量"), tr("名称"), QLineEdit::Normal,
-            QString::fromStdWString(measurements_.Name(*reference)), &accepted).trimmed();
-        if (accepted && !name.isEmpty() && measurements_.SetName(*reference, name.toStdWString())) {
-            updateMeasurementList();
-        }
-    };
-    connect(rename_tool, &QToolButton::clicked, this, rename_current);
+    connect(rename_tool, &QToolButton::clicked,
+        this, &CameraMainWindow::renameSelectedMeasurement);
     connect(measurement_list_, &QListWidget::currentRowChanged, this,
         [this](int) {
             rebuildOverlays();
@@ -1668,7 +2043,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(measurement_list_, &QListWidget::itemDoubleClicked, this,
         [this](QListWidgetItem*) { focusSelectedMeasurement(); });
     auto* rename_shortcut = new QShortcut(QKeySequence(Qt::Key_F2), measurement_list_);
-    connect(rename_shortcut, &QShortcut::activated, this, rename_current);
+    connect(rename_shortcut, &QShortcut::activated,
+        this, &CameraMainWindow::renameSelectedMeasurement);
     auto* delete_shortcut = new QShortcut(QKeySequence::Delete, measurement_list_);
     connect(delete_shortcut, &QShortcut::activated, this, &CameraMainWindow::deleteSelectedMeasurement);
     connect(delete_tool, &QToolButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
@@ -2192,39 +2568,505 @@ void CameraMainWindow::openProject()
 
 void CameraMainWindow::refreshDevices()
 {
-    camera_state_label_->setText(tr("正在刷新设备…"));
+    if (camera_open_ || camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) {
+        camera_feedback_label_->setText(tr("请先断开相机，再刷新设备列表"));
+        return;
+    }
+    setCameraPanelState(CameraPanelState::Initializing, tr("正在刷新设备…"));
+    updateCameraControlAvailability();
     QMetaObject::invokeMethod(camera_worker_, "refreshDevices", Qt::QueuedConnection);
 }
 
 void CameraMainWindow::openSelectedCamera()
 {
+    if (camera_open_ || camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) return;
     const int row = device_combo_->currentIndex();
     const int device_index = row >= 0 && row < camera_indices_.size() ? camera_indices_[row] : -1;
-    camera_state_label_->setText(tr("正在打开相机…"));
+    if (device_index < 0) {
+        setCameraPanelState(CameraPanelState::NoDevice, tr("请先选择相机设备"));
+        return;
+    }
+    loadCameraProfile();
+    camera_profile_reconfigure_pending_ = camera_profile_loaded_;
+    QSettings settings;
+    settings.setValue(QStringLiteral("CameraPanel/lastDeviceKey"), currentCameraDeviceKey());
+    setCameraPanelState(CameraPanelState::Connecting, tr("正在连接相机…"));
+    updateCameraControlAvailability();
     QMetaObject::invokeMethod(camera_worker_, "openCamera", Qt::QueuedConnection,
         Q_ARG(int, device_index), Q_ARG(double, exposure_spin_->value()));
 }
 
 void CameraMainWindow::stopCamera()
 {
+    if (camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) {
+        camera_feedback_label_->setText(tr("当前操作完成后即可断开相机"));
+        return;
+    }
     if (live_stitch_active_) stopLiveStitch(false);
     if (FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) {
         cancelFluorescenceCaptureSequence();
     }
+    camera_profile_reconfigure_pending_ = false;
+    camera_roi_selection_pending_ = false;
+    setCameraPanelState(CameraPanelState::Disconnected, tr("正在断开相机…"));
     QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::QueuedConnection);
 }
 
 void CameraMainWindow::onDevicesReady(QStringList labels, QVector<int> indices, QString diagnostic)
 {
+    QSettings settings;
+    const QString remembered_key = settings.value(
+        QStringLiteral("CameraPanel/lastDeviceKey")).toString();
     camera_indices_ = std::move(indices);
-    device_combo_->clear();
-    device_combo_->addItems(labels);
-    camera_state_label_->setText(diagnostic);
+    {
+        const QSignalBlocker blocker(device_combo_);
+        device_combo_->clear();
+        device_combo_->addItems(labels);
+        int remembered_row = -1;
+        for (int row = 0; row < labels.size(); ++row) {
+            const QString raw_key = QStringLiteral("%1|%2")
+                .arg(labels[row])
+                .arg(row < camera_indices_.size() ? camera_indices_[row] : row);
+            const QString key = QString::fromLatin1(raw_key.toUtf8().toBase64(
+                QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+            if (key == remembered_key) {
+                remembered_row = row;
+                break;
+            }
+        }
+        if (remembered_row >= 0) device_combo_->setCurrentIndex(remembered_row);
+        else if (!labels.isEmpty()) device_combo_->setCurrentIndex(0);
+    }
+    loadCameraProfile();
+    if (labels.isEmpty()) {
+        setCameraPanelState(
+            diagnostic.contains(tr("失败")) ? CameraPanelState::Error : CameraPanelState::NoDevice,
+            diagnostic);
+    } else {
+        setCameraPanelState(CameraPanelState::Ready, diagnostic);
+    }
     statusBar()->showMessage(diagnostic, 5000);
+    updateCameraControlAvailability();
+
+    if (!startup_auto_connect_attempted_) {
+        startup_auto_connect_attempted_ = true;
+        if (!remembered_key.isEmpty() && currentCameraDeviceKey() == remembered_key) {
+            QTimer::singleShot(0, this, &CameraMainWindow::openSelectedCamera);
+        }
+    }
+}
+
+void CameraMainWindow::onCameraCapabilities(
+    CameraCapabilities capabilities,
+    CameraConfiguration configuration,
+    CameraOpenInfo openInfo)
+{
+    camera_capabilities_ = std::move(capabilities);
+    camera_configuration_ = configuration;
+    camera_open_info_ = openInfo;
+
+    camera_ui_updating_ = true;
+    camera_resolution_combo_->clear();
+    for (const CameraResolutionOption& option : camera_capabilities_.resolutions) {
+        camera_resolution_combo_->addItem(
+            tr("%1 × %2").arg(option.width).arg(option.height), option.index);
+    }
+    exposure_spin_->setRange(
+        camera_capabilities_.exposure_minimum,
+        camera_capabilities_.exposure_maximum);
+    double gain_minimum = 0.01;
+    double gain_maximum = 100.0;
+    if (!camera_capabilities_.gain_values.empty()) {
+        const auto [minimum, maximum] = std::minmax_element(
+            camera_capabilities_.gain_values.begin(), camera_capabilities_.gain_values.end());
+        gain_minimum = *minimum;
+        gain_maximum = *maximum;
+    }
+    gain_spin_->setRange(gain_minimum, gain_maximum);
+    camera_gain_slider_->setRange(
+        qRound(gain_minimum * 100.0), qRound(gain_maximum * 100.0));
+    for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+        spin->setRange(gain_minimum, gain_maximum);
+    }
+    for (QSpinBox* spin : camera_rgb_offset_spins_) {
+        spin->setRange(
+            camera_capabilities_.offset_minimum,
+            camera_capabilities_.offset_maximum);
+    }
+    camera_ui_updating_ = false;
+
+    camera_device_summary_label_->setText(
+        tr("%1 · 类型 %2").arg(device_combo_->currentText()).arg(openInfo.type));
+    camera_telemetry_label_->setText(
+        tr("分辨率 %1 × %2  ·  FPS —  ·  %3  ·  8 位")
+            .arg(openInfo.width).arg(openInfo.height)
+            .arg(cameraFrameFormatName(camera_capabilities_.frame_format)));
+
+    if (camera_profile_reconfigure_pending_ && camera_profile_loaded_) {
+        camera_profile_reconfigure_pending_ = false;
+        CameraConfiguration desired = camera_profile_configuration_;
+        desired.roi = {};
+        const bool resolution_available = std::any_of(
+            camera_capabilities_.resolutions.begin(),
+            camera_capabilities_.resolutions.end(),
+            [&desired](const CameraResolutionOption& option) {
+                return option.index == desired.resolution_index;
+            });
+        if (!resolution_available) desired.resolution_index = configuration.resolution_index;
+        if (!camera_capabilities_.has_trigger) desired.trigger_mode = CameraTriggerMode::Free;
+        if (!camera_capabilities_.has_flip) desired.vertical_flip = false;
+        if (!camera_capabilities_.has_mirror) desired.horizontal_mirror = false;
+        desired.exposure_ms = static_cast<float>(std::clamp(
+            static_cast<double>(desired.exposure_ms),
+            exposure_spin_->minimum(), exposure_spin_->maximum()));
+        const auto differs = [](double left, double right) {
+            return std::abs(left - right) > 0.0001;
+        };
+        const bool requires_reconfigure =
+            desired.resolution_index != configuration.resolution_index ||
+            desired.trigger_mode != configuration.trigger_mode ||
+            desired.vertical_flip != configuration.vertical_flip ||
+            desired.horizontal_mirror != configuration.horizontal_mirror ||
+            differs(desired.exposure_ms, configuration.exposure_ms) ||
+            (camera_capabilities_.has_gain &&
+                (differs(desired.red_gain, configuration.red_gain) ||
+                 differs(desired.green_gain, configuration.green_gain) ||
+                 differs(desired.blue_gain, configuration.blue_gain))) ||
+            (camera_capabilities_.has_offset &&
+                (desired.red_offset != configuration.red_offset ||
+                 desired.green_offset != configuration.green_offset ||
+                 desired.blue_offset != configuration.blue_offset));
+        if (!requires_reconfigure) {
+            updateCameraConfigurationUi(configuration);
+            last_sent_exposure_ = configuration.exposure_ms;
+            last_sent_rgb_gain_ = {
+                configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+            last_sent_rgb_offset_ = {
+                configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+            updateCameraControlAvailability();
+            return;
+        }
+        setCameraPanelState(CameraPanelState::Reconfiguring, tr("正在恢复此设备的参数…"));
+        QMetaObject::invokeMethod(camera_worker_, "reconfigureCamera", Qt::QueuedConnection,
+            Q_ARG(CameraConfiguration, desired));
+        return;
+    }
+
+    updateCameraConfigurationUi(configuration);
+    updateCameraControlAvailability();
+}
+
+void CameraMainWindow::setCameraPanelState(CameraPanelState state, const QString& message)
+{
+    camera_panel_state_ = state;
+    if (!camera_state_label_ || !camera_state_badge_) return;
+    QString badge;
+    QString visual_state;
+    switch (state) {
+    case CameraPanelState::Initializing: badge = tr("初始化"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::NoDevice: badge = tr("无设备"); visual_state = QStringLiteral("warning"); break;
+    case CameraPanelState::Ready: badge = tr("待连接"); visual_state = QStringLiteral("ready"); break;
+    case CameraPanelState::Connecting: badge = tr("连接中"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::Previewing: badge = tr("预览中"); visual_state = QStringLiteral("success"); break;
+    case CameraPanelState::Reconfiguring: badge = tr("重配置"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::WaitingTrigger: badge = tr("等待触发"); visual_state = QStringLiteral("warning"); break;
+    case CameraPanelState::Disconnected: badge = tr("已断开"); visual_state = QStringLiteral("ready"); break;
+    case CameraPanelState::Error: badge = tr("错误"); visual_state = QStringLiteral("error"); break;
+    }
+    camera_state_badge_->setText(badge);
+    camera_state_badge_->setProperty("cameraState", visual_state);
+    camera_state_badge_->style()->unpolish(camera_state_badge_);
+    camera_state_badge_->style()->polish(camera_state_badge_);
+    camera_state_label_->setText(message);
+}
+
+void CameraMainWindow::updateCameraControlAvailability()
+{
+    if (!device_combo_) return;
+    const bool transitioning = camera_panel_state_ == CameraPanelState::Initializing ||
+        camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring;
+    const bool has_device = device_combo_->currentIndex() >= 0 && !camera_indices_.isEmpty();
+    device_combo_->setEnabled(!camera_open_ && !transitioning);
+    camera_refresh_button_->setEnabled(!camera_open_ && !transitioning);
+    camera_connection_button_->setEnabled(camera_open_ || (has_device && !transitioning));
+    camera_connection_button_->setText(camera_open_ ? tr("断开相机") : tr("连接相机"));
+    camera_connection_button_->setIcon(style()->standardIcon(
+        camera_open_ ? QStyle::SP_DialogCloseButton : QStyle::SP_DialogApplyButton));
+    camera_connection_button_->setProperty(
+        "role", camera_open_ ? QStringLiteral("danger") : QStringLiteral("primary"));
+    camera_connection_button_->style()->unpolish(camera_connection_button_);
+    camera_connection_button_->style()->polish(camera_connection_button_);
+
+    // Exposure and gain remain editable while offline as per-device presets.
+    exposure_spin_->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_exposure));
+    camera_exposure_slider_->setEnabled(exposure_spin_->isEnabled());
+    gain_spin_->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_gain));
+    camera_gain_slider_->setEnabled(gain_spin_->isEnabled());
+    camera_auto_exposure_button_->setEnabled(
+        camera_open_ && !transitioning && camera_capabilities_.has_auto_exposure);
+    camera_white_balance_button_->setEnabled(
+        camera_open_ && !transitioning && camera_capabilities_.has_white_balance);
+
+    camera_color_group_->setVisible(!camera_open_ || camera_capabilities_.color);
+    for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+        spin->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_gain));
+        spin->setToolTip(camera_open_ && !camera_capabilities_.has_gain
+            ? tr("当前设备未提供颜色增益接口") : QString());
+    }
+    for (QSpinBox* spin : camera_rgb_offset_spins_) {
+        spin->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_offset);
+        spin->setToolTip(camera_open_ && !camera_capabilities_.has_offset
+            ? tr("当前设备未提供颜色偏移接口") : QString());
+    }
+
+    camera_resolution_combo_->setEnabled(camera_open_ && !transitioning &&
+        camera_capabilities_.resolutions.size() > 1);
+    camera_trigger_combo_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_trigger);
+    camera_flip_check_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_flip);
+    camera_mirror_check_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_mirror);
+    const bool software_trigger = camera_configuration_.trigger_mode == CameraTriggerMode::Software;
+    camera_single_frame_button_->setVisible(software_trigger);
+    camera_single_frame_button_->setEnabled(camera_open_ && !transitioning && software_trigger);
+    const bool roi_enabled = camera_open_ && !transitioning && camera_capabilities_.has_roi;
+    camera_roi_select_button_->setEnabled(roi_enabled && !latest_camera_image_.isNull());
+    camera_roi_apply_button_->setEnabled(roi_enabled);
+    camera_roi_reset_button_->setEnabled(roi_enabled && camera_configuration_.roi.Enabled());
+    for (QSpinBox* spin : camera_roi_spins_) spin->setEnabled(roi_enabled);
+}
+
+QString CameraMainWindow::currentCameraDeviceKey() const
+{
+    const int row = device_combo_ ? device_combo_->currentIndex() : -1;
+    if (row < 0) return {};
+    const int index = row < camera_indices_.size() ? camera_indices_[row] : row;
+    const QString raw = QStringLiteral("%1|%2").arg(device_combo_->itemText(row)).arg(index);
+    return QString::fromLatin1(raw.toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+void CameraMainWindow::loadCameraProfile()
+{
+    const QString key = currentCameraDeviceKey();
+    camera_profile_loaded_ = false;
+    if (key.isEmpty()) return;
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("CameraProfiles/%1").arg(key));
+    const bool has_saved_profile = settings.contains(QStringLiteral("exposureMs")) ||
+        settings.contains(QStringLiteral("resolutionIndex")) ||
+        settings.contains(QStringLiteral("triggerMode"));
+    camera_profile_configuration_ = {};
+    camera_profile_configuration_.exposure_ms = settings.value(
+        QStringLiteral("exposureMs"), 10.0).toFloat();
+    camera_profile_configuration_.red_gain = settings.value(QStringLiteral("redGain"), 1.0).toFloat();
+    camera_profile_configuration_.green_gain = settings.value(QStringLiteral("greenGain"), 1.0).toFloat();
+    camera_profile_configuration_.blue_gain = settings.value(QStringLiteral("blueGain"), 1.0).toFloat();
+    camera_profile_configuration_.red_offset = settings.value(QStringLiteral("redOffset"), 0).toInt();
+    camera_profile_configuration_.green_offset = settings.value(QStringLiteral("greenOffset"), 0).toInt();
+    camera_profile_configuration_.blue_offset = settings.value(QStringLiteral("blueOffset"), 0).toInt();
+    camera_profile_configuration_.resolution_index = settings.value(QStringLiteral("resolutionIndex"), 0).toInt();
+    camera_profile_configuration_.trigger_mode = static_cast<CameraTriggerMode>(
+        settings.value(QStringLiteral("triggerMode"), 0).toInt());
+    camera_profile_configuration_.vertical_flip = settings.value(QStringLiteral("verticalFlip"), false).toBool();
+    camera_profile_configuration_.horizontal_mirror = settings.value(QStringLiteral("horizontalMirror"), false).toBool();
+    settings.endGroup();
+    camera_profile_configuration_.roi = {};
+    camera_profile_loaded_ = has_saved_profile;
+    updateCameraConfigurationUi(camera_profile_configuration_);
+}
+
+void CameraMainWindow::saveCameraProfile() const
+{
+    const QString key = currentCameraDeviceKey();
+    if (key.isEmpty()) return;
+    QSettings settings;
+    settings.setValue(QStringLiteral("CameraPanel/lastDeviceKey"), key);
+    settings.beginGroup(QStringLiteral("CameraProfiles/%1").arg(key));
+    settings.setValue(QStringLiteral("exposureMs"), exposure_spin_->value());
+    settings.setValue(QStringLiteral("redGain"), camera_rgb_gain_spins_[0]->value());
+    settings.setValue(QStringLiteral("greenGain"), camera_rgb_gain_spins_[1]->value());
+    settings.setValue(QStringLiteral("blueGain"), camera_rgb_gain_spins_[2]->value());
+    settings.setValue(QStringLiteral("redOffset"), camera_rgb_offset_spins_[0]->value());
+    settings.setValue(QStringLiteral("greenOffset"), camera_rgb_offset_spins_[1]->value());
+    settings.setValue(QStringLiteral("blueOffset"), camera_rgb_offset_spins_[2]->value());
+    settings.setValue(QStringLiteral("resolutionIndex"),
+        camera_resolution_combo_->currentData().toInt());
+    settings.setValue(QStringLiteral("triggerMode"),
+        camera_trigger_combo_->currentData().toInt());
+    settings.setValue(QStringLiteral("verticalFlip"), camera_flip_check_->isChecked());
+    settings.setValue(QStringLiteral("horizontalMirror"), camera_mirror_check_->isChecked());
+    settings.endGroup();
+}
+
+void CameraMainWindow::updateCameraConfigurationUi(const CameraConfiguration& configuration)
+{
+    camera_ui_updating_ = true;
+    exposure_spin_->setValue(std::clamp(
+        static_cast<double>(configuration.exposure_ms),
+        exposure_spin_->minimum(), exposure_spin_->maximum()));
+    const double exposure_span = exposure_spin_->maximum() - exposure_spin_->minimum();
+    camera_exposure_slider_->setValue(exposure_span > 0.0
+        ? qRound((exposure_spin_->value() - exposure_spin_->minimum()) * 1000.0 / exposure_span) : 0);
+    const std::array<double, 3> gains{
+        configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+    const std::array<int, 3> offsets{
+        configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+    for (int channel = 0; channel < 3; ++channel) {
+        camera_rgb_gain_spins_[channel]->setValue(std::clamp(
+            gains[channel],
+            camera_rgb_gain_spins_[channel]->minimum(),
+            camera_rgb_gain_spins_[channel]->maximum()));
+        camera_rgb_offset_spins_[channel]->setValue(offsets[channel]);
+    }
+    gain_spin_->setValue(camera_rgb_gain_spins_[0]->value());
+    camera_gain_slider_->setValue(qRound(gain_spin_->value() * 100.0));
+    const int resolution_row = camera_resolution_combo_->findData(configuration.resolution_index);
+    if (resolution_row >= 0) camera_resolution_combo_->setCurrentIndex(resolution_row);
+    const int trigger_row = camera_trigger_combo_->findData(
+        static_cast<int>(configuration.trigger_mode));
+    if (trigger_row >= 0) camera_trigger_combo_->setCurrentIndex(trigger_row);
+    camera_flip_check_->setChecked(configuration.vertical_flip);
+    camera_mirror_check_->setChecked(configuration.horizontal_mirror);
+    camera_roi_spins_[0]->setValue(configuration.roi.x);
+    camera_roi_spins_[1]->setValue(configuration.roi.y);
+    camera_roi_spins_[2]->setValue(configuration.roi.width);
+    camera_roi_spins_[3]->setValue(configuration.roi.height);
+    camera_ui_updating_ = false;
+}
+
+void CameraMainWindow::scheduleCameraParameterApply()
+{
+    saveCameraProfile();
+    camera_feedback_label_->setText(
+        camera_open_ ? tr("参数将在输入停止后自动应用…") : tr("参数预设已保存，连接时应用"));
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    if (camera_open_) camera_parameter_timer_->start();
+}
+
+void CameraMainWindow::applyPendingCameraParameters()
+{
+    if (!camera_open_ || camera_panel_state_ == CameraPanelState::Reconfiguring) return;
+    const double exposure = exposure_spin_->value();
+    if (camera_capabilities_.has_exposure && !qFuzzyCompare(exposure + 1.0, last_sent_exposure_ + 1.0)) {
+        last_sent_exposure_ = exposure;
+        QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
+            Q_ARG(double, exposure));
+    }
+    std::array<double, 3> gains{
+        camera_rgb_gain_spins_[0]->value(),
+        camera_rgb_gain_spins_[1]->value(),
+        camera_rgb_gain_spins_[2]->value()};
+    if (camera_capabilities_.has_gain && gains != last_sent_rgb_gain_) {
+        last_sent_rgb_gain_ = gains;
+        QMetaObject::invokeMethod(camera_worker_, "setRgbGain", Qt::QueuedConnection,
+            Q_ARG(double, gains[0]), Q_ARG(double, gains[1]), Q_ARG(double, gains[2]));
+    }
+    std::array<int, 3> offsets{
+        camera_rgb_offset_spins_[0]->value(),
+        camera_rgb_offset_spins_[1]->value(),
+        camera_rgb_offset_spins_[2]->value()};
+    if (camera_capabilities_.has_offset && offsets != last_sent_rgb_offset_) {
+        last_sent_rgb_offset_ = offsets;
+        QMetaObject::invokeMethod(camera_worker_, "setRgbOffset", Qt::QueuedConnection,
+            Q_ARG(int, offsets[0]), Q_ARG(int, offsets[1]), Q_ARG(int, offsets[2]));
+    }
+}
+
+void CameraMainWindow::applyCameraConfigurationFromUi(bool includeRoi)
+{
+    saveCameraProfile();
+    if (!camera_open_ || camera_ui_updating_) return;
+    CameraConfiguration requested = camera_configuration_;
+    requested.resolution_index = camera_resolution_combo_->currentData().toInt();
+    requested.trigger_mode = static_cast<CameraTriggerMode>(camera_trigger_combo_->currentData().toInt());
+    requested.vertical_flip = camera_flip_check_->isChecked();
+    requested.horizontal_mirror = camera_mirror_check_->isChecked();
+    requested.exposure_ms = static_cast<float>(exposure_spin_->value());
+    requested.red_gain = static_cast<float>(camera_rgb_gain_spins_[0]->value());
+    requested.green_gain = static_cast<float>(camera_rgb_gain_spins_[1]->value());
+    requested.blue_gain = static_cast<float>(camera_rgb_gain_spins_[2]->value());
+    requested.red_offset = camera_rgb_offset_spins_[0]->value();
+    requested.green_offset = camera_rgb_offset_spins_[1]->value();
+    requested.blue_offset = camera_rgb_offset_spins_[2]->value();
+    if (includeRoi) {
+        requested.roi = {
+            camera_roi_spins_[0]->value(), camera_roi_spins_[1]->value(),
+            camera_roi_spins_[2]->value(), camera_roi_spins_[3]->value()};
+    }
+    setCameraPanelState(CameraPanelState::Reconfiguring, tr("正在重配置相机…"));
+    updateCameraControlAvailability();
+    QMetaObject::invokeMethod(camera_worker_, "reconfigureCamera", Qt::QueuedConnection,
+        Q_ARG(CameraConfiguration, requested));
+}
+
+void CameraMainWindow::applyCameraRoiInputs()
+{
+    const int resolution_index = camera_resolution_combo_->currentData().toInt();
+    const auto option = std::find_if(
+        camera_capabilities_.resolutions.begin(), camera_capabilities_.resolutions.end(),
+        [resolution_index](const CameraResolutionOption& value) {
+            return value.index == resolution_index;
+        });
+    if (option == camera_capabilities_.resolutions.end()) return;
+    const int x = std::clamp(camera_roi_spins_[0]->value(), 0, option->width - 1);
+    const int y = std::clamp(camera_roi_spins_[1]->value(), 0, option->height - 1);
+    const int width = std::clamp(camera_roi_spins_[2]->value(), 1, option->width - x);
+    const int height = std::clamp(camera_roi_spins_[3]->value(), 1, option->height - y);
+    camera_ui_updating_ = true;
+    camera_roi_spins_[0]->setValue(x);
+    camera_roi_spins_[1]->setValue(y);
+    camera_roi_spins_[2]->setValue(width);
+    camera_roi_spins_[3]->setValue(height);
+    camera_ui_updating_ = false;
+    applyCameraConfigurationFromUi();
+}
+
+void CameraMainWindow::resetCameraRoi()
+{
+    camera_ui_updating_ = true;
+    for (QSpinBox* spin : camera_roi_spins_) spin->setValue(0);
+    camera_ui_updating_ = false;
+    applyCameraConfigurationFromUi();
+}
+
+void CameraMainWindow::startCameraRoiSelection()
+{
+    if (!camera_open_ || !camera_capabilities_.has_roi || latest_camera_image_.isNull()) return;
+    if (camera_configuration_.roi.Enabled()) {
+        camera_roi_selection_pending_ = true;
+        camera_feedback_label_->setText(tr("正在恢复全幅，随后进入 ROI 框选…"));
+        resetCameraRoi();
+        return;
+    }
+    camera_roi_previous_tool_ = canvas_->tool();
+    camera_roi_previous_edge_snapping_ = canvas_->edgeSnappingEnabled();
+    canvas_->setEdgeSnappingEnabled(false);
+    canvas_->setTool(CanvasTool::CameraRoi);
+    camera_feedback_label_->setText(tr("在画面中拖动框选 ROI，按 Esc 取消"));
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("warning"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    canvas_->setFocus();
+}
+
+void CameraMainWindow::restoreToolAfterCameraRoi(const QString& message)
+{
+    canvas_->setEdgeSnappingEnabled(camera_roi_previous_edge_snapping_);
+    canvas_->setTool(camera_roi_previous_tool_);
+    camera_feedback_label_->setText(message);
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
 }
 
 void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 timestamp)
 {
+    const bool first_frame = latest_camera_image_.isNull();
     latest_camera_image_ = std::move(image);
     latest_camera_sequence_ = sequence;
     latest_camera_timestamp_ = timestamp;
@@ -2246,10 +3088,11 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
         if (elapsed_ms >= 500) {
             const double fps = static_cast<double>(preview_frames_since_sample_) * 1000.0 /
                 static_cast<double>(elapsed_ms);
-            camera_state_label_->setText(tr("相机已连接 · %1 × %2 · %3 FPS")
+            camera_telemetry_label_->setText(tr("分辨率 %1 × %2  ·  FPS %3  ·  %4  ·  8 位")
                 .arg(latest_camera_image_.width())
                 .arg(latest_camera_image_.height())
-                .arg(fps, 0, 'f', 1));
+                .arg(fps, 0, 'f', 1)
+                .arg(cameraFrameFormatName(camera_capabilities_.frame_format)));
             preview_fps_label_->setText(tr("FPS %1").arg(fps, 0, 'f', 1));
             preview_frames_since_sample_ = 0;
             preview_fps_timer_.restart();
@@ -2261,6 +3104,7 @@ void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 tim
     if (camera_open_) {
         QMetaObject::invokeMethod(camera_worker_, "frameConsumed", Qt::QueuedConnection);
     }
+    if (first_frame) updateCameraControlAvailability();
 }
 
 void CameraMainWindow::presentLiveCameraImage()
@@ -2557,6 +3401,20 @@ ImageFrame CameraMainWindow::currentVisibleFrame() const
 void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
 {
     std::optional<MeasurementReference> added_measurement;
+    if (tool == CanvasTool::CameraRoi && points.size() == 2) {
+        const QRectF bounds(points[0], points[1]);
+        const QRectF normalized = bounds.normalized().intersected(
+            QRectF(0.0, 0.0, latest_camera_image_.width(), latest_camera_image_.height()));
+        camera_ui_updating_ = true;
+        camera_roi_spins_[0]->setValue(std::max(0, static_cast<int>(std::floor(normalized.left()))));
+        camera_roi_spins_[1]->setValue(std::max(0, static_cast<int>(std::floor(normalized.top()))));
+        camera_roi_spins_[2]->setValue(std::max(1, static_cast<int>(std::ceil(normalized.width()))));
+        camera_roi_spins_[3]->setValue(std::max(1, static_cast<int>(std::ceil(normalized.height()))));
+        camera_ui_updating_ = false;
+        restoreToolAfterCameraRoi(tr("ROI 已框选，正在应用…"));
+        applyCameraRoiInputs();
+        return;
+    }
     if (ai_annotation_active_ && yolo_workspace_ &&
         (tool == CanvasTool::Rectangle || tool == CanvasTool::Polygon)) {
         ai_annotation_active_ = false;
@@ -2985,6 +3843,34 @@ void CameraMainWindow::focusSelectedMeasurement()
     }
 }
 
+void CameraMainWindow::enterMeasurementSelectionMode()
+{
+    ai_annotation_active_ = false;
+    canvas_->setTool(CanvasTool::None);
+    canvas_->setFocus(Qt::OtherFocusReason);
+    statusBar()->showMessage(
+        tr("选择模式：单击选择测量，拖动控制点修改形状，拖动对象整体移动"), 5000);
+}
+
+void CameraMainWindow::renameSelectedMeasurement()
+{
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const std::optional<MeasurementReference> reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    if (!reference) {
+        statusBar()->showMessage(tr("请先选择要重命名的测量结果"), 2500);
+        return;
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, tr("重命名测量"), tr("名称"), QLineEdit::Normal,
+        QString::fromStdWString(measurements_.Name(*reference)), &accepted).trimmed();
+    if (accepted && !name.isEmpty() && measurements_.SetName(*reference, name.toStdWString())) {
+        updateMeasurementList();
+        statusBar()->showMessage(tr("测量名称已更新：%1").arg(name), 2500);
+    }
+}
+
 void CameraMainWindow::chooseSelectedMeasurementColor()
 {
     const QColor current(global_measurement_style_.red,
@@ -3015,17 +3901,30 @@ void CameraMainWindow::resetSelectedMeasurementColor()
 
 void CameraMainWindow::updateMeasurementStyleUi()
 {
-    if (!measurement_color_button_) return;
-    measurement_color_button_->setEnabled(true);
+    if (!measurement_color_button_ && !measurement_color_action_) return;
+    if (measurement_color_button_) measurement_color_button_->setEnabled(true);
     if (measurement_reset_color_button_) measurement_reset_color_button_->setEnabled(true);
     const QColor color(global_measurement_style_.red,
         global_measurement_style_.green, global_measurement_style_.blue);
-    QPixmap swatch(22, 22);
+    QPixmap swatch(30, 30);
     swatch.fill(color);
-    measurement_color_button_->setIcon(QIcon(swatch));
-    measurement_color_button_->setIconSize(swatch.size());
-    measurement_color_button_->setToolTip(tr("设置全局测量颜色（%1），适用于现有及后续测量")
-        .arg(color.name(QColor::HexRgb).toUpper()));
+    const QString tool_tip = tr("设置全局测量颜色（%1），适用于现有及后续测量")
+        .arg(color.name(QColor::HexRgb).toUpper());
+    if (measurement_color_button_) {
+        measurement_color_button_->setIcon(QIcon(swatch));
+        measurement_color_button_->setIconSize(swatch.size());
+        measurement_color_button_->setToolTip(tool_tip);
+    }
+    if (measurement_color_action_) {
+        measurement_color_action_->setIcon(QIcon(swatch));
+        measurement_color_action_->setToolTip(tool_tip);
+        if (measurement_toolbar_) {
+            if (auto* toolbar_button = qobject_cast<QToolButton*>(
+                    measurement_toolbar_->widgetForAction(measurement_color_action_))) {
+                toolbar_button->setIconSize(swatch.size());
+            }
+        }
+    }
 }
 
 void CameraMainWindow::applyGlobalMeasurementColor()

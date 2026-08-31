@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/MUCamCameraDriver.h"
+#include "CameraQtTypes.h"
 
 #include <QImage>
 #include <QObject>
@@ -16,6 +16,7 @@ class CameraWorker final : public QObject {
 
 public:
     explicit CameraWorker(QObject* parent = nullptr);
+    explicit CameraWorker(std::unique_ptr<ICameraDriver> driver, QObject* parent = nullptr);
 
 public slots:
     void initialize();
@@ -25,6 +26,10 @@ public slots:
     void setExposure(double value);
     void autoExposure();
     void setGain(double value);
+    void setRgbGain(double red, double green, double blue);
+    void setRgbOffset(int red, int green, int blue);
+    void reconfigureCamera(CameraConfiguration configuration);
+    void captureOneFrame();
     void whiteBalance();
     void frameConsumed();
     void shutdown();
@@ -35,6 +40,11 @@ signals:
     void cameraStateChanged(bool opened, QString message);
     void operationFinished(QString message, bool success);
     void exposureApplied(double value, bool success, QString message);
+    void cameraCapabilitiesChanged(
+        CameraCapabilities capabilities,
+        CameraConfiguration configuration,
+        CameraOpenInfo openInfo);
+    void configurationFinished(CameraConfiguration configuration, bool success, QString message);
 
 private slots:
     void captureOne();
@@ -42,8 +52,10 @@ private slots:
 private:
     QString lastError() const;
     std::shared_ptr<ImageFrame> acquireFrameBuffer();
+    void resumeCapture();
+    bool continuouslyCapturing() const;
 
-    MUCamCameraDriver driver_;
+    std::unique_ptr<ICameraDriver> driver_;
     QTimer* timer_ = nullptr;
     std::array<std::shared_ptr<ImageFrame>, 3> frame_pool_;
     std::size_t next_frame_pool_index_ = 0;

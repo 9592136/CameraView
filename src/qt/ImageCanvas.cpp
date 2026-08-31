@@ -98,6 +98,7 @@ void ImageCanvas::setTool(CanvasTool tool)
 {
     tool_ = tool;
     pending_points_.clear();
+    camera_roi_dragging_ = false;
     hover_image_point_valid_ = false;
     setCursor(tool == CanvasTool::None ? Qt::ArrowCursor : Qt::CrossCursor);
     emit toolChanged(tool_);
@@ -374,11 +375,18 @@ void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) c
     painter.setBrush(Qt::NoBrush);
 
     if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse ||
+        overlay.kind == CanvasTool::CameraRoi ||
         overlay.kind == CanvasTool::SmartCountSample || overlay.kind == CanvasTool::SmartCountResult) &&
         points.size() >= 2) {
         if (overlay.kind == CanvasTool::Ellipse) {
             painter.drawEllipse(QRectF(points[0], points[1]).normalized());
         } else {
+            if (overlay.kind == CanvasTool::CameraRoi) {
+                pen.setStyle(Qt::DashLine);
+                pen.setWidthF(2.5);
+                painter.setPen(pen);
+                painter.setBrush(QColor(255, 193, 7, 48));
+            }
             painter.drawRect(QRectF(points[0], points[1]).normalized());
         }
     } else if (overlay.kind == CanvasTool::Circle && points.size() >= 2) {
@@ -472,6 +480,15 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
     if (!containsImagePoint(point)) {
         return;
     }
+    if (tool_ == CanvasTool::CameraRoi) {
+        camera_roi_dragging_ = true;
+        pending_points_ = {point, point};
+        hover_image_point_ = point;
+        hover_image_point_valid_ = true;
+        event->accept();
+        update();
+        return;
+    }
     if (edge_snapping_enabled_) {
         bool snapped = false;
         double strength = 0.0;
@@ -486,6 +503,19 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
 void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
 {
     const QPointF image_point = widgetToImage(event->position());
+    if (camera_roi_dragging_ && tool_ == CanvasTool::CameraRoi && !image_.isNull()) {
+        const QPointF clamped(
+            std::clamp(image_point.x(), 0.0, static_cast<double>(image_.width() - 1)),
+            std::clamp(image_point.y(), 0.0, static_cast<double>(image_.height() - 1)));
+        if (pending_points_.size() < 2) pending_points_ = {clamped, clamped};
+        pending_points_[1] = clamped;
+        hover_image_point_ = clamped;
+        hover_image_point_valid_ = true;
+        emit imagePositionChanged(clamped);
+        update();
+        event->accept();
+        return;
+    }
     if (containsImagePoint(image_point)) {
         emit imagePositionChanged(image_point);
         bool ignored = false;
@@ -563,7 +593,9 @@ void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
 void ImageCanvas::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && tool_ != CanvasTool::None) {
+        const CanvasTool cancelled = tool_;
         setTool(CanvasTool::None);
+        emit toolCancelled(cancelled);
         event->accept();
         return;
     }
@@ -572,6 +604,22 @@ void ImageCanvas::keyPressEvent(QKeyEvent* event)
 
 void ImageCanvas::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::LeftButton && camera_roi_dragging_ &&
+        tool_ == CanvasTool::CameraRoi) {
+        camera_roi_dragging_ = false;
+        if (pending_points_.size() >= 2) {
+            const QRectF roi(pending_points_[0], pending_points_[1]);
+            const QVector<QPointF> points = pending_points_;
+            pending_points_.clear();
+            hover_image_point_valid_ = false;
+            if (roi.normalized().width() >= 2.0 && roi.normalized().height() >= 2.0) {
+                emit pointsCommitted(CanvasTool::CameraRoi, points);
+            }
+        }
+        update();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && dragged_overlay_index_ >= 0 &&
         dragged_overlay_index_ < overlays_.size()) {
         const CanvasOverlay& overlay = overlays_[dragged_overlay_index_];

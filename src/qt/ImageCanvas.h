@@ -18,7 +18,8 @@ enum class CanvasTool {
     Circle,
     Ellipse,
     SmartCountSample,
-    SmartCountResult
+    SmartCountResult,
+    CameraRoi
 };
 
 struct CanvasOverlay {
@@ -61,6 +62,7 @@ signals:
     void imagePositionChanged(QPointF point);
     void zoomChanged(double zoom);
     void toolChanged(CanvasTool tool);
+    void toolCancelled(CanvasTool tool);
     void edgeSnapEvaluated(bool snapped, QPointF original, QPointF result, double strength);
     void overlaySelected(int sourceIndex);
     void overlayPointMoved(int sourceIndex, int pointIndex, QPointF point, bool finished);
@@ -102,6 +104,7 @@ private:
     QPointF hover_image_point_;
     bool hover_image_point_valid_ = false;
     bool panning_ = false;
+    bool camera_roi_dragging_ = false;
     int dragged_overlay_index_ = -1;
     int dragged_point_index_ = -1;
     bool dragging_overlay_body_ = false;

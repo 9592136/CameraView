@@ -21,6 +21,9 @@ public:
     bool IsOpen() const override;
     bool IsConnected() const override;
     CameraOpenInfo OpenInfo() const override;
+    CameraCapabilities Capabilities() const override;
+    CameraConfiguration Configuration() const override;
+    bool Configure(const CameraConfiguration& configuration) override;
 
     bool HasExposureControl() const override;
     bool GetExposureRange(float& min_value, float& max_value) const override;
@@ -29,6 +32,8 @@ public:
     bool ApplyAutoExposure() override;
     bool HasGainControl() const override;
     bool SetGain(float value) override;
+    bool SetRgbGain(float red, float green, float blue) override;
+    bool SetRgbOffset(int red, int green, int blue) override;
     bool HasWhiteBalanceControl() const override;
     bool ApplyWhiteBalance() override;
 
@@ -49,11 +54,15 @@ private:
 
     void CloseLocked();
     bool ApplyExposureLocked(float value);
+    bool ApplyConfigurationLocked(const CameraConfiguration& configuration);
+    void RebuildBuffersLocked();
 
     mutable std::mutex mutex_;
     MUCamApi sdk_;
     MUCamApi::Handle camera_ = nullptr;
     CameraOpenInfo open_info_;
+    CameraCapabilities capabilities_;
+    CameraConfiguration configuration_;
     int frame_format_ = MUCamApi::MUCAM_FORMAT_COLOR_BGR;
     int input_bytes_per_channel_ = 1;
     std::vector<unsigned char> raw_;

@@ -1,6 +1,7 @@
 #include "MUCamCameraDriver.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -29,6 +30,16 @@ unsigned char SampleTo8Bit(const unsigned char* sample, int bytes_per_channel)
         static_cast<unsigned int>(sample[0]) |
         (static_cast<unsigned int>(sample[1]) << 8);
     return static_cast<unsigned char>((value >> 8) & 0xFFU);
+}
+
+float NearestSupportedGain(float value, const std::vector<float>& supported)
+{
+    if (supported.empty()) return value;
+    return *std::min_element(
+        supported.begin(), supported.end(),
+        [value](float left, float right) {
+            return std::abs(left - value) < std::abs(right - value);
+        });
 }
 
 } // namespace
@@ -170,12 +181,40 @@ bool MUCamCameraDriver::Open(int device_index, float initial_exposure_ms)
         return false;
     }
 
-    const int input_channels = IsColorFormat(frame_format_) ? 3 : 1;
-    raw_.assign(
-        CaptureBufferByteCount(open_info_.width, open_info_.height, input_channels, 2),
-        0);
-    rgb_.clear();
-    ApplyExposureLocked(initial_exposure_ms);
+    capabilities_ = {};
+    capabilities_.frame_format = frame_format_;
+    capabilities_.color = IsColorFormat(frame_format_) || IsBayerFormat(frame_format_);
+    capabilities_.has_exposure = sdk_.HasExposureControl();
+    capabilities_.has_auto_exposure = sdk_.HasAutoExposureControl();
+    capabilities_.has_gain = sdk_.HasGainControl();
+    capabilities_.has_offset = sdk_.HasOffsetControl();
+    capabilities_.has_white_balance = sdk_.HasWhiteBalanceControl() && capabilities_.color;
+    capabilities_.has_roi = sdk_.HasRoiControl();
+    capabilities_.has_trigger = sdk_.HasTriggerControl();
+    capabilities_.has_flip = sdk_.HasFlipControl();
+    capabilities_.has_mirror = sdk_.HasMirrorControl();
+    for (int index = 0; index < binning_count; ++index) {
+        capabilities_.resolutions.push_back({index, widths[index], heights[index]});
+    }
+    float exposure_minimum = 0.01f;
+    float exposure_maximum = 10000.0f;
+    if (sdk_.GetExposureRange(camera_, &exposure_minimum, &exposure_maximum)) {
+        capabilities_.exposure_minimum = exposure_minimum;
+        capabilities_.exposure_maximum = exposure_maximum;
+    }
+    // Some MUCam firmware revisions stop returning frames when gain/offset
+    // capability functions are queried immediately after OpenCamera.  Keep
+    // stream start on the SDK's proven path and use conservative defaults;
+    // the setters still clamp values and report failures normally.
+    capabilities_.gain_values.clear();
+    capabilities_.offset_minimum = -255;
+    capabilities_.offset_maximum = 255;
+    configuration_ = {};
+    configuration_.resolution_index = binning_index;
+    configuration_.exposure_ms = std::clamp(
+        initial_exposure_ms, capabilities_.exposure_minimum, capabilities_.exposure_maximum);
+    RebuildBuffersLocked();
+    ApplyExposureLocked(configuration_.exposure_ms);
     return true;
 }
 
@@ -201,6 +240,36 @@ CameraOpenInfo MUCamCameraDriver::OpenInfo() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return open_info_;
+}
+
+CameraCapabilities MUCamCameraDriver::Capabilities() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return capabilities_;
+}
+
+CameraConfiguration MUCamCameraDriver::Configuration() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return configuration_;
+}
+
+bool MUCamCameraDriver::Configure(const CameraConfiguration& configuration)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!camera_) {
+        return false;
+    }
+
+    const CameraConfiguration previous = configuration_;
+    if (ApplyConfigurationLocked(configuration)) {
+        return true;
+    }
+
+    // A structural setting may already have reached the SDK. Restore the last
+    // known-good configuration before reporting failure to the UI.
+    ApplyConfigurationLocked(previous);
+    return false;
 }
 
 bool MUCamCameraDriver::HasExposureControl() const
@@ -241,13 +310,46 @@ bool MUCamCameraDriver::HasGainControl() const
 
 bool MUCamCameraDriver::SetGain(float value)
 {
+    return SetRgbGain(value, value, value);
+}
+
+bool MUCamCameraDriver::SetRgbGain(float red, float green, float blue)
+{
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!camera_ || !capabilities_.has_gain || red <= 0.0f || green <= 0.0f || blue <= 0.0f) {
+        return false;
+    }
+    red = NearestSupportedGain(red, capabilities_.gain_values);
+    green = NearestSupportedGain(green, capabilities_.gain_values);
+    blue = NearestSupportedGain(blue, capabilities_.gain_values);
     int red_index = 0;
     int green_index = 0;
     int blue_index = 0;
-    return camera_ &&
-           value > 0.0f &&
-           sdk_.SetRgbGainValue(camera_, value, value, value, &red_index, &green_index, &blue_index);
+    if (!sdk_.SetRgbGainValue(camera_, red, green, blue, &red_index, &green_index, &blue_index)) {
+        return false;
+    }
+    configuration_.red_gain = red;
+    configuration_.green_gain = green;
+    configuration_.blue_gain = blue;
+    return true;
+}
+
+bool MUCamCameraDriver::SetRgbOffset(int red, int green, int blue)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!camera_ || !capabilities_.has_offset) {
+        return false;
+    }
+    red = std::clamp(red, capabilities_.offset_minimum, capabilities_.offset_maximum);
+    green = std::clamp(green, capabilities_.offset_minimum, capabilities_.offset_maximum);
+    blue = std::clamp(blue, capabilities_.offset_minimum, capabilities_.offset_maximum);
+    if (!sdk_.SetRgbOffset(camera_, red, green, blue)) {
+        return false;
+    }
+    configuration_.red_offset = red;
+    configuration_.green_offset = green;
+    configuration_.blue_offset = blue;
+    return true;
 }
 
 bool MUCamCameraDriver::HasWhiteBalanceControl() const
@@ -395,6 +497,8 @@ void MUCamCameraDriver::CloseLocked()
         camera_ = nullptr;
     }
     open_info_ = CameraOpenInfo();
+    capabilities_ = CameraCapabilities();
+    configuration_ = CameraConfiguration();
     input_bytes_per_channel_ = 1;
     raw_.clear();
     rgb_.clear();
@@ -412,5 +516,131 @@ bool MUCamCameraDriver::ApplyExposureLocked(float value)
     if (sdk_.GetExposureRange(camera_, &min_value, &max_value)) {
         clamped = std::clamp(value, min_value, max_value);
     }
-    return sdk_.SetExposure(camera_, clamped);
+    if (!sdk_.SetExposure(camera_, clamped)) {
+        return false;
+    }
+    configuration_.exposure_ms = clamped;
+    return true;
+}
+
+bool MUCamCameraDriver::ApplyConfigurationLocked(const CameraConfiguration& requested)
+{
+    if (!camera_ || capabilities_.resolutions.empty()) {
+        return false;
+    }
+
+    const auto resolution = std::find_if(
+        capabilities_.resolutions.begin(),
+        capabilities_.resolutions.end(),
+        [&requested](const CameraResolutionOption& option) {
+            return option.index == requested.resolution_index;
+        });
+    if (resolution == capabilities_.resolutions.end() ||
+        resolution->width <= 0 || resolution->height <= 0) {
+        return false;
+    }
+
+    // Setting Binning first restores the corresponding full frame, so ROI
+    // coordinates never become nested inside the previous ROI.
+    if (!sdk_.SetBinningIndex(camera_, resolution->index)) {
+        return false;
+    }
+
+    CameraConfiguration actual = requested;
+    actual.resolution_index = resolution->index;
+    open_info_.width = resolution->width;
+    open_info_.height = resolution->height;
+
+    if (requested.roi.Enabled()) {
+        if (!capabilities_.has_roi) {
+            return false;
+        }
+        int left = std::clamp(requested.roi.x, 0, resolution->width - 1);
+        int top = std::clamp(requested.roi.y, 0, resolution->height - 1);
+        const int width = std::clamp(requested.roi.width, 1, resolution->width - left);
+        const int height = std::clamp(requested.roi.height, 1, resolution->height - top);
+        int right = left + width - 1;
+        int bottom = top + height - 1;
+        if (!sdk_.SetRoi(camera_, &top, &left, &bottom, &right)) {
+            return false;
+        }
+        open_info_.width = right - left + 1;
+        open_info_.height = bottom - top + 1;
+        actual.roi = {left, top, open_info_.width, open_info_.height};
+    } else {
+        actual.roi = {};
+    }
+
+    if (requested.trigger_mode != CameraTriggerMode::Free && !capabilities_.has_trigger) {
+        return false;
+    }
+    if (capabilities_.has_trigger &&
+        !sdk_.SetTriggerType(camera_, static_cast<int>(requested.trigger_mode))) {
+        return false;
+    }
+    if (requested.vertical_flip && !capabilities_.has_flip) {
+        return false;
+    }
+    if (capabilities_.has_flip && !sdk_.SetFlip(camera_, requested.vertical_flip)) {
+        return false;
+    }
+    if (requested.horizontal_mirror && !capabilities_.has_mirror) {
+        return false;
+    }
+    if (capabilities_.has_mirror && !sdk_.SetMirror(camera_, requested.horizontal_mirror)) {
+        return false;
+    }
+
+    float exposure_minimum = capabilities_.exposure_minimum;
+    float exposure_maximum = capabilities_.exposure_maximum;
+    if (capabilities_.has_exposure &&
+        sdk_.GetExposureRange(camera_, &exposure_minimum, &exposure_maximum)) {
+        capabilities_.exposure_minimum = exposure_minimum;
+        capabilities_.exposure_maximum = exposure_maximum;
+    }
+    actual.exposure_ms = std::clamp(
+        requested.exposure_ms, capabilities_.exposure_minimum, capabilities_.exposure_maximum);
+    configuration_ = actual;
+    if (capabilities_.has_exposure && !ApplyExposureLocked(actual.exposure_ms)) {
+        return false;
+    }
+
+    if (capabilities_.color && capabilities_.has_gain) {
+        actual.red_gain = NearestSupportedGain(actual.red_gain, capabilities_.gain_values);
+        actual.green_gain = NearestSupportedGain(actual.green_gain, capabilities_.gain_values);
+        actual.blue_gain = NearestSupportedGain(actual.blue_gain, capabilities_.gain_values);
+        int red_index = 0;
+        int green_index = 0;
+        int blue_index = 0;
+        if (!sdk_.SetRgbGainValue(
+                camera_, actual.red_gain, actual.green_gain, actual.blue_gain,
+                &red_index, &green_index, &blue_index)) {
+            return false;
+        }
+    }
+    if (capabilities_.color && capabilities_.has_offset) {
+        actual.red_offset = std::clamp(
+            actual.red_offset, capabilities_.offset_minimum, capabilities_.offset_maximum);
+        actual.green_offset = std::clamp(
+            actual.green_offset, capabilities_.offset_minimum, capabilities_.offset_maximum);
+        actual.blue_offset = std::clamp(
+            actual.blue_offset, capabilities_.offset_minimum, capabilities_.offset_maximum);
+        if (!sdk_.SetRgbOffset(
+                camera_, actual.red_offset, actual.green_offset, actual.blue_offset)) {
+            return false;
+        }
+    }
+
+    configuration_ = actual;
+    RebuildBuffersLocked();
+    return true;
+}
+
+void MUCamCameraDriver::RebuildBuffersLocked()
+{
+    const int input_channels = IsColorFormat(frame_format_) ? 3 : 1;
+    raw_.assign(
+        CaptureBufferByteCount(open_info_.width, open_info_.height, input_channels, 2),
+        0);
+    rgb_.clear();
 }

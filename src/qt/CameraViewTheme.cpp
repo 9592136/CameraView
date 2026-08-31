@@ -124,6 +124,44 @@ void applyCameraViewTheme(QApplication& application)
 
         QScrollArea, QScrollArea > QWidget > QWidget { background: #111820; border: 0; }
         QWidget[panelPage="true"] { background: #111820; }
+        #CameraStatusCard {
+            background: #17222f;
+            border: 1px solid #33475e;
+            border-radius: 10px;
+        }
+        #CameraStateBadge {
+            border-radius: 9px;
+            padding: 3px 8px;
+            font-size: 9pt;
+            font-weight: 700;
+        }
+        #CameraStateBadge[cameraState="busy"] { background: #213d61; color: #9dccff; border: 1px solid #3569a1; }
+        #CameraStateBadge[cameraState="success"] { background: #173c2b; color: #75e5a6; border: 1px solid #287a50; }
+        #CameraStateBadge[cameraState="warning"] { background: #46371b; color: #ffd47a; border: 1px solid #80612a; }
+        #CameraStateBadge[cameraState="error"] { background: #49252a; color: #ff9ca5; border: 1px solid #854049; }
+        #CameraStateBadge[cameraState="ready"] { background: #26313e; color: #b9c7d8; border: 1px solid #43546a; }
+        #CameraDeviceSummary { color: #d9e6f5; font-weight: 600; }
+        #CameraTelemetry { color: #8fa5bd; font-size: 9pt; }
+        #CameraInlineFeedback {
+            background: #151f2b;
+            border: 1px solid #2d4055;
+            border-radius: 7px;
+            padding: 8px 10px;
+            color: #9fb5cc;
+        }
+        #CameraInlineFeedback[feedbackState="success"] { color: #76dfa4; border-color: #286c4a; background: #142a22; }
+        #CameraInlineFeedback[feedbackState="warning"] { color: #ffd27b; border-color: #725829; background: #2c2618; }
+        #CameraInlineFeedback[feedbackState="error"] { color: #ff9ca5; border-color: #794049; background: #322126; }
+        QToolButton[cameraSectionHeader="true"] {
+            background: #192431;
+            border: 1px solid #2e4053;
+            border-radius: 7px;
+            padding: 7px 9px;
+            font-weight: 600;
+            text-align: left;
+        }
+        QToolButton[cameraSectionHeader="true"]:hover { background: #213044; border-color: #45617e; }
+        QWidget[cameraSection="true"] QPushButton { min-height: 22px; }
 
         QGroupBox {
             background: #171f29;
