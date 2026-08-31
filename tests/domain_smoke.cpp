@@ -16,6 +16,8 @@
 #include "../src/imaging/EdfProcessor.h"
 #include "../src/imaging/EdfStackListActions.h"
 #include "../src/imaging/FluorescenceChannelFactory.h"
+#include "../src/imaging/FluorescenceCaptureSequence.h"
+#include "../src/imaging/FluorescenceChannelAnalysis.h"
 #include "../src/imaging/FluorescenceChannelListActions.h"
 #include "../src/imaging/FluorescenceChannelSettings.h"
 #include "../src/imaging/FluorescenceChannelUpdater.h"
@@ -1525,6 +1527,74 @@ int main()
         return Fail("MeasurementEditSession did not update the active polygon vertex.");
     }
     edit_session.Clear();
+
+    MeasurementCollection styled_measurements;
+    styled_measurements.AddLength(
+        L"Styled Length", ImagePoint{1.0, 2.0}, ImagePoint{4.0, 6.0});
+    styled_measurements.AddAngle(
+        L"Styled Angle", ImagePoint{2.0, 2.0}, ImagePoint{3.0, 3.0}, ImagePoint{5.0, 2.0});
+    const MeasurementReference styled_angle{MeasurementKind::Angle, 0};
+    const MeasurementOverlayStyle custom_style{12, 34, 56};
+    if (!styled_measurements.SetStyle(styled_angle, custom_style) ||
+        !(styled_measurements.Style(styled_angle) == custom_style)) {
+        return Fail("MeasurementCollection did not apply a custom overlay color.");
+    }
+    if (styled_measurements.SetStyle(
+            {MeasurementKind::Length, styled_measurements.LengthCount()}, {1, 2, 3}) ||
+        !(styled_measurements.Style(styled_angle) == custom_style)) {
+        return Fail("MeasurementCollection accepted an invalid overlay color reference.");
+    }
+    styled_measurements.AddLength(
+        L"Inserted Length", ImagePoint{10.0, 10.0}, ImagePoint{20.0, 10.0});
+    if (!(styled_measurements.Style(styled_angle) == custom_style) ||
+        styled_measurements.Styles().size() != styled_measurements.Count()) {
+        return Fail("Measurement overlay colors lost alignment after inserting another measurement type.");
+    }
+    const double angle_before = styled_measurements.Angles()[0].Degrees();
+    if (!styled_measurements.Translate(styled_angle, ImagePoint{7.0, -2.0}) ||
+        !Near(styled_measurements.Angles()[0].First().x, 9.0) ||
+        !Near(styled_measurements.Angles()[0].Vertex().y, 1.0) ||
+        !Near(styled_measurements.Angles()[0].Degrees(), angle_before)) {
+        return Fail("MeasurementCollection did not translate an overlay while preserving its geometry.");
+    }
+    const std::size_t styled_angle_flat_index = styled_measurements.FlatIndexOf(styled_angle);
+    if (!styled_measurements.EraseAtFlatIndex(0) ||
+        styled_measurements.Styles().size() != styled_measurements.Count() ||
+        !(styled_measurements.Style(MeasurementReference{MeasurementKind::Angle, 0}) == custom_style) ||
+        styled_angle_flat_index == 0) {
+        return Fail("Measurement overlay colors lost alignment after deleting a measurement.");
+    }
+
+    MeasurementCollection movable_measurements;
+    movable_measurements.AddLength(L"L", {1.0, 1.0}, {2.0, 2.0});
+    movable_measurements.AddAngle(L"A", {1.0, 1.0}, {2.0, 2.0}, {3.0, 1.0});
+    movable_measurements.AddRectangleArea(L"R", {1.0, 1.0}, {4.0, 5.0});
+    movable_measurements.AddPolygonArea(L"P", {{1.0, 1.0}, {4.0, 1.0}, {2.0, 3.0}});
+    movable_measurements.AddPoint(L"Pt", {1.0, 1.0});
+    movable_measurements.AddPolyline(L"Pl", {{1.0, 1.0}, {2.0, 2.0}, {4.0, 2.0}});
+    movable_measurements.AddCircle(L"C", {2.0, 2.0}, {4.0, 2.0});
+    movable_measurements.AddEllipse(L"E", {1.0, 1.0}, {5.0, 3.0});
+    const std::vector<MeasurementReference> movable_references{
+        {MeasurementKind::Length, 0}, {MeasurementKind::Angle, 0},
+        {MeasurementKind::RectangleArea, 0}, {MeasurementKind::PolygonArea, 0},
+        {MeasurementKind::Point, 0}, {MeasurementKind::Polyline, 0},
+        {MeasurementKind::Circle, 0}, {MeasurementKind::Ellipse, 0}};
+    for (const MeasurementReference reference : movable_references) {
+        if (!movable_measurements.Translate(reference, {5.0, 7.0})) {
+            return Fail("MeasurementCollection did not translate every supported overlay type.");
+        }
+    }
+    if (!Near(movable_measurements.Lengths()[0].First().x, 6.0) ||
+        !Near(movable_measurements.Angles()[0].Vertex().y, 9.0) ||
+        !Near(movable_measurements.Rectangles()[0].Second().x, 9.0) ||
+        !Near(movable_measurements.Polygons()[0].Points()[2].y, 10.0) ||
+        !Near(movable_measurements.Points()[0].Point().x, 6.0) ||
+        !Near(movable_measurements.Polylines()[0].Points()[1].y, 9.0) ||
+        !Near(movable_measurements.Circles()[0].Center().x, 7.0) ||
+        !Near(movable_measurements.Ellipses()[0].Second().y, 10.0) ||
+        movable_measurements.Translate({MeasurementKind::None, 0}, {1.0, 1.0})) {
+        return Fail("Translated measurement overlay coordinates were incomplete or invalid.");
+    }
 
     FrameBuffer frame_buffer;
     if (frame_buffer.HasFrame() || frame_buffer.Snapshot().IsValid()) {
@@ -3171,12 +3241,25 @@ int main()
         L"Polyline 1", std::vector<ImagePoint>{{0.0, 0.0}, {3.0, 4.0}, {6.0, 4.0}});
     document.circle_measurements.emplace_back(L"Circle 1", ImagePoint{10.0, 10.0}, ImagePoint{13.0, 14.0});
     document.ellipse_measurements.emplace_back(L"Ellipse 1", ImagePoint{2.0, 3.0}, ImagePoint{12.0, 9.0});
+    document.measurement_styles = {
+        {10, 20, 30}, {11, 21, 31}, {12, 22, 32}, {13, 23, 33}, {14, 24, 34},
+        {15, 25, 35}, {16, 26, 36}, {17, 27, 37}, {18, 28, 38}};
     document.dye_profiles.push_back(DyeProfile{L"Custom Green", 488.0, 520.0, RgbColor{20, 240, 90}});
     document.processing_settings.edf_focus_radius = 4;
     document.processing_settings.stitch_search_percent = 35;
     document.processing_settings.stitch_use_orb_registration = false;
+    document.processing_settings.stitch_overlap_percent = 42;
+    document.processing_settings.stitch_layout_mode = 1;
+    document.processing_settings.stitch_grid_rows = 7;
+    document.processing_settings.stitch_grid_cols = 8;
+    document.processing_settings.stitch_registration_method = 3;
+    document.processing_settings.stitch_transform_model = 2;
+    document.processing_settings.stitch_blend_mode = 1;
+    document.processing_settings.live_stitch_interval_ms = 1350;
+    document.processing_settings.fluorescence_blend_mode = 2;
     FluorescenceChannelRecipe channel_recipe;
     channel_recipe.name = L"FITC 1";
+    channel_recipe.exposure_ms = 42.5;
     channel_recipe.color = RgbColor{80, 255, 80};
     channel_recipe.visible = false;
     channel_recipe.black_level = 12;
@@ -3211,6 +3294,8 @@ int main()
         loaded_document.polyline_measurements.size() != 1 ||
         loaded_document.circle_measurements.size() != 1 ||
         loaded_document.ellipse_measurements.size() != 1 ||
+        loaded_document.measurement_styles.size() != 9 ||
+        !(loaded_document.measurement_styles[2] == MeasurementOverlayStyle{12, 22, 32}) ||
         loaded_document.dye_profiles.size() != 1 ||
         loaded_document.fluorescence_channels.size() != 1 ||
         loaded_document.measurements[0].Name() != document.measurements[0].Name() ||
@@ -3232,7 +3317,17 @@ int main()
         loaded_document.processing_settings.edf_focus_radius != 4 ||
         loaded_document.processing_settings.stitch_search_percent != 35 ||
         loaded_document.processing_settings.stitch_use_orb_registration ||
+        loaded_document.processing_settings.stitch_overlap_percent != 42 ||
+        loaded_document.processing_settings.stitch_layout_mode != 1 ||
+        loaded_document.processing_settings.stitch_grid_rows != 7 ||
+        loaded_document.processing_settings.stitch_grid_cols != 8 ||
+        loaded_document.processing_settings.stitch_registration_method != 3 ||
+        loaded_document.processing_settings.stitch_transform_model != 2 ||
+        loaded_document.processing_settings.stitch_blend_mode != 1 ||
+        loaded_document.processing_settings.live_stitch_interval_ms != 1350 ||
+        loaded_document.processing_settings.fluorescence_blend_mode != 2 ||
         loaded_document.fluorescence_channels[0].name != L"FITC 1" ||
+        !Near(loaded_document.fluorescence_channels[0].exposure_ms, 42.5) ||
         loaded_document.fluorescence_channels[0].visible ||
         loaded_document.fluorescence_channels[0].black_level != 12 ||
         loaded_document.fluorescence_channels[0].white_level != 220 ||
@@ -3249,8 +3344,12 @@ int main()
     project_measurements.AddPolyline(L"Mapped Polyline", {{0.0, 0.0}, {3.0, 4.0}});
     project_measurements.AddCircle(L"Mapped Circle", ImagePoint{0.0, 0.0}, ImagePoint{5.0, 0.0});
     project_measurements.AddEllipse(L"Mapped Ellipse", ImagePoint{0.0, 0.0}, ImagePoint{10.0, 6.0});
+    const MeasurementOverlayStyle mapped_angle_style{101, 102, 103};
+    project_measurements.SetStyle(
+        MeasurementReference{MeasurementKind::Angle, 0}, mapped_angle_style);
     FluorescenceChannel mapped_channel;
     mapped_channel.name = L"Mapped Channel";
+    mapped_channel.exposure_ms = 18.75;
     mapped_channel.color = RgbColor{9, 8, 7};
     mapped_channel.visible = false;
     mapped_channel.black_level = 11;
@@ -3281,12 +3380,15 @@ int main()
         mapped_document.polyline_measurements.size() != 1 ||
         mapped_document.circle_measurements.size() != 1 ||
         mapped_document.ellipse_measurements.size() != 1 ||
+        mapped_document.measurement_styles.size() != project_measurements.Count() ||
+        !(mapped_document.measurement_styles[1] == mapped_angle_style) ||
         mapped_document.selected_objective != L"63x Oil" ||
         mapped_document.objective_calibrations.size() != mapped_objective_labels.size() ||
         mapped_document.objective_calibrations[1].objective != L"20x Oil" ||
         !Near(mapped_document.objective_calibrations[2].calibration.MicronsPerPixel(), 0.125) ||
         mapped_document.fluorescence_channels.size() != 1 ||
         mapped_document.fluorescence_channels[0].name != L"Mapped Channel" ||
+        !Near(mapped_document.fluorescence_channels[0].exposure_ms, 18.75) ||
         mapped_document.fluorescence_channels[0].visible ||
         mapped_document.fluorescence_channels[0].black_level != 11 ||
         mapped_document.processing_settings.edf_focus_radius != 5 ||
@@ -3315,6 +3417,31 @@ int main()
         !std::filesystem::exists(action_project_path)) {
         return Fail("ProjectActions did not save a project file.");
     }
+    const std::filesystem::path legacy_action_project_path =
+        std::filesystem::temp_directory_path() / "CameraViewDomainTestsLegacyAction.cvproj";
+    {
+        std::ifstream source(action_project_path);
+        std::ofstream legacy(legacy_action_project_path, std::ios::trunc);
+        const std::vector<std::string> extended_stitch_names{
+            "stitch_overlap_percent", "stitch_layout_mode", "stitch_grid_rows",
+            "stitch_grid_cols", "stitch_registration_method", "stitch_transform_model",
+            "stitch_blend_mode", "live_stitch_interval_ms", "fluorescence_blend_mode"};
+        std::string line;
+        while (source && std::getline(source, line)) {
+            const bool extended = std::any_of(
+                extended_stitch_names.begin(), extended_stitch_names.end(),
+                [&line](const std::string& name) { return line.find(name) != std::string::npos; });
+            if (extended) continue;
+            if (line.find("stitch_use_orb_registration") != std::string::npos) {
+                const std::size_t last = line.find_last_not_of("\r\t ");
+                if (last != std::string::npos && line[last] == ',') line.erase(last, 1);
+            }
+            legacy << line << '\n';
+        }
+        if (!source.eof() || !legacy) {
+            return Fail("Could not create a legacy project compatibility fixture.");
+        }
+    }
     ProjectActionResult project_load = ProjectActions::LoadProject(action_project_path);
     std::filesystem::remove(action_project_path);
     if (!project_load.succeeded ||
@@ -3330,6 +3457,8 @@ int main()
         project_load.session_state.measurements.PolylineCount() != 1 ||
         project_load.session_state.measurements.CircleCount() != 1 ||
         project_load.session_state.measurements.EllipseCount() != 1 ||
+        !(project_load.session_state.measurements.Style(
+            MeasurementReference{MeasurementKind::Angle, 0}) == mapped_angle_style) ||
         project_load.session_state.dye_profiles.size() != 1 ||
         project_load.session_state.fluorescence_channels.size() != 1 ||
         project_load.session_state.fluorescence_channels[0].name != L"Mapped Channel" ||
@@ -3339,6 +3468,29 @@ int main()
         project_load.session_state.stitch_use_orb_registration ||
         !project_load.session_state.restored_channel_settings) {
         return Fail("ProjectActions did not load a project into session state.");
+    }
+    if (project_load.session_state.stitch_overlap_percent !=
+            ProcessingParameterRules::OverlapPercentFromSearch(44) ||
+        project_load.session_state.stitch_registration_method != 0 ||
+        project_load.session_state.stitch_layout_mode != 0 ||
+        project_load.session_state.stitch_transform_model != 1 ||
+        project_load.session_state.stitch_blend_mode != 0 ||
+        project_load.session_state.live_stitch_interval_ms != 1200 ||
+        project_load.session_state.fluorescence_blend_mode != 1) {
+        return Fail("ProjectActions did not preserve the migrated stitch settings.");
+    }
+    ProjectActionResult legacy_project_load = ProjectActions::LoadProject(legacy_action_project_path);
+    std::filesystem::remove(legacy_action_project_path);
+    if (!legacy_project_load.succeeded ||
+        legacy_project_load.session_state.stitch_overlap_percent !=
+            ProcessingParameterRules::OverlapPercentFromSearch(44) ||
+        legacy_project_load.session_state.stitch_registration_method != 0 ||
+        legacy_project_load.session_state.stitch_layout_mode != 0 ||
+        legacy_project_load.session_state.stitch_transform_model != 1 ||
+        legacy_project_load.session_state.stitch_blend_mode != 0 ||
+        legacy_project_load.session_state.live_stitch_interval_ms != 1200 ||
+        legacy_project_load.session_state.fluorescence_blend_mode != 1) {
+        return Fail("Legacy projects did not map old stitch settings to the complete Qt workflow.");
     }
 
     ProjectDocument sparse_document;
@@ -3642,6 +3794,26 @@ int main()
     if (FluorescenceFormatter::FormatDefaultChannelName(dyes[1], 4) != L"FITC 4") {
         return Fail("FluorescenceFormatter did not format a default channel name.");
     }
+    FluorescenceCaptureSequenceState capture_sequence;
+    if (!FluorescenceCaptureSequence::Start(capture_sequence, 2) ||
+        capture_sequence.current_index != 0 ||
+        !FluorescenceCaptureSequence::RequestExposure(capture_sequence, 12.5, 100) ||
+        FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 20.0, true, 101) ||
+        FluorescenceCaptureSequence::CanCapture(capture_sequence, 102) ||
+        !FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 12.5, true, 102) ||
+        FluorescenceCaptureSequence::CanCapture(capture_sequence, 102) ||
+        !FluorescenceCaptureSequence::CanCapture(capture_sequence, 103) ||
+        FluorescenceCaptureSequence::Capture(capture_sequence, 103) !=
+            FluorescenceCaptureAdvance::NextPreset ||
+        capture_sequence.current_index != 1 ||
+        !FluorescenceCaptureSequence::RequestExposure(capture_sequence, 40.0, 103) ||
+        !FluorescenceCaptureSequence::ConfirmExposure(capture_sequence, 40.0, true, 104) ||
+        FluorescenceCaptureSequence::Capture(capture_sequence, 105) !=
+            FluorescenceCaptureAdvance::Complete ||
+        FluorescenceCaptureSequence::IsActive(capture_sequence) ||
+        FluorescenceCaptureSequence::Start(capture_sequence, 0)) {
+        return Fail("Fluorescence capture sequence did not gate exposure and fresh frames safely.");
+    }
     const FluorescenceChannel factory_channel =
         FluorescenceChannelFactory::CreateFromFrame(dyes[1], MakeSolidImage(2, 1, 10, 20, 30), 4);
     if (factory_channel.name != L"FITC 4" ||
@@ -3680,6 +3852,36 @@ int main()
         channel_action_channels[0].name != L"DAPI 1" ||
         added_channel_action.message != L"Added fluorescence channel: DAPI.") {
         return Fail("FluorescenceChannelListActions did not add a channel safely.");
+    }
+
+    std::vector<FluorescenceChannel> visibility_channels = channel_action_channels;
+    FluorescenceChannel second_visibility_channel = visibility_channels.front();
+    second_visibility_channel.name = L"FITC 2";
+    visibility_channels.push_back(second_visibility_channel);
+    const FluorescenceChannelListActionResult missing_isolate_action =
+        FluorescenceChannelListActions::ShowOnlySelected(visibility_channels, -1);
+    const FluorescenceChannelListActionResult isolated_channel_action =
+        FluorescenceChannelListActions::ShowOnlySelected(visibility_channels, 1);
+    const bool isolation_visibility_is_correct =
+        !visibility_channels[0].visible && visibility_channels[1].visible;
+    const FluorescenceChannelListActionResult shown_all_channel_action =
+        FluorescenceChannelListActions::ShowAll(visibility_channels);
+    const FluorescenceChannelListActionResult removed_channel_action =
+        FluorescenceChannelListActions::RemoveSelected(visibility_channels, 0);
+    if (missing_isolate_action.changed ||
+        missing_isolate_action.status != FluorescenceChannelListActionStatus::NoSelection ||
+        !isolated_channel_action.changed ||
+        isolated_channel_action.status != FluorescenceChannelListActionStatus::Isolated ||
+        !isolation_visibility_is_correct ||
+        visibility_channels.size() != 1 ||
+        visibility_channels[0].name != L"FITC 2" ||
+        !visibility_channels[0].visible ||
+        !shown_all_channel_action.changed ||
+        shown_all_channel_action.status != FluorescenceChannelListActionStatus::ShownAll ||
+        !removed_channel_action.changed ||
+        removed_channel_action.status != FluorescenceChannelListActionStatus::Removed ||
+        removed_channel_action.message != L"Removed fluorescence channel: DAPI 1.") {
+        return Fail("FluorescenceChannelListActions did not isolate, restore, and remove channels safely.");
     }
     const FluorescenceChannelListActionResult cleared_channel_action =
         FluorescenceChannelListActions::Clear(channel_action_channels);
@@ -3842,6 +4044,74 @@ int main()
     const ImageFrame ranged_image = ChannelFusionEngine::Fuse({ranged_channel});
     if (!ranged_image.IsValid() || ranged_image.bgr[2] != 128 || ranged_image.bgr[5] != 255) {
         return Fail("Fluorescence channel black/white range did not scale intensity as expected.");
+    }
+
+    ImageFrame analysis_image;
+    analysis_image.width = 10;
+    analysis_image.height = 10;
+    analysis_image.stride = (analysis_image.width * 3 + 3) & ~3;
+    analysis_image.bgr.assign(
+        static_cast<std::size_t>(analysis_image.stride) *
+            static_cast<std::size_t>(analysis_image.height),
+        0);
+    for (int pixel_index = 0; pixel_index < 100; ++pixel_index) {
+        const int y = pixel_index / analysis_image.width;
+        const int x = pixel_index % analysis_image.width;
+        const unsigned char value = static_cast<unsigned char>(
+            pixel_index == 99 ? 255 : 10 + pixel_index);
+        unsigned char* pixel = analysis_image.bgr.data() +
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(analysis_image.stride) + x * 3;
+        pixel[0] = value;
+        pixel[1] = value;
+        pixel[2] = value;
+    }
+    const ImageFrame analysis_source_copy = analysis_image;
+    const FluorescenceChannelStatistics analysis_statistics =
+        FluorescenceChannelAnalysis::Analyze(analysis_image);
+    const FluorescenceChannelStatistics underexposed_statistics =
+        FluorescenceChannelAnalysis::Analyze(MakeSolidImage(4, 4, 5, 5, 5));
+    const FluorescenceChannelStatistics empty_statistics =
+        FluorescenceChannelAnalysis::Analyze(ImageFrame{});
+    FluorescenceChannel auto_level_channel;
+    auto_level_channel.frame = analysis_image;
+    if (!analysis_statistics.IsValid() ||
+        analysis_statistics.pixel_count != 100 ||
+        analysis_statistics.minimum != 10 ||
+        analysis_statistics.maximum != 255 ||
+        analysis_statistics.suggested_black_level != 10 ||
+        analysis_statistics.suggested_white_level != 108 ||
+        !Near(analysis_statistics.clipped_fraction, 0.01) ||
+        analysis_statistics.exposure != FluorescenceExposureState::Saturated ||
+        underexposed_statistics.exposure != FluorescenceExposureState::Underexposed ||
+        empty_statistics.IsValid() ||
+        FluorescenceChannelAnalysis::ExposureLabel(analysis_statistics.exposure) != L"Saturated" ||
+        !FluorescenceChannelAnalysis::ApplySuggestedLevels(
+            auto_level_channel, analysis_statistics) ||
+        auto_level_channel.black_level != 10 ||
+        auto_level_channel.white_level != 108 ||
+        analysis_image.bgr != analysis_source_copy.bgr) {
+        return Fail("Fluorescence channel analysis did not provide robust, non-destructive exposure guidance.");
+    }
+
+    FluorescenceChannel overlap_a;
+    overlap_a.frame = MakeSolidImage(1, 1, 128, 128, 128);
+    overlap_a.color = RgbColor{255, 0, 0};
+    FluorescenceChannel overlap_b = overlap_a;
+    FluorescenceFusionOptions screen_options;
+    screen_options.blend_mode = FluorescenceBlendMode::Screen;
+    FluorescenceFusionOptions maximum_options;
+    maximum_options.blend_mode = FluorescenceBlendMode::Maximum;
+    const ImageFrame additive_overlap = ChannelFusionEngine::Fuse({overlap_a, overlap_b});
+    const ImageFrame screen_overlap = ChannelFusionEngine::Fuse(
+        {overlap_a, overlap_b}, screen_options);
+    const ImageFrame maximum_overlap = ChannelFusionEngine::Fuse(
+        {overlap_a, overlap_b}, maximum_options);
+    if (additive_overlap.bgr[2] != 255 ||
+        screen_overlap.bgr[2] != 192 ||
+        maximum_overlap.bgr[2] != 128 ||
+        screen_overlap.bgr[0] != 0 ||
+        maximum_overlap.bgr[1] != 0) {
+        return Fail("Fluorescence fusion modes did not control overlapping channel saturation.");
     }
 
     ImageFrame processing_override = MakeSolidImage(2, 1, 9, 8, 7);
@@ -4274,6 +4544,14 @@ int main()
     LiveStitchPreviewOptions live_preview_options;
     live_preview_options.max_preview_edge = 512;
     live_preview_options.overlap_percent = 25;
+    const int live_tile_cache_scale =
+        LiveStitchPreviewBuilder::DownsampleScaleFor(live_preview_left.frame, 320);
+    const ImageFrame live_tile_cache_frame =
+        LiveStitchPreviewBuilder::DownsampleFrame(live_preview_left.frame, live_tile_cache_scale);
+    if (live_tile_cache_scale != 2 || !live_tile_cache_frame.IsValid() ||
+        live_tile_cache_frame.width != 320 || live_tile_cache_frame.height != 160) {
+        return Fail("LiveStitchPreviewBuilder did not build the reusable live tile cache frame.");
+    }
     const LiveStitchPreviewResult live_preview =
         LiveStitchPreviewBuilder::Build({live_preview_left, live_preview_right}, live_preview_options);
     if (!live_preview.image.IsValid() ||

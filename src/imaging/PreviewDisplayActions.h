@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../domain/ImageFrame.h"
+#include "ChannelFusionEngine.h"
 #include "Fluorescence.h"
 #include "ProcessingResultFrames.h"
 #include "PseudoColorMapper.h"
@@ -23,7 +24,8 @@ public:
         const ProcessingResultFrames& processing_frames,
         const std::vector<FluorescenceChannel>& fluorescence_channels,
         bool show_fusion_preview,
-        PseudoColorPalette pseudo_color_palette);
+        PseudoColorPalette pseudo_color_palette,
+        FluorescenceBlendMode blend_mode = FluorescenceBlendMode::Additive);
 
     static std::wstring PreviewModeLabel(
         const ImageFrame& source,

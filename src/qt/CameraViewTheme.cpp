@@ -54,10 +54,20 @@ void applyCameraViewTheme(QApplication& application)
             background: #151c25;
             border: 0;
             border-bottom: 1px solid #273241;
-            padding: 6px 9px;
-            spacing: 5px;
+            padding: 4px 8px;
+            spacing: 4px;
         }
         QToolBar::separator { width: 1px; background: #344152; margin: 4px 7px; }
+        QToolBar#MainToolbar { min-height: 66px; }
+        QToolBar#MainToolbar QToolButton {
+            min-width: 44px;
+            min-height: 56px;
+            padding: 4px 7px;
+        }
+        QToolBar#MainToolbar[presentationMode="compact"] QToolButton {
+            min-width: 42px;
+            padding: 4px 6px;
+        }
         QToolButton {
             background: transparent;
             border: 1px solid transparent;
@@ -66,24 +76,49 @@ void applyCameraViewTheme(QApplication& application)
         }
         QToolButton:hover { background: #222d3a; border-color: #344456; }
         QToolButton:pressed, QToolButton:checked { background: #253b5a; border-color: #397fdf; }
-        QToolButton[role="measurementTool"] {
+        QToolButton[role="measurementTool"],
+        QToolButton[role="measurementAction"],
+        QToolButton[role="toolbarCommand"],
+        QToolButton[role="toolbarMore"],
+        QToolButton[role="dangerAction"] {
             background: #1d2733;
             border: 1px solid #354558;
             border-radius: 8px;
             padding: 7px 5px 6px 5px;
             font-weight: 500;
         }
-        QToolButton[role="measurementTool"]:hover {
+        QToolButton[role="measurementTool"]:hover,
+        QToolButton[role="measurementAction"]:hover,
+        QToolButton[role="toolbarCommand"]:hover,
+        QToolButton[role="toolbarMore"]:hover {
             background: #263548;
             border-color: #52729a;
         }
-        QToolButton[role="measurementTool"]:checked {
+        QToolButton[role="measurementTool"]:checked,
+        QToolButton[role="toolbarMore"][hiddenActiveTool="true"] {
             background: #25558f;
             border-color: #69a7ff;
             color: #ffffff;
             font-weight: 600;
         }
-        QToolButton[role="measurementTool"]:disabled {
+        QToolButton[role="measurementAction"]:pressed {
+            background: #253b5a;
+            border-color: #397fdf;
+        }
+        QToolButton[role="dangerAction"]:hover {
+            background: #3a2228;
+            border-color: #b94b5b;
+            color: #ffd7dc;
+        }
+        QToolButton[role="dangerAction"]:pressed {
+            background: #5a2630;
+            border-color: #ef6477;
+            color: #ffffff;
+        }
+        QToolButton[role="measurementTool"]:disabled,
+        QToolButton[role="measurementAction"]:disabled,
+        QToolButton[role="toolbarCommand"]:disabled,
+        QToolButton[role="dangerAction"]:disabled {
             background: #171e27;
             color: #657184;
             border-color: #28323e;
@@ -117,6 +152,44 @@ void applyCameraViewTheme(QApplication& application)
 
         QScrollArea, QScrollArea > QWidget > QWidget { background: #111820; border: 0; }
         QWidget[panelPage="true"] { background: #111820; }
+        #CameraStatusCard {
+            background: #17222f;
+            border: 1px solid #33475e;
+            border-radius: 10px;
+        }
+        #CameraStateBadge {
+            border-radius: 9px;
+            padding: 3px 8px;
+            font-size: 9pt;
+            font-weight: 700;
+        }
+        #CameraStateBadge[cameraState="busy"] { background: #213d61; color: #9dccff; border: 1px solid #3569a1; }
+        #CameraStateBadge[cameraState="success"] { background: #173c2b; color: #75e5a6; border: 1px solid #287a50; }
+        #CameraStateBadge[cameraState="warning"] { background: #46371b; color: #ffd47a; border: 1px solid #80612a; }
+        #CameraStateBadge[cameraState="error"] { background: #49252a; color: #ff9ca5; border: 1px solid #854049; }
+        #CameraStateBadge[cameraState="ready"] { background: #26313e; color: #b9c7d8; border: 1px solid #43546a; }
+        #CameraDeviceSummary { color: #d9e6f5; font-weight: 600; }
+        #CameraTelemetry { color: #8fa5bd; font-size: 9pt; }
+        #CameraInlineFeedback {
+            background: #151f2b;
+            border: 1px solid #2d4055;
+            border-radius: 7px;
+            padding: 8px 10px;
+            color: #9fb5cc;
+        }
+        #CameraInlineFeedback[feedbackState="success"] { color: #76dfa4; border-color: #286c4a; background: #142a22; }
+        #CameraInlineFeedback[feedbackState="warning"] { color: #ffd27b; border-color: #725829; background: #2c2618; }
+        #CameraInlineFeedback[feedbackState="error"] { color: #ff9ca5; border-color: #794049; background: #322126; }
+        QToolButton[cameraSectionHeader="true"] {
+            background: #192431;
+            border: 1px solid #2e4053;
+            border-radius: 7px;
+            padding: 7px 9px;
+            font-weight: 600;
+            text-align: left;
+        }
+        QToolButton[cameraSectionHeader="true"]:hover { background: #213044; border-color: #45617e; }
+        QWidget[cameraSection="true"] QPushButton { min-height: 22px; }
 
         QGroupBox {
             background: #171f29;
@@ -151,6 +224,44 @@ void applyCameraViewTheme(QApplication& application)
         QPushButton[role="primary"]:pressed { background: #2469cf; }
         QPushButton[role="danger"] { color: #ffb4b4; border-color: #684044; background: #36252a; }
         QPushButton[role="danger"]:hover { background: #4a2b31; border-color: #92535b; }
+        #PointCloudWorkspaceToolbar {
+            background: #141e2a;
+            border: 1px solid #293b4f;
+            border-radius: 8px;
+        }
+        #PointCloudWorkspaceToolbar QPushButton {
+            min-height: 28px;
+            padding: 3px 11px;
+        }
+        #PointCloudSelectionStatus, #PointCloudWorkspaceStatus {
+            color: #a9c9ea;
+            padding: 3px 7px;
+        }
+        QLabel[status="ok"] { color: #55d98d; }
+        QLabel[status="warning"] { color: #ffc35c; }
+        QLabel[status="error"] { color: #ff7f7f; }
+
+        QLabel[exposureState="ok"] { color: #9ee6b0; }
+        QLabel[exposureState="caution"] { color: #ffd98a; }
+        QLabel[exposureState="warning"] {
+            color: #ffb4b4;
+            background: #36252a;
+            border: 1px solid #684044;
+            border-radius: 6px;
+            padding: 7px;
+        }
+        QLabel[role="sliderValue"] {
+            color: #d8e7fb;
+            background: #111a24;
+            border: 1px solid #2f4053;
+            border-radius: 4px;
+            padding: 3px 6px;
+        }
+        QLabel[role="sliderValue"]:disabled {
+            color: #657184;
+            background: #151b23;
+            border-color: #28323e;
+        }
 
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QListWidget {
             background: #0e151d;
@@ -186,6 +297,9 @@ void applyCameraViewTheme(QApplication& application)
         QSlider::groove:horizontal { height: 4px; border-radius: 2px; background: #334153; }
         QSlider::sub-page:horizontal { background: #3d8cff; border-radius: 2px; }
         QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: #eef5ff; border: 2px solid #3d8cff; }
+        QSlider::groove:horizontal:disabled { background: #252f3c; }
+        QSlider::sub-page:horizontal:disabled { background: #47566a; }
+        QSlider::handle:horizontal:disabled { background: #768295; border-color: #47566a; }
 
         QProgressBar { background: #101720; border: 1px solid #344152; border-radius: 6px; text-align: center; min-height: 18px; }
         QProgressBar::chunk { background: #2f7ff7; border-radius: 5px; }

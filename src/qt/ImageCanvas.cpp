@@ -3,6 +3,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
 #include <QLineF>
 #include <QKeyEvent>
 #include <QWheelEvent>
@@ -33,6 +34,16 @@ int requiredPointCount(CanvasTool tool)
     }
 }
 
+double distanceToSegment(const QPointF& point, const QPointF& first, const QPointF& second)
+{
+    const QPointF segment = second - first;
+    const double length_squared = QPointF::dotProduct(segment, segment);
+    if (length_squared <= 0.000001) return QLineF(point, first).length();
+    const double projection = std::clamp(
+        QPointF::dotProduct(point - first, segment) / length_squared, 0.0, 1.0);
+    return QLineF(point, first + segment * projection).length();
+}
+
 } // namespace
 
 ImageCanvas::ImageCanvas(QWidget* parent) : QWidget(parent)
@@ -47,16 +58,29 @@ void ImageCanvas::setImage(const QImage& image)
 {
     const bool size_changed = image_.size() != image.size();
     image_ = image;
-    grayscale_image_ = image_.convertToFormat(QImage::Format_Grayscale8);
+    // Grayscale conversion touches every pixel and is only needed by edge
+    // snapping. Keep the normal live-preview path as an implicit QImage share.
+    grayscale_image_ = edge_snapping_enabled_
+        ? image_.convertToFormat(QImage::Format_Grayscale8)
+        : QImage{};
     if (size_changed) {
         fitToView();
     }
     update();
 }
 
+void ImageCanvas::setLivePreviewOverlay(const QImage& image)
+{
+    live_preview_overlay_ = image;
+    update();
+}
+
 void ImageCanvas::setEdgeSnappingEnabled(bool enabled)
 {
     edge_snapping_enabled_ = enabled;
+    grayscale_image_ = enabled && !image_.isNull()
+        ? image_.convertToFormat(QImage::Format_Grayscale8)
+        : QImage{};
 }
 
 void ImageCanvas::setEdgeSnapRadius(int radius)
@@ -74,6 +98,7 @@ void ImageCanvas::setTool(CanvasTool tool)
 {
     tool_ = tool;
     pending_points_.clear();
+    camera_roi_dragging_ = false;
     hover_image_point_valid_ = false;
     setCursor(tool == CanvasTool::None ? Qt::ArrowCursor : Qt::CrossCursor);
     emit toolChanged(tool_);
@@ -168,6 +193,83 @@ bool ImageCanvas::containsImagePoint(const QPointF& point) const
         point.x() < image_.width() && point.y() < image_.height();
 }
 
+bool ImageCanvas::findEditableHandle(
+    const QPointF& widgetPoint,
+    int& overlayIndex,
+    int& pointIndex) const
+{
+    double best_distance = std::numeric_limits<double>::max();
+    overlayIndex = -1;
+    pointIndex = -1;
+    for (int candidate_overlay = overlays_.size() - 1; candidate_overlay >= 0; --candidate_overlay) {
+        const CanvasOverlay& overlay = overlays_[candidate_overlay];
+        if (!overlay.editable || overlay.source_index < 0) continue;
+        for (int candidate_point = 0; candidate_point < overlay.points.size(); ++candidate_point) {
+            const double distance = QLineF(
+                widgetPoint, imageToWidget(overlay.points[candidate_point])).length();
+            if (distance <= 10.0 && distance < best_distance) {
+                best_distance = distance;
+                overlayIndex = candidate_overlay;
+                pointIndex = candidate_point;
+            }
+        }
+    }
+    return overlayIndex >= 0;
+}
+
+int ImageCanvas::findEditableOverlayBody(const QPointF& widgetPoint) const
+{
+    for (int index = overlays_.size() - 1; index >= 0; --index) {
+        if (overlays_[index].editable && overlays_[index].source_index >= 0 &&
+            overlayBodyContains(overlays_[index], widgetPoint)) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+bool ImageCanvas::overlayBodyContains(
+    const CanvasOverlay& overlay,
+    const QPointF& widgetPoint) const
+{
+    if (overlay.points.isEmpty()) return false;
+    QVector<QPointF> points;
+    points.reserve(overlay.points.size());
+    for (const QPointF& point : overlay.points) points.push_back(imageToWidget(point));
+    constexpr double tolerance = 8.0;
+
+    if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse) &&
+        points.size() >= 2) {
+        const QRectF bounds = QRectF(points[0], points[1]).normalized();
+        if (overlay.kind == CanvasTool::Rectangle) {
+            return bounds.adjusted(-tolerance, -tolerance, tolerance, tolerance)
+                .contains(widgetPoint);
+        }
+        const QPointF center = bounds.center();
+        const double radius_x = std::max(1.0, bounds.width() / 2.0 + tolerance);
+        const double radius_y = std::max(1.0, bounds.height() / 2.0 + tolerance);
+        const double dx = (widgetPoint.x() - center.x()) / radius_x;
+        const double dy = (widgetPoint.y() - center.y()) / radius_y;
+        return dx * dx + dy * dy <= 1.0;
+    }
+    if (overlay.kind == CanvasTool::Circle && points.size() >= 2) {
+        const double radius = QLineF(points[0], points[1]).length();
+        return QLineF(points[0], widgetPoint).length() <= radius + tolerance;
+    }
+    if (overlay.kind == CanvasTool::Polygon && points.size() >= 3) {
+        QPainterPath path;
+        path.addPolygon(QPolygonF(points));
+        if (path.contains(widgetPoint)) return true;
+        if (distanceToSegment(widgetPoint, points.last(), points.first()) <= tolerance) return true;
+    }
+    for (int index = 1; index < points.size(); ++index) {
+        if (distanceToSegment(widgetPoint, points[index - 1], points[index]) <= tolerance) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ImageCanvas::paintEvent(QPaintEvent*)
 {
     QPainter painter(this);
@@ -232,6 +334,27 @@ void ImageCanvas::paintEvent(QPaintEvent*)
         CanvasOverlay pending{tool_, preview, tr("进行中"), QColor(255, 193, 7)};
         drawOverlay(painter, pending);
     }
+    painter.setClipping(false);
+    if (!live_preview_overlay_.isNull()) {
+        const QSize maximum(std::min(420, std::max(120, width() / 3)),
+            std::min(300, std::max(90, height() / 3)));
+        const QSize preview_size = live_preview_overlay_.size().scaled(
+            maximum, Qt::KeepAspectRatio);
+        const QRectF preview_rect(
+            width() - preview_size.width() - 18.0,
+            height() - preview_size.height() - 18.0,
+            preview_size.width(), preview_size.height());
+        painter.fillRect(preview_rect.adjusted(-7.0, -28.0, 7.0, 7.0), QColor(8, 12, 18, 225));
+        painter.drawImage(preview_rect, live_preview_overlay_);
+        painter.setPen(QPen(QColor(96, 165, 250), 2.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(preview_rect);
+        painter.setPen(QColor(219, 234, 254));
+        painter.drawText(
+            preview_rect.adjusted(0.0, -25.0, 0.0, 0.0),
+            Qt::AlignLeft | Qt::AlignTop,
+            tr("实时相机"));
+    }
 }
 
 void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) const
@@ -252,11 +375,18 @@ void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) c
     painter.setBrush(Qt::NoBrush);
 
     if ((overlay.kind == CanvasTool::Rectangle || overlay.kind == CanvasTool::Ellipse ||
+        overlay.kind == CanvasTool::CameraRoi ||
         overlay.kind == CanvasTool::SmartCountSample || overlay.kind == CanvasTool::SmartCountResult) &&
         points.size() >= 2) {
         if (overlay.kind == CanvasTool::Ellipse) {
             painter.drawEllipse(QRectF(points[0], points[1]).normalized());
         } else {
+            if (overlay.kind == CanvasTool::CameraRoi) {
+                pen.setStyle(Qt::DashLine);
+                pen.setWidthF(2.5);
+                painter.setPen(pen);
+                painter.setBrush(QColor(255, 193, 7, 48));
+            }
             painter.drawRect(QRectF(points[0], points[1]).normalized());
         }
     } else if (overlay.kind == CanvasTool::Circle && points.size() >= 2) {
@@ -278,9 +408,16 @@ void ImageCanvas::drawOverlay(QPainter& painter, const CanvasOverlay& overlay) c
         }
     }
 
-    painter.setBrush(overlay.color);
+    const double handle_radius = overlay.highlighted && overlay.editable ? 5.5 : 4.0;
     for (const QPointF& point : points) {
-        painter.drawEllipse(point, 4.0, 4.0);
+        if (overlay.highlighted && overlay.editable) {
+            painter.setPen(QPen(QColor(245, 249, 255), 2.0));
+            painter.setBrush(QColor(13, 19, 27));
+            painter.drawEllipse(point, handle_radius + 2.0, handle_radius + 2.0);
+        }
+        painter.setPen(QPen(overlay.color, 1.5));
+        painter.setBrush(overlay.color);
+        painter.drawEllipse(point, handle_radius, handle_radius);
     }
     if (!overlay.label.isEmpty()) {
         const QPointF anchor = points.last() + QPointF(8.0, -8.0);
@@ -315,17 +452,20 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
     }
     if (event->button() != Qt::LeftButton || tool_ == CanvasTool::None) {
         if (event->button() == Qt::LeftButton && tool_ == CanvasTool::None) {
-            double bestDistance = std::numeric_limits<double>::max();
-            for (int overlayIndex = 0; overlayIndex < overlays_.size(); ++overlayIndex) {
-                const CanvasOverlay& overlay = overlays_[overlayIndex];
-                if (!overlay.editable || overlay.source_index < 0) continue;
-                for (int pointIndex = 0; pointIndex < overlay.points.size(); ++pointIndex) {
-                    const double distance = QLineF(event->position(), imageToWidget(overlay.points[pointIndex])).length();
-                    if (distance <= 10.0 && distance < bestDistance) {
-                        bestDistance = distance;
-                        dragged_overlay_index_ = overlayIndex;
-                        dragged_point_index_ = pointIndex;
-                    }
+            dragged_overlay_index_ = -1;
+            dragged_point_index_ = -1;
+            dragging_overlay_body_ = false;
+            if (findEditableHandle(event->position(),
+                    dragged_overlay_index_, dragged_point_index_)) {
+                emit overlaySelected(overlays_[dragged_overlay_index_].source_index);
+            } else {
+                dragged_overlay_index_ = findEditableOverlayBody(event->position());
+                if (dragged_overlay_index_ >= 0) {
+                    dragging_overlay_body_ = true;
+                    drag_last_image_point_ = widgetToImage(event->position());
+                    emit overlaySelected(overlays_[dragged_overlay_index_].source_index);
+                } else {
+                    emit overlaySelected(-1);
                 }
             }
             if (dragged_overlay_index_ >= 0) {
@@ -338,6 +478,15 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
     const QPointF original = widgetToImage(event->position());
     QPointF point = original;
     if (!containsImagePoint(point)) {
+        return;
+    }
+    if (tool_ == CanvasTool::CameraRoi) {
+        camera_roi_dragging_ = true;
+        pending_points_ = {point, point};
+        hover_image_point_ = point;
+        hover_image_point_valid_ = true;
+        event->accept();
+        update();
         return;
     }
     if (edge_snapping_enabled_) {
@@ -354,6 +503,19 @@ void ImageCanvas::mousePressEvent(QMouseEvent* event)
 void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
 {
     const QPointF image_point = widgetToImage(event->position());
+    if (camera_roi_dragging_ && tool_ == CanvasTool::CameraRoi && !image_.isNull()) {
+        const QPointF clamped(
+            std::clamp(image_point.x(), 0.0, static_cast<double>(image_.width() - 1)),
+            std::clamp(image_point.y(), 0.0, static_cast<double>(image_.height() - 1)));
+        if (pending_points_.size() < 2) pending_points_ = {clamped, clamped};
+        pending_points_[1] = clamped;
+        hover_image_point_ = clamped;
+        hover_image_point_valid_ = true;
+        emit imagePositionChanged(clamped);
+        update();
+        event->accept();
+        return;
+    }
     if (containsImagePoint(image_point)) {
         emit imagePositionChanged(image_point);
         bool ignored = false;
@@ -370,6 +532,40 @@ void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
         pan_ += event->position() - last_mouse_;
         last_mouse_ = event->position();
         update();
+    } else if (dragged_overlay_index_ >= 0 && dragging_overlay_body_ &&
+        dragged_overlay_index_ < overlays_.size()) {
+        if (!containsImagePoint(image_point)) return;
+        CanvasOverlay& overlay = overlays_[dragged_overlay_index_];
+        QPointF delta = image_point - drag_last_image_point_;
+        if (!overlay.points.isEmpty()) {
+            double minimum_x = overlay.points.first().x();
+            double maximum_x = minimum_x;
+            double minimum_y = overlay.points.first().y();
+            double maximum_y = minimum_y;
+            for (const QPointF& point : overlay.points) {
+                minimum_x = std::min(minimum_x, point.x());
+                maximum_x = std::max(maximum_x, point.x());
+                minimum_y = std::min(minimum_y, point.y());
+                maximum_y = std::max(maximum_y, point.y());
+            }
+            const auto clamp_axis = [](double value, double lower, double upper) {
+                // A malformed/imported overlay may already span beyond both image
+                // edges. In that case there is no translation that can place every
+                // point inside the image, so keep that axis stable instead of
+                // passing an invalid range to std::clamp.
+                return lower <= upper ? std::clamp(value, lower, upper) : 0.0;
+            };
+            delta.setX(clamp_axis(delta.x(), -minimum_x,
+                static_cast<double>(image_.width() - 1) - maximum_x));
+            delta.setY(clamp_axis(delta.y(), -minimum_y,
+                static_cast<double>(image_.height() - 1) - maximum_y));
+        }
+        if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+            for (QPointF& point : overlay.points) point += delta;
+            drag_last_image_point_ += delta;
+            emit overlayMoved(overlay.source_index, delta, false);
+            update();
+        }
     } else if (dragged_overlay_index_ >= 0 && dragged_point_index_ >= 0 &&
         dragged_overlay_index_ < overlays_.size()) {
         QPointF target = image_point;
@@ -384,13 +580,22 @@ void ImageCanvas::mouseMoveEvent(QMouseEvent* event)
                 update();
             }
         }
+    } else if (tool_ == CanvasTool::None) {
+        int overlay_index = -1;
+        int point_index = -1;
+        const bool over_handle = findEditableHandle(
+            event->position(), overlay_index, point_index);
+        const bool over_body = over_handle || findEditableOverlayBody(event->position()) >= 0;
+        setCursor(over_body ? Qt::SizeAllCursor : Qt::ArrowCursor);
     }
 }
 
 void ImageCanvas::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape && tool_ != CanvasTool::None) {
+        const CanvasTool cancelled = tool_;
         setTool(CanvasTool::None);
+        emit toolCancelled(cancelled);
         event->accept();
         return;
     }
@@ -399,16 +604,36 @@ void ImageCanvas::keyPressEvent(QKeyEvent* event)
 
 void ImageCanvas::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::LeftButton && camera_roi_dragging_ &&
+        tool_ == CanvasTool::CameraRoi) {
+        camera_roi_dragging_ = false;
+        if (pending_points_.size() >= 2) {
+            const QRectF roi(pending_points_[0], pending_points_[1]);
+            const QVector<QPointF> points = pending_points_;
+            pending_points_.clear();
+            hover_image_point_valid_ = false;
+            if (roi.normalized().width() >= 2.0 && roi.normalized().height() >= 2.0) {
+                emit pointsCommitted(CanvasTool::CameraRoi, points);
+            }
+        }
+        update();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && dragged_overlay_index_ >= 0 &&
         dragged_overlay_index_ < overlays_.size()) {
         const CanvasOverlay& overlay = overlays_[dragged_overlay_index_];
-        if (dragged_point_index_ >= 0 && dragged_point_index_ < overlay.points.size()) {
+        if (dragging_overlay_body_) {
+            emit overlayMoved(overlay.source_index, {}, true);
+        } else if (dragged_point_index_ >= 0 && dragged_point_index_ < overlay.points.size()) {
             emit overlayPointMoved(overlay.source_index, dragged_point_index_,
                 overlay.points[dragged_point_index_], true);
         }
         dragged_overlay_index_ = -1;
         dragged_point_index_ = -1;
+        dragging_overlay_body_ = false;
         setCursor(Qt::ArrowCursor);
+        event->accept();
         return;
     }
     if (panning_ && (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)) {

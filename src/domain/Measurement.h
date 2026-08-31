@@ -4,6 +4,7 @@
 #include "Geometry.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,17 @@ struct MeasurementResult {
     double calibrated_value = 0.0;
     MeasurementUnit unit = MeasurementUnit::Pixels;
     std::wstring unit_label;
+};
+
+struct MeasurementOverlayStyle {
+    std::uint8_t red = 76;
+    std::uint8_t green = 201;
+    std::uint8_t blue = 240;
+
+    bool operator==(const MeasurementOverlayStyle& other) const
+    {
+        return red == other.red && green == other.green && blue == other.blue;
+    }
 };
 
 class LengthMeasurement {

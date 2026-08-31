@@ -87,7 +87,7 @@ if ($WithOpenCV) {
     }
     $opencvArguments = @(
         "-DCAMERAVIEW_WITH_OPENCV=ON",
-        "-DOpenCV_DIR=$OpenCVRoot"
+        "-DOpenCV_DIR=$($OpenCVRoot.Replace('\', '/'))"
     )
     Write-Host "OpenCV: $OpenCVRoot"
 }
@@ -97,10 +97,10 @@ $configureArguments = @(
     "-B", $buildPath,
     "-G", "Ninja",
     "-DCMAKE_BUILD_TYPE=Release",
-    "-DCMAKE_PREFIX_PATH=$QtRoot",
-    "-DCMAKE_CXX_COMPILER=$compiler",
-    "-DCMAKE_RC_COMPILER=$resourceCompiler",
-    "-DCMAKE_MAKE_PROGRAM=$ninja"
+    "-DCMAKE_PREFIX_PATH=$($QtRoot.Replace('\', '/'))",
+    "-DCMAKE_CXX_COMPILER=$($compiler.Replace('\', '/'))",
+    "-DCMAKE_RC_COMPILER=$($resourceCompiler.Replace('\', '/'))",
+    "-DCMAKE_MAKE_PROGRAM=$($ninja.Replace('\', '/'))"
 ) + $opencvArguments
 & $cmake @configureArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,14 +1,21 @@
+#include "qt/CalibrationDialog.h"
 #include "qt/ImageCanvas.h"
+#include "qt/ObjectiveCalibrationSettings.h"
+#include "qt/FluorescenceCaptureSettings.h"
 #include "qt/ai/YoloWorkspaceWidget.h"
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSettings>
 #include <QTabWidget>
 #include <QTemporaryDir>
 
@@ -39,12 +46,120 @@ int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
 
+    CalibrationDialog calibration_dialog(
+        200.0, 100.0, MeasurementUnit::Micrometers);
+    auto* calibration_length = calibration_dialog.findChild<QDoubleSpinBox*>(
+        QStringLiteral("CalibrationDialogLength"));
+    auto* calibration_unit = calibration_dialog.findChild<QComboBox*>(
+        QStringLiteral("CalibrationDialogUnit"));
+    auto* calibration_preview = calibration_dialog.findChild<QLabel*>(
+        QStringLiteral("CalibrationScalePreview"));
+    if (!calibration_length || !calibration_unit || !calibration_preview ||
+        !near(calibration_dialog.profile().MicronsPerPixel(), 0.5) ||
+        !calibration_preview->text().contains(QStringLiteral("0.5"))) {
+        return fail("Calibration confirmation dialog did not preview a micrometer scale.");
+    }
+    calibration_length->setValue(0.1);
+    calibration_unit->setCurrentIndex(1);
+    if (calibration_dialog.unit() != MeasurementUnit::Millimeters ||
+        !near(calibration_dialog.profile().MicronsPerPixel(), 0.5) ||
+        !calibration_preview->text().contains(QStringLiteral("0.5"))) {
+        return fail("Calibration confirmation dialog did not convert millimeters correctly.");
+    }
+
+    QTemporaryDir calibration_settings_directory;
+    if (!calibration_settings_directory.isValid()) {
+        return fail("Could not create a temporary directory for objective calibration settings.");
+    }
+    const QString calibration_settings_path =
+        calibration_settings_directory.filePath(QStringLiteral("calibration.ini"));
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        ObjectiveCalibrationState saved = ObjectiveCalibrationSettings::Defaults();
+        saved.selected_index = 2;
+        saved.calibrations[0] = CalibrationProfile::FromMicronsPerPixel(1.25);
+        saved.calibrations[2] = CalibrationProfile::FromMicronsPerPixel(0.25);
+        ObjectiveCalibrationSettings::Save(settings, saved);
+        if (settings.status() != QSettings::NoError) {
+            return fail("Could not write objective calibration settings.");
+        }
+    }
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        const ObjectiveCalibrationState restored = ObjectiveCalibrationSettings::Load(settings);
+        if (restored.labels.size() < 6 || restored.calibrations.size() != restored.labels.size() ||
+            restored.selected_index != 2 || restored.labels[2] != L"20x" ||
+            !near(restored.calibrations[0].MicronsPerPixel(), 1.25) ||
+            !near(restored.calibrations[2].MicronsPerPixel(), 0.25)) {
+            return fail("Objective-specific calibration settings were not remembered correctly.");
+        }
+    }
+    {
+        QSettings settings(calibration_settings_path, QSettings::IniFormat);
+        ObjectiveCalibrationState reduced;
+        reduced.labels = {L"20x", L"40x Oil"};
+        reduced.calibrations = {
+            CalibrationProfile::FromMicronsPerPixel(0.5),
+            CalibrationProfile::FromMicronsPerPixel(0.2)};
+        reduced.selected_index = 1;
+        ObjectiveCalibrationSettings::Save(settings, reduced);
+        const ObjectiveCalibrationState restored = ObjectiveCalibrationSettings::Load(settings);
+        if (restored.labels != reduced.labels || restored.calibrations.size() != 2 ||
+            restored.selected_index != 1 ||
+            !near(restored.calibrations[1].MicronsPerPixel(), 0.2)) {
+            return fail("Objective calibration records did not support persistent CRUD changes.");
+        }
+    }
+
+    const QString fluorescence_settings_path =
+        calibration_settings_directory.filePath(QStringLiteral("fluorescence.ini"));
+    const std::vector<DyeProfile> fluorescence_dyes{
+        {L"DAPI", 358.0, 461.0, {80, 120, 255}},
+        {L"FITC", 495.0, 519.0, {80, 255, 80}}};
+    {
+        QSettings settings(fluorescence_settings_path, QSettings::IniFormat);
+        const auto defaults = FluorescenceCaptureSettings::Load(settings, fluorescence_dyes);
+        if (defaults.size() != 2 || defaults[0].dye_name != L"DAPI" ||
+            !near(defaults[0].exposure_ms, 10.0) || defaults[1].color.g != 255) {
+            return fail("Fluorescence capture defaults did not mirror the dye library.");
+        }
+        const std::vector<FluorescenceCapturePreset> presets{
+            {L"DAPI", 125.5, {12, 34, 240}},
+            {L"FITC", 42.25, {20, 230, 40}}};
+        FluorescenceCaptureSettings::Save(settings, presets);
+    }
+    {
+        QSettings settings(fluorescence_settings_path, QSettings::IniFormat);
+        const auto restored = FluorescenceCaptureSettings::Load(settings, fluorescence_dyes);
+        if (restored.size() != 2 || restored[0].dye_name != L"DAPI" ||
+            !near(restored[0].exposure_ms, 125.5) || restored[0].color.b != 240 ||
+            !near(restored[1].exposure_ms, 42.25) || restored[1].color.g != 230) {
+            return fail("Fluorescence exposure and pseudo-color presets were not remembered.");
+        }
+        FluorescenceCaptureSettings::Save(settings, {});
+        if (!FluorescenceCaptureSettings::Load(settings, fluorescence_dyes).empty()) {
+            return fail("Deleted fluorescence capture presets were unexpectedly restored.");
+        }
+    }
+
     ImageCanvas canvas;
     canvas.resize(800, 600);
     if (canvas.focusOnImageRect(QRectF(10.0, 10.0, 20.0, 20.0))) {
         return fail("ImageCanvas accepted a focus request without an image.");
     }
-    canvas.setImage(QImage(1000, 500, QImage::Format_RGB32));
+    const QImage shared_canvas_image(1000, 500, QImage::Format_RGB32);
+    canvas.setImage(shared_canvas_image);
+    if (canvas.imageCacheKey() != shared_canvas_image.cacheKey() || canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas copied or grayscale-converted an image on the normal preview path.");
+    }
+    canvas.setLivePreviewOverlay(QImage(320, 240, QImage::Format_RGB32));
+    if (!canvas.hasLivePreviewOverlay()) {
+        return fail("ImageCanvas did not retain the live-camera inset used by live stitching.");
+    }
+    canvas.setLivePreviewOverlay({});
+    if (canvas.hasLivePreviewOverlay()) {
+        return fail("ImageCanvas did not clear the live-camera inset.");
+    }
     if (!canvas.focusOnImageRect(QRectF(100.0, 100.0, 200.0, 100.0))) {
         return fail("ImageCanvas rejected a valid image target.");
     }
@@ -97,6 +212,9 @@ int main(int argc, char* argv[])
     canvas.setImage(edge_image);
     canvas.fitToView();
     canvas.setEdgeSnappingEnabled(true);
+    if (!canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas did not build the grayscale cache when edge snapping was enabled.");
+    }
     canvas.setEdgeSnapRadius(10);
     bool snap_reported = false;
     bool snap_succeeded = false;
@@ -118,6 +236,9 @@ int main(int argc, char* argv[])
     }
 
     canvas.setEdgeSnappingEnabled(false);
+    if (canvas.hasGrayscaleCache()) {
+        return fail("ImageCanvas retained the expensive grayscale cache after edge snapping was disabled.");
+    }
     committed_tool = CanvasTool::None;
     committed_points.clear();
     canvas.setTool(CanvasTool::Circle);
@@ -127,8 +248,54 @@ int main(int argc, char* argv[])
         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &circle_center);
     QApplication::sendEvent(&canvas, &circle_edge);
-    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2) {
-        return fail("Circle canvas interaction did not commit center and edge points.");
+    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2 ||
+        canvas.tool() != CanvasTool::Circle) {
+        return fail("Circle canvas interaction did not commit points and keep the tool active.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    QMouseEvent second_circle_center(
+        QEvent::MouseButtonPress, QPointF(250.0, 250.0), QPointF(250.0, 250.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent second_circle_edge(
+        QEvent::MouseButtonPress, QPointF(325.0, 250.0), QPointF(325.0, 250.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &second_circle_center);
+    QApplication::sendEvent(&canvas, &second_circle_edge);
+    if (committed_tool != CanvasTool::Circle || committed_points.size() != 2 ||
+        canvas.tool() != CanvasTool::Circle) {
+        return fail("Circle canvas interaction did not support consecutive measurements.");
+    }
+
+    committed_tool = CanvasTool::None;
+    committed_points.clear();
+    canvas.setTool(CanvasTool::CameraRoi);
+    QMouseEvent roi_press(
+        QEvent::MouseButtonPress, QPointF(50.0, 75.0), QPointF(50.0, 75.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent roi_move(
+        QEvent::MouseMove, QPointF(300.0, 350.0), QPointF(300.0, 350.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent roi_release(
+        QEvent::MouseButtonRelease, QPointF(300.0, 350.0), QPointF(300.0, 350.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &roi_press);
+    QApplication::sendEvent(&canvas, &roi_move);
+    QApplication::sendEvent(&canvas, &roi_release);
+    if (committed_tool != CanvasTool::CameraRoi || committed_points.size() != 2 ||
+        !near(committed_points[0].x(), 10.0) || !near(committed_points[0].y(), 15.0) ||
+        !near(committed_points[1].x(), 60.0) || !near(committed_points[1].y(), 70.0)) {
+        return fail("Camera ROI tool did not commit a free drag in image coordinates.");
+    }
+    CanvasTool cancelled_tool = CanvasTool::None;
+    QObject::connect(&canvas, &ImageCanvas::toolCancelled,
+        [&cancelled_tool](CanvasTool tool) { cancelled_tool = tool; });
+    canvas.setTool(CanvasTool::CameraRoi);
+    QKeyEvent cancel_roi(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &cancel_roi);
+    if (cancelled_tool != CanvasTool::CameraRoi || canvas.tool() != CanvasTool::None) {
+        return fail("Camera ROI tool did not cancel with Escape.");
     }
 
     committed_tool = CanvasTool::None;
@@ -191,6 +358,39 @@ int main(int argc, char* argv[])
     if (moved_source != 3 || moved_point != 0 || !near(moved_position.x(), 30.0) ||
         !near(moved_position.y(), 25.0) || !move_finished) {
         return fail("Editable measurement overlay did not report a completed handle drag.");
+    }
+
+    int selected_overlay = -1;
+    int translated_source = -1;
+    QPointF translated_delta;
+    bool translation_finished = false;
+    QObject::connect(&canvas, &ImageCanvas::overlaySelected,
+        [&selected_overlay](int source) { selected_overlay = source; });
+    QObject::connect(&canvas, &ImageCanvas::overlayMoved,
+        [&translated_source, &translated_delta, &translation_finished](
+            int source, const QPointF& delta, bool finished) {
+            translated_source = source;
+            if (!finished) translated_delta += delta;
+            translation_finished = finished;
+        });
+    canvas.setOverlays({CanvasOverlay{CanvasTool::Rectangle, {{20.0, 20.0}, {40.0, 40.0}},
+        QStringLiteral("movable"), QColor(12, 34, 56), true, true, 5}});
+    QMouseEvent move_overlay_press(
+        QEvent::MouseButtonPress, QPointF(150.0, 150.0), QPointF(150.0, 150.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent move_overlay_move(
+        QEvent::MouseMove, QPointF(200.0, 175.0), QPointF(200.0, 175.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent move_overlay_release(
+        QEvent::MouseButtonRelease, QPointF(200.0, 175.0), QPointF(200.0, 175.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &move_overlay_press);
+    QApplication::sendEvent(&canvas, &move_overlay_move);
+    QApplication::sendEvent(&canvas, &move_overlay_release);
+    if (selected_overlay != 5 || translated_source != 5 ||
+        !near(translated_delta.x(), 10.0) || !near(translated_delta.y(), 5.0) ||
+        !translation_finished) {
+        return fail("Editable measurement overlay did not support selection and whole-shape dragging.");
     }
 
     YoloWorkspaceWidget workspace;
@@ -260,6 +460,10 @@ int main(int argc, char* argv[])
             QStringLiteral("Annotated cells"), YoloTask::Detection,
             {QStringLiteral("nucleus")}, &dataset, &dataset_error) ||
         !workspace.loadDatasetProject(dataset.rootDirectory(), &dataset_error)) {
+        std::cerr << "Dataset UI setup failed: "
+                  << dataset_error.toStdString()
+                  << " (temporary directory: "
+                  << dataset_directory.path().toStdString() << ")\n";
         return fail("Could not create and load a dataset project for the UI test.");
     }
     auto* tabs = workspace.findChild<QTabWidget*>(QStringLiteral("YoloWorkspaceTabs"));

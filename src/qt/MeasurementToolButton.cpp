@@ -162,6 +162,42 @@ public:
                 painter->drawLine(QPointF(18, 6), QPointF(18, 12));
             }
             break;
+        case MeasurementToolGlyph::SelectMeasurement: {
+            QPainterPath cursor;
+            cursor.moveTo(7, 4);
+            cursor.lineTo(7, 27);
+            cursor.lineTo(13, 21);
+            cursor.lineTo(18, 30);
+            cursor.lineTo(22, 28);
+            cursor.lineTo(17, 19);
+            cursor.lineTo(26, 19);
+            cursor.closeSubpath();
+            painter->drawPath(cursor);
+            break;
+        }
+        case MeasurementToolGlyph::RenameMeasurement:
+            painter->drawLine(QPointF(5, 8), QPointF(21, 8));
+            painter->drawLine(QPointF(5, 16), QPointF(17, 16));
+            painter->drawLine(QPointF(5, 24), QPointF(14, 24));
+            painter->drawLine(QPointF(17, 25), QPointF(26, 16));
+            painter->drawLine(QPointF(26, 16), QPointF(29, 19));
+            painter->drawLine(QPointF(29, 19), QPointF(20, 28));
+            painter->drawLine(QPointF(17, 25), QPointF(20, 28));
+            break;
+        case MeasurementToolGlyph::MeasurementColor:
+            painter->drawEllipse(QRectF(4, 5, 22, 22));
+            painter->drawEllipse(QPointF(10, 12), 2.0, 2.0);
+            painter->drawEllipse(QPointF(17, 9), 2.0, 2.0);
+            painter->drawEllipse(QPointF(22, 15), 2.0, 2.0);
+            painter->drawEllipse(QPointF(12, 21), 2.0, 2.0);
+            painter->drawArc(QRectF(17, 20, 11, 9), 30 * 16, 170 * 16);
+            break;
+        case MeasurementToolGlyph::ResetMeasurementColor:
+            painter->drawEllipse(QRectF(8, 8, 16, 16));
+            painter->drawArc(QRectF(4, 4, 24, 24), 35 * 16, 245 * 16);
+            arrow({6, 9}, -1.7);
+            painter->drawLine(QPointF(12, 20), QPointF(20, 12));
+            break;
         case MeasurementToolGlyph::DeleteMeasurement:
             painter->drawRect(QRectF(9, 9, 14, 18));
             painter->drawLine(QPointF(7, 7), QPointF(25, 7));
@@ -214,6 +250,26 @@ private:
 QIcon measurementToolIcon(MeasurementToolGlyph glyph)
 {
     return QIcon(new MeasurementIconEngine(glyph));
+}
+
+QToolButton* createMeasurementActionButton(
+    MeasurementToolGlyph glyph,
+    const QString& text,
+    const QString& toolTip,
+    QWidget* parent)
+{
+    auto* button = new QToolButton(parent);
+    button->setText(text);
+    button->setIcon(measurementToolIcon(glyph));
+    button->setIconSize(QSize(30, 30));
+    button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    button->setToolTip(toolTip);
+    button->setAccessibleName(text);
+    button->setAccessibleDescription(toolTip);
+    button->setProperty("role", QStringLiteral("measurementAction"));
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    button->setMinimumSize(84, 68);
+    return button;
 }
 
 MeasurementToolButton::MeasurementToolButton(

@@ -1,17 +1,27 @@
 #include "CameraMainWindow.h"
 
+#include "CalibrationDialog.h"
 #include "CameraWorker.h"
+#include "FluorescenceCaptureSettings.h"
 #include "HistogramWidget.h"
 #include "ImageSurface3DDialog.h"
 #include "MeasurementToolButton.h"
+#include "NumericSlider.h"
+#include "ObjectiveCalibrationSettings.h"
 #include "ProfileAnalysisDialog.h"
+#include "PointCloudDialog.h"
+#include "ReportTemplateDialog.h"
 #include "ai/YoloWorkspaceWidget.h"
+#include "app/ExportActions.h"
 #include "domain/MeasurementFormatter.h"
 #include "domain/MeasurementNameFormatter.h"
 #include "imaging/ChannelFusionEngine.h"
 #include "imaging/DyeLibrary.h"
 #include "imaging/EdfStackListActions.h"
+#include "imaging/FluorescenceChannelAnalysis.h"
 #include "imaging/FluorescenceChannelListActions.h"
+#include "imaging/FluorescenceChannelUpdater.h"
+#include "imaging/FluorescenceFormatter.h"
 #include "imaging/HistogramCalculator.h"
 #include "imaging/LiveStitchCapturePlanner.h"
 #include "imaging/LiveStitchPreviewBuilder.h"
@@ -24,14 +34,21 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCollator>
+#include <QColorDialog>
 #include <QDockWidget>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -55,22 +72,21 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPainter>
-#include <QSaveFile>
-#include <QShortcut>
+#include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStatusBar>
-#include <QStringConverter>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QStyle>
 #include <QTimer>
 #include <QTransform>
-#include <QTextStream>
 #include <QTime>
 #include <QUrl>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -79,8 +95,61 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <utility>
 
 namespace {
+
+constexpr int kLiveStitchPreviewMaxEdge = 960;
+constexpr int kLiveStitchPreviewTileMaxEdge = 640;
+constexpr int kLiveStitchRegistrationMaxEdge = 224;
+constexpr int kLiveStitchMinMovementPercent = 15;
+constexpr int kLiveStitchMinOverlapPercent = 15;
+constexpr int kLiveStitchReferenceTileCount = 5;
+constexpr int kLiveStitchOutOfRangeWarningFrames = 3;
+constexpr int kLiveStitchMissingMatchWarningFrames = 6;
+constexpr qint64 kLiveStitchWarningBeepMinIntervalMs = 2500;
+
+bool editObjectiveCalibrationRecord(
+    QWidget* parent,
+    const QString& title,
+    QString& objectiveLabel,
+    double& micronsPerPixel)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    dialog.setObjectName(QStringLiteral("ObjectiveCalibrationEditor"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* label = new QLineEdit(objectiveLabel, &dialog);
+    label->setObjectName(QStringLiteral("ObjectiveCalibrationName"));
+    label->setPlaceholderText(QObject::tr("例如：20x、40x 油镜"));
+    auto* scale = new QDoubleSpinBox(&dialog);
+    scale->setObjectName(QStringLiteral("ObjectiveCalibrationScale"));
+    scale->setDecimals(10);
+    scale->setRange(0.0, 1000000.0);
+    scale->setSingleStep(0.01);
+    scale->setSpecialValueText(QObject::tr("未标定"));
+    scale->setSuffix(QObject::tr(" µm / px"));
+    scale->setValue(std::max(0.0, micronsPerPixel));
+    form->addRow(QObject::tr("物镜倍率"), label);
+    form->addRow(QObject::tr("标定值"), scale);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    label->setFocus();
+    label->selectAll();
+    if (dialog.exec() != QDialog::Accepted) return false;
+    objectiveLabel = label->text().trimmed();
+    micronsPerPixel = scale->value();
+    if (objectiveLabel.isEmpty()) {
+        QMessageBox::warning(parent, QObject::tr("物镜标定"), QObject::tr("物镜倍率不能为空。"));
+        return false;
+    }
+    return true;
+}
 
 QPushButton* addButton(QBoxLayout* layout, const QString& text)
 {
@@ -118,6 +187,7 @@ struct LiveStitchEvaluation {
     ImageFrame frame;
     std::size_t baseTileCount = 0;
     quint64 generation = 0;
+    qint64 elapsedMs = 0;
 };
 
 QWidget* buttonRow(std::initializer_list<QPushButton*> buttons)
@@ -169,19 +239,49 @@ QString imageFilterStepDescription(const ImageFilterStep& step)
     }
 }
 
+QIcon toolbarMoreIcon()
+{
+    QPixmap pixmap(30, 30);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(132, 190, 255));
+    for (int x : {8, 15, 22}) painter.drawEllipse(QPointF(x, 15), 2.1, 2.1);
+    return QIcon(pixmap);
+}
+
 } // namespace
 
 CameraMainWindow::CameraMainWindow(QWidget* parent)
     : QMainWindow(parent), dyes_(DyeLibrary::DefaultDyes())
 {
+    const ObjectiveCalibrationState objective_state = ObjectiveCalibrationSettings::Defaults();
+    objective_labels_ = objective_state.labels;
+    objective_calibrations_ = objective_state.calibrations;
+    selected_objective_index_ = objective_state.selected_index;
     setupUi();
+    loadMeasurementPreferences();
+    loadObjectiveCalibrationMemory();
+    loadReportTemplateSettings();
+    {
+        QSettings fluorescence_settings;
+        fluorescence_capture_presets_ = FluorescenceCaptureSettings::Load(
+            fluorescence_settings, dyes_);
+        refreshFluorescencePresetList();
+    }
     setupMenusAndToolbar();
     QSettings settings;
     settings.beginGroup(QStringLiteral("MainWindow"));
     restoreGeometry(settings.value(QStringLiteral("geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("state")).toByteArray());
     settings.endGroup();
-    if (measurement_toolbar_) insertToolBarBreak(measurement_toolbar_);
+    if (main_toolbar_) {
+        removeToolBarBreak(main_toolbar_);
+        main_toolbar_->setIconSize(QSize(30, 30));
+        updateToolbarPresentation();
+        updateToolbarActionStates();
+    }
     setAcceptDrops(true);
 
     camera_worker_ = new CameraWorker;
@@ -190,18 +290,82 @@ CameraMainWindow::CameraMainWindow(QWidget* parent)
     connect(&camera_thread_, &QThread::finished, camera_worker_, &QObject::deleteLater);
     connect(camera_worker_, &CameraWorker::devicesReady, this, &CameraMainWindow::onDevicesReady);
     connect(camera_worker_, &CameraWorker::frameReady, this, &CameraMainWindow::onCameraFrame);
+    connect(camera_worker_, &CameraWorker::cameraCapabilitiesChanged,
+        this, &CameraMainWindow::onCameraCapabilities);
     connect(camera_worker_, &CameraWorker::cameraStateChanged, this,
         [this](bool opened, const QString& message) {
             camera_open_ = opened;
             if (!opened && live_stitch_active_) stopLiveStitch(false);
-            camera_state_label_->setText(message);
+            if (!opened && canvas_->tool() == CanvasTool::CameraRoi) {
+                restoreToolAfterCameraRoi(tr("相机已断开，ROI 框选已取消"));
+            }
+            preview_fps_timer_.invalidate();
+            preview_frames_since_sample_ = 0;
+            if (opened && message.contains(tr("正在重配置"))) {
+                setCameraPanelState(CameraPanelState::Reconfiguring, message);
+            } else if (opened && message.contains(tr("等待"))) {
+                setCameraPanelState(CameraPanelState::WaitingTrigger, message);
+            } else if (opened) {
+                setCameraPanelState(CameraPanelState::Previewing, message);
+            } else if (message.contains(tr("断开"))) {
+                setCameraPanelState(CameraPanelState::Disconnected, message);
+            } else if (message.contains(tr("失败"))) {
+                setCameraPanelState(CameraPanelState::Error, message);
+            } else {
+                setCameraPanelState(
+                    camera_indices_.isEmpty() ? CameraPanelState::NoDevice : CameraPanelState::Ready,
+                    message);
+            }
+            preview_fps_label_->setText(opened ? tr("FPS --") : tr("FPS —"));
             statusBar()->showMessage(message, 5000);
+            updateCameraControlAvailability();
         });
     connect(camera_worker_, &CameraWorker::operationFinished, this,
         [this](const QString& message, bool success) {
             statusBar()->showMessage(message, 5000);
-            if (!success) {
-                camera_state_label_->setText(message);
+            camera_feedback_label_->setText(message);
+            camera_feedback_label_->setProperty(
+                "feedbackState", success ? QStringLiteral("success") : QStringLiteral("error"));
+            camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+            camera_feedback_label_->style()->polish(camera_feedback_label_);
+        });
+    connect(camera_worker_, &CameraWorker::configurationFinished, this,
+        [this](CameraConfiguration configuration, bool success, const QString& message) {
+            camera_configuration_ = configuration;
+            updateCameraConfigurationUi(configuration);
+            last_sent_exposure_ = configuration.exposure_ms;
+            last_sent_rgb_gain_ = {
+                configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+            last_sent_rgb_offset_ = {
+                configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+            camera_feedback_label_->setText(message);
+            camera_feedback_label_->setProperty(
+                "feedbackState", success ? QStringLiteral("success") : QStringLiteral("error"));
+            camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+            camera_feedback_label_->style()->polish(camera_feedback_label_);
+            // Save the actual configuration after both success and rollback so
+            // an unsupported saved value cannot fail again on every startup.
+            saveCameraProfile();
+            updateCameraControlAvailability();
+            if (camera_roi_selection_pending_) {
+                camera_roi_selection_pending_ = false;
+                if (success) {
+                    QTimer::singleShot(0, this, &CameraMainWindow::startCameraRoiSelection);
+                } else {
+                    camera_feedback_label_->setText(tr("无法恢复全幅，ROI 框选未开始"));
+                }
+            }
+        });
+    connect(camera_worker_, &CameraWorker::exposureApplied, this,
+        [this](double value, bool success, const QString& message) {
+            if (!FluorescenceCaptureSequence::ConfirmExposure(
+                    fluorescence_capture_state_, value, success,
+                    latest_camera_sequence_)) return;
+            updateFluorescenceCaptureUi();
+            if (!success && fluorescence_capture_status_label_) {
+                fluorescence_capture_status_label_->setText(
+                    tr("当前通道曝光设置失败：%1。请检查相机曝光控制后重试。")
+                        .arg(message));
             }
         });
     camera_thread_.start();
@@ -220,12 +384,17 @@ void CameraMainWindow::setupUi()
 {
     setWindowTitle(tr("CameraView · Qt 工业相机与显微测量"));
     resize(1360, 850);
-    setMinimumSize(980, 640);
+    setMinimumSize(960, 640);
 
     canvas_ = new ImageCanvas;
-    canvas_->setObjectName(QStringLiteral("ImageViewport"));
+    canvas_->setObjectName(QStringLiteral("ImageCanvas"));
     setCentralWidget(canvas_);
     connect(canvas_, &ImageCanvas::pointsCommitted, this, &CameraMainWindow::onCanvasPoints);
+    connect(canvas_, &ImageCanvas::toolCancelled, this, [this](CanvasTool tool) {
+        if (tool == CanvasTool::CameraRoi) {
+            restoreToolAfterCameraRoi(tr("已取消 ROI 框选"));
+        }
+    });
     connect(canvas_, &ImageCanvas::imagePositionChanged, this, [this](const QPointF& point) {
         coordinate_label_->setText(tr("X %1  Y %2").arg(point.x(), 0, 'f', 1).arg(point.y(), 0, 'f', 1));
     });
@@ -331,7 +500,10 @@ void CameraMainWindow::setupUi()
     source_label_->setObjectName(QStringLiteral("SourceStatus"));
     coordinate_label_ = new QLabel(tr("X —  Y —"));
     zoom_label_ = new QLabel(tr("缩放 100%"));
+    preview_fps_label_ = new QLabel(tr("FPS —"));
+    preview_fps_label_->setObjectName(QStringLiteral("PreviewFpsStatus"));
     statusBar()->addWidget(source_label_, 1);
+    statusBar()->addPermanentWidget(preview_fps_label_);
     statusBar()->addPermanentWidget(coordinate_label_);
     statusBar()->addPermanentWidget(zoom_label_);
     statusBar()->showMessage(tr("就绪"));
@@ -341,42 +513,29 @@ void CameraMainWindow::setupUi()
 void CameraMainWindow::setupMenusAndToolbar()
 {
     QMenu* file_menu = menuBar()->addMenu(tr("文件(&F)"));
-    QAction* open_action = file_menu->addAction(tr("打开图像…"), QKeySequence::Open, this, &CameraMainWindow::openImage);
+    open_action_ = file_menu->addAction(tr("打开图像…"), QKeySequence::Open, this, &CameraMainWindow::openImage);
     export_action_ = file_menu->addAction(tr("导出当前图像…"), QKeySequence::SaveAs, this, &CameraMainWindow::exportImage);
     file_menu->addSeparator();
     file_menu->addAction(tr("打开项目…"), this, &CameraMainWindow::openProject);
     file_menu->addAction(tr("保存项目…"), QKeySequence::Save, this, &CameraMainWindow::saveProject);
-    file_menu->addAction(tr("保存诊断报告…"), this, [this] {
-        QString file_name = QFileDialog::getSaveFileName(
-            this, tr("保存诊断报告"), QStringLiteral("CameraView-diagnostics.txt"), tr("文本文件 (*.txt)"));
-        if (file_name.isEmpty()) {
-            return;
-        }
-        QSaveFile file(file_name);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, tr("保存失败"), file.errorString());
-            return;
-        }
-        QTextStream stream(&file);
-        stream.setEncoding(QStringConverter::Utf8);
-        stream << "CameraView Qt diagnostics\n"
-               << "Generated: " << QDateTime::currentDateTime().toString(Qt::ISODate) << "\n"
-               << "Qt: " << QT_VERSION_STR << "\n"
-               << "Camera: " << camera_state_label_->text() << "\n"
-               << "Source: " << current_source_ << "\n"
-               << "Frame: " << current_frame_.width << " x " << current_frame_.height << "\n"
-               << "Calibration: " << (calibration_.IsCalibrated()
-                    ? QString::number(calibration_.MicronsPerPixel(), 'g', 10) + " um/px" : "none") << "\n"
-               << "Measurements: " << measurements_.Count() << "\n"
-               << "Fluorescence channels: " << channels_.size() << "\n"
-               << "Stitch frames: " << stitch_tiles_.size() << "\n"
-               << "EDF frames: " << edf_stack_.size() << "\n";
-        if (!file.commit()) {
-            QMessageBox::warning(this, tr("保存失败"), file.errorString());
-        } else {
-            statusBar()->showMessage(tr("诊断报告已保存：%1").arg(file_name), 5000);
-        }
-    });
+    file_menu->addSeparator();
+    QMenu* report_menu = file_menu->addMenu(tr("报告"));
+    QAction* image_report_action = report_menu->addAction(
+        tr("导出图文报告…"), this, &CameraMainWindow::exportImageReport);
+    image_report_action->setObjectName(QStringLiteral("ExportImageReportAction"));
+    QAction* diagnostic_report_action = report_menu->addAction(
+        tr("导出诊断信息…"), this, &CameraMainWindow::exportDiagnosticReport);
+    diagnostic_report_action->setObjectName(QStringLiteral("ExportDiagnosticReportAction"));
+    report_menu->addSeparator();
+    QAction* design_report_action = report_menu->addAction(
+        tr("设计报告模板…"), this, &CameraMainWindow::showReportTemplateDesigner);
+    design_report_action->setObjectName(QStringLiteral("DesignReportTemplateAction"));
+    QAction* load_report_action = report_menu->addAction(
+        tr("载入报告模板…"), this, &CameraMainWindow::loadReportTemplate);
+    load_report_action->setObjectName(QStringLiteral("LoadReportTemplateAction"));
+    QAction* clear_report_action = report_menu->addAction(
+        tr("清除自定义模板"), this, &CameraMainWindow::clearReportTemplate);
+    clear_report_action->setObjectName(QStringLiteral("ClearReportTemplateAction"));
     file_menu->addSeparator();
     file_menu->addAction(tr("退出"), QKeySequence::Quit, this, &QWidget::close);
 
@@ -387,7 +546,8 @@ void CameraMainWindow::setupMenusAndToolbar()
 
     QMenu* image_menu = menuBar()->addMenu(tr("图像(&I)"));
     auto transform_frame = [this](const QTransform& transform, const QString& label) {
-        if (!current_frame_.IsValid()) {
+        const ImageFrame source_frame = currentVisibleFrame();
+        if (!source_frame.IsValid()) {
             return;
         }
         if (!measurements_.Empty() && QMessageBox::question(
@@ -396,7 +556,7 @@ void CameraMainWindow::setupMenusAndToolbar()
         }
         measurements_.Clear();
         updateMeasurementList();
-        const QImage transformed = qImageFromFrame(current_frame_).transformed(transform);
+        const QImage transformed = qImageFromFrame(source_frame).transformed(transform);
         setCurrentFrame(imageFrameFromQImage(transformed), label);
     };
     image_menu->addAction(tr("水平翻转"), this, [transform_frame] {
@@ -412,15 +572,62 @@ void CameraMainWindow::setupMenusAndToolbar()
         transform_frame(QTransform().rotate(-90.0), QObject::tr("逆时针旋转结果"));
     });
     image_menu->addSeparator();
-    QAction* surface_action = image_menu->addAction(tr("3D 高度图…"), this, &CameraMainWindow::show3DView);
-    surface_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
+    surface_action_ = image_menu->addAction(tr("3D 高度图…"), this, &CameraMainWindow::show3DView);
+    surface_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+3")));
     QAction* profile_action = image_menu->addAction(tr("剖线测量"), this, &CameraMainWindow::startProfileMeasurement);
     profile_action->setShortcut(QKeySequence(Qt::Key_P));
 
+    QMenu* three_d_menu = menuBar()->addMenu(tr("3D(&D)"));
+    point_cloud_action_ = three_d_menu->addAction(
+        tr("3D 点云工作台…"), this, &CameraMainWindow::showPointCloudWorkspace);
+    point_cloud_action_->setObjectName(QStringLiteral("PointCloudWorkspaceAction"));
+    point_cloud_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+3")));
+    point_cloud_action_->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
+    three_d_menu->addAction(surface_action_);
+
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
-    view_menu->addAction(tr("适合窗口"), QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
+    fit_action_ = view_menu->addAction(
+        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"),
+        QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
+    fit_action_->setObjectName(QStringLiteral("FitToViewAction"));
     view_menu->addSeparator();
     view_menu->addAction(function_dock_->toggleViewAction());
+    QMenu* toolbar_display_menu = view_menu->addMenu(tr("工具栏显示"));
+    toolbar_display_menu->setObjectName(QStringLiteral("ToolbarDisplayMenu"));
+    auto* toolbar_display_group = new QActionGroup(this);
+    toolbar_display_group->setExclusive(true);
+    auto add_toolbar_display_action = [this, toolbar_display_menu, toolbar_display_group](
+        const QString& text, ToolbarDisplayPreference preference) {
+        QAction* action = toolbar_display_menu->addAction(text);
+        action->setCheckable(true);
+        action->setData(static_cast<int>(preference));
+        toolbar_display_group->addAction(action);
+        action->setChecked(toolbar_display_preference_ == preference);
+        connect(action, &QAction::triggered, this, [this, preference] {
+            toolbar_display_preference_ = preference;
+            QSettings settings;
+            settings.beginGroup(QStringLiteral("MainWindow"));
+            settings.setValue(QStringLiteral("toolbarDisplay"), static_cast<int>(preference));
+            settings.setValue(QStringLiteral("toolbarLayoutVersion"), 2);
+            settings.endGroup();
+            updateToolbarPresentation();
+        });
+    };
+    {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("MainWindow"));
+        const int saved_preference = settings.value(
+            QStringLiteral("toolbarDisplay"),
+            static_cast<int>(ToolbarDisplayPreference::Automatic)).toInt();
+        settings.endGroup();
+        toolbar_display_preference_ = static_cast<ToolbarDisplayPreference>(
+            std::clamp(saved_preference,
+                static_cast<int>(ToolbarDisplayPreference::Automatic),
+                static_cast<int>(ToolbarDisplayPreference::IconsOnly)));
+    }
+    add_toolbar_display_action(tr("自动"), ToolbarDisplayPreference::Automatic);
+    add_toolbar_display_action(tr("图标和文字"), ToolbarDisplayPreference::IconsAndText);
+    add_toolbar_display_action(tr("仅图标"), ToolbarDisplayPreference::IconsOnly);
 
     QMenu* help_menu = menuBar()->addMenu(tr("帮助(&H)"));
     help_menu->addAction(tr("关于"), this, [this] {
@@ -432,172 +639,763 @@ void CameraMainWindow::setupMenusAndToolbar()
                "<p>Copyright © 2026 栗远</p>"));
     });
 
-    QToolBar* toolbar = addToolBar(tr("主工具栏"));
-    toolbar->setObjectName(QStringLiteral("MainToolbar"));
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(18, 18));
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    open_action->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    main_toolbar_ = addToolBar(tr("主工具栏"));
+    main_toolbar_->setObjectName(QStringLiteral("MainToolbar"));
+    main_toolbar_->setMovable(false);
+    main_toolbar_->setFloatable(false);
+    main_toolbar_->setIconSize(QSize(30, 30));
+    main_toolbar_->setMinimumHeight(66);
+    main_toolbar_->setAllowedAreas(Qt::TopToolBarArea);
+    open_action_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    open_action_->setObjectName(QStringLiteral("OpenImageAction"));
     export_action_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    export_action_->setObjectName(QStringLiteral("ExportImageAction"));
     export_action_->setEnabled(false);
-    toolbar->addAction(open_action);
-    toolbar->addAction(export_action_);
-    toolbar->addSeparator();
-    QAction* fit_action = toolbar->addAction(
-        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"), canvas_, &ImageCanvas::fitToView);
-    fit_action->setShortcut(QKeySequence(Qt::Key_F));
-    toolbar->addSeparator();
-    toolbar->addAction(surface_action);
+    surface_action_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    surface_action_->setObjectName(QStringLiteral("ImageSurface3DAction"));
 
-    measurement_toolbar_ = new QToolBar(tr("测量工具栏"), this);
-    measurement_toolbar_->setObjectName(QStringLiteral("MeasurementToolbar"));
-    measurement_toolbar_->setMovable(false);
-    measurement_toolbar_->setIconSize(QSize(24, 24));
-    measurement_toolbar_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    addToolBar(Qt::TopToolBarArea, measurement_toolbar_);
-    insertToolBarBreak(measurement_toolbar_);
+    auto configure_action = [](QAction* action, const QString& description,
+                                const QString& role = QStringLiteral("toolbarCommand")) {
+        if (!action) return;
+        QString tooltip = description;
+        if (!action->shortcut().isEmpty()) {
+            tooltip += QObject::tr("（%1）").arg(action->shortcut().toString(QKeySequence::NativeText));
+        }
+        action->setToolTip(tooltip);
+        action->setStatusTip(description);
+        action->setProperty("baseToolTip", tooltip);
+        action->setProperty("role", role);
+    };
+    configure_action(open_action_, tr("打开本地图像"));
+    configure_action(export_action_, tr("导出当前显示图像"));
+    configure_action(point_cloud_action_, tr("打开 3D 点云工作台"));
+    configure_action(fit_action_, tr("让图像完整适合当前窗口"));
+    configure_action(surface_action_, tr("根据当前图像生成 3D 高度图"));
 
-    auto* measurement_actions = new QActionGroup(measurement_toolbar_);
+    auto* measurement_actions = new QActionGroup(this);
     measurement_actions->setExclusive(true);
-    auto add_canvas_action = [this, measurement_actions](
+    auto add_canvas_action = [this, measurement_actions, configure_action](
         MeasurementToolGlyph glyph,
         CanvasTool tool,
         const QString& text,
         const QString& status,
+        const QString& panelButtonObjectName,
         const QKeySequence& shortcut = {}) {
-        QAction* action = measurement_toolbar_->addAction(measurementToolIcon(glyph), text);
+        auto* action = new QAction(measurementToolIcon(glyph), text, this);
         action->setCheckable(true);
         action->setData(static_cast<int>(tool));
-        action->setToolTip(status);
-        action->setStatusTip(status);
+        action->setObjectName(QStringLiteral("MeasurementToolbarTool%1").arg(static_cast<int>(tool)));
         if (!shortcut.isEmpty()) action->setShortcut(shortcut);
+        configure_action(action, status, QStringLiteral("measurementTool"));
+        action->setProperty("measurementPanelButton", panelButtonObjectName);
         measurement_actions->addAction(action);
+        action->setChecked(canvas_->tool() == tool);
+        measurement_tool_actions_.insert(static_cast<int>(tool), action);
         connect(action, &QAction::triggered, this, [this, tool, status] {
-            setMeasurementTool(tool, status);
+            if (tool == CanvasTool::None) {
+                enterMeasurementSelectionMode();
+            } else {
+                setMeasurementTool(tool, status);
+            }
         });
         return action;
     };
-    add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
-        tr("标定"), tr("在图像上选择标定线的两个端点"));
+    calibration_action_ = add_canvas_action(MeasurementToolGlyph::Calibration, CanvasTool::Calibration,
+        tr("标定"), tr("在图像上选择标定线的两个端点"), {});
     add_canvas_action(MeasurementToolGlyph::Point, CanvasTool::Point,
-        tr("点"), tr("记录图像中一个点的坐标"));
+        tr("点坐标"), tr("记录图像中一个点的坐标"),
+        QStringLiteral("MeasurementPointButton"));
     add_canvas_action(MeasurementToolGlyph::Length, CanvasTool::Length,
-        tr("长度"), tr("选择两个端点测量直线长度"), QKeySequence(Qt::Key_L));
+        tr("长度"), tr("选择两个端点测量直线长度"),
+        QStringLiteral("MeasurementLengthButton"), QKeySequence(Qt::Key_L));
     add_canvas_action(MeasurementToolGlyph::Polyline, CanvasTool::Polyline,
-        tr("折线"), tr("依次选择节点，双击完成折线长度测量"));
+        tr("折线"), tr("依次选择节点，双击完成折线长度测量"),
+        QStringLiteral("MeasurementPolylineButton"));
     add_canvas_action(MeasurementToolGlyph::Angle, CanvasTool::Angle,
-        tr("角度"), tr("依次选择端点、顶点和端点"));
+        tr("角度"), tr("依次选择端点、顶点和端点"),
+        QStringLiteral("MeasurementAngleButton"));
     add_canvas_action(MeasurementToolGlyph::Rectangle, CanvasTool::Rectangle,
-        tr("矩形"), tr("选择两个对角点测量矩形"));
+        tr("矩形"), tr("选择两个对角点测量宽、高、周长和面积"),
+        QStringLiteral("MeasurementRectangleButton"));
     add_canvas_action(MeasurementToolGlyph::Polygon, CanvasTool::Polygon,
-        tr("多边形"), tr("依次选择顶点，双击完成多边形测量"));
+        tr("多边形"), tr("依次选择顶点，双击完成面积测量"),
+        QStringLiteral("MeasurementPolygonButton"));
     add_canvas_action(MeasurementToolGlyph::Circle, CanvasTool::Circle,
-        tr("圆"), tr("选择圆心和圆周上一点"));
+        tr("圆"), tr("选择圆心和圆周上一点"),
+        QStringLiteral("MeasurementCircleButton"));
     add_canvas_action(MeasurementToolGlyph::Ellipse, CanvasTool::Ellipse,
-        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"));
+        tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"),
+        QStringLiteral("MeasurementEllipseButton"));
+    add_canvas_action(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
+        tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"),
+        QStringLiteral("MeasurementProfileButton"));
+    selection_action_ = add_canvas_action(MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
+        tr("选择"), tr("进入选择模式：选择、拖动或编辑测量对象"),
+        QStringLiteral("MeasurementSelectionButton"));
 
-    profile_action->setIcon(measurementToolIcon(MeasurementToolGlyph::Profile));
-    profile_action->setCheckable(true);
-    profile_action->setData(static_cast<int>(CanvasTool::ProfileLine));
-    profile_action->setToolTip(tr("选择两个端点分析亮度与 RGB 强度曲线"));
-    measurement_actions->addAction(profile_action);
-    measurement_toolbar_->addAction(profile_action);
+    rename_measurement_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::RenameMeasurement), tr("重命名"), this);
+    rename_measurement_action_->setObjectName(QStringLiteral("RenameMeasurementAction"));
+    rename_measurement_action_->setShortcut(QKeySequence(Qt::Key_F2));
+    rename_measurement_action_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    rename_measurement_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementRenameToolButton"));
+    configure_action(rename_measurement_action_, tr("重命名当前选中的测量结果"),
+        QStringLiteral("measurementAction"));
+    connect(rename_measurement_action_, &QAction::triggered,
+        this, &CameraMainWindow::renameSelectedMeasurement);
+    measurement_color_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::MeasurementColor), tr("设置颜色"), this);
+    measurement_color_action_->setObjectName(QStringLiteral("MeasurementColorAction"));
+    measurement_color_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementColorToolButton"));
+    configure_action(measurement_color_action_, tr("设置全部测量统一使用的全局颜色"),
+        QStringLiteral("measurementAction"));
+    connect(measurement_color_action_, &QAction::triggered,
+        this, &CameraMainWindow::chooseSelectedMeasurementColor);
+    reset_measurement_color_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ResetMeasurementColor), tr("默认颜色"), this);
+    reset_measurement_color_action_->setObjectName(QStringLiteral("ResetMeasurementColorAction"));
+    reset_measurement_color_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementResetColorToolButton"));
+    configure_action(reset_measurement_color_action_, tr("恢复系统默认的全局测量颜色"),
+        QStringLiteral("measurementAction"));
+    connect(reset_measurement_color_action_, &QAction::triggered,
+        this, &CameraMainWindow::resetSelectedMeasurementColor);
+    delete_measurement_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除选中"), this);
+    delete_measurement_action_->setObjectName(QStringLiteral("DeleteMeasurementAction"));
+    delete_measurement_action_->setShortcut(QKeySequence::Delete);
+    delete_measurement_action_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    delete_measurement_action_->setProperty("role", QStringLiteral("dangerAction"));
+    delete_measurement_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementDeleteToolButton"));
+    configure_action(delete_measurement_action_, tr("删除当前选中的测量结果"),
+        QStringLiteral("dangerAction"));
+    connect(delete_measurement_action_, &QAction::triggered,
+        this, &CameraMainWindow::deleteSelectedMeasurement);
+    clear_measurements_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空测量"), this);
+    clear_measurements_action_->setObjectName(QStringLiteral("ClearMeasurementsAction"));
+    clear_measurements_action_->setProperty("role", QStringLiteral("dangerAction"));
+    clear_measurements_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementClearToolButton"));
+    configure_action(clear_measurements_action_, tr("清空全部测量结果"),
+        QStringLiteral("dangerAction"));
+    connect(clear_measurements_action_, &QAction::triggered,
+        this, &CameraMainWindow::clearMeasurements);
+    export_measurements_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"), this);
+    export_measurements_action_->setObjectName(QStringLiteral("ExportMeasurementsAction"));
+    export_measurements_action_->setProperty(
+        "measurementPanelButton", QStringLiteral("MeasurementExportToolButton"));
+    configure_action(export_measurements_action_, tr("导出全部测量结果为 CSV"),
+        QStringLiteral("measurementAction"));
+    connect(export_measurements_action_, &QAction::triggered,
+        this, &CameraMainWindow::exportMeasurements);
 
-    QAction* smart_sample_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"));
-    smart_sample_action->setCheckable(true);
-    smart_sample_action->setData(static_cast<int>(CanvasTool::SmartCountSample));
-    smart_sample_action->setToolTip(tr("连续框选典型目标作为自动计数样本"));
-    measurement_actions->addAction(smart_sample_action);
-    connect(smart_sample_action, &QAction::triggered,
+    smart_sample_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCount), tr("智能框选"), this);
+    smart_sample_action_->setObjectName(QStringLiteral("SmartSampleAction"));
+    smart_sample_action_->setCheckable(true);
+    smart_sample_action_->setData(static_cast<int>(CanvasTool::SmartCountSample));
+    configure_action(smart_sample_action_, tr("连续框选典型目标作为自动计数样本"),
+        QStringLiteral("measurementTool"));
+    measurement_actions->addAction(smart_sample_action_);
+    connect(smart_sample_action_, &QAction::triggered,
         this, &CameraMainWindow::startSmartTargetSampleSelection);
 
-    connect(canvas_, &ImageCanvas::toolChanged, measurement_toolbar_,
-        [measurement_actions](CanvasTool tool) {
+    connect(canvas_, &ImageCanvas::toolChanged, this,
+        [this, measurement_actions](CanvasTool tool) {
             measurement_actions->setExclusive(false);
             for (QAction* action : measurement_actions->actions()) {
                 action->setChecked(action->data().toInt() == static_cast<int>(tool));
             }
             measurement_actions->setExclusive(true);
+            updateToolbarToolState(tool);
+            updateToolbarActionStates();
         });
 
-    measurement_toolbar_->addSeparator();
-    QAction* smart_run_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"));
-    smart_run_action->setToolTip(tr("根据已框选样本自动查找并统计目标"));
-    connect(smart_run_action, &QAction::triggered, this, &CameraMainWindow::runSmartTargetCounting);
+    smart_run_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::SmartCountRun), tr("开始计数"), this);
+    smart_run_action_->setObjectName(QStringLiteral("SmartCountRunAction"));
+    configure_action(smart_run_action_, tr("根据已框选样本自动查找并统计目标"),
+        QStringLiteral("measurementAction"));
+    connect(smart_run_action_, &QAction::triggered,
+        this, &CameraMainWindow::runSmartTargetCounting);
 
-    QAction* edge_snap_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"));
-    edge_snap_action->setCheckable(true);
-    edge_snap_action->setToolTip(tr("将测量落点吸附到附近最清晰的边缘"));
-    connect(edge_snap_action, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
-    connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action, &QAction::setChecked);
+    edge_snap_action_ = new QAction(
+        measurementToolIcon(MeasurementToolGlyph::EdgeSnap), tr("自动寻边"), this);
+    edge_snap_action_->setObjectName(QStringLiteral("EdgeSnapAction"));
+    edge_snap_action_->setCheckable(true);
+    edge_snap_action_->setChecked(edge_snap_check_ && edge_snap_check_->isChecked());
+    configure_action(edge_snap_action_, tr("将测量落点吸附到附近最清晰的边缘"),
+        QStringLiteral("measurementAction"));
+    connect(edge_snap_action_, &QAction::toggled, edge_snap_check_, &QCheckBox::setChecked);
+    connect(edge_snap_check_, &QCheckBox::toggled, edge_snap_action_, &QAction::setChecked);
 
-    measurement_toolbar_->addSeparator();
-    QAction* delete_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::DeleteMeasurement), tr("删除"));
-    delete_action->setToolTip(tr("删除当前选中的测量结果"));
-    connect(delete_action, &QAction::triggered, this, &CameraMainWindow::deleteSelectedMeasurement);
-    QAction* clear_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ClearMeasurements), tr("清空"));
-    clear_action->setToolTip(tr("清空全部测量结果"));
-    connect(clear_action, &QAction::triggered, this, &CameraMainWindow::clearMeasurements);
-    QAction* export_measurements_action = measurement_toolbar_->addAction(
-        measurementToolIcon(MeasurementToolGlyph::ExportCsv), tr("导出 CSV"));
-    export_measurements_action->setToolTip(tr("导出全部测量结果为 CSV"));
-    connect(export_measurements_action, &QAction::triggered, this, &CameraMainWindow::exportMeasurements);
+    toolbar_more_default_icon_ = toolbarMoreIcon();
+    toolbar_more_menu_ = new QMenu(tr("更多命令"), this);
+    toolbar_more_menu_->setObjectName(QStringLiteral("ToolbarMoreMenu"));
+    QMenu* drawing_menu = toolbar_more_menu_->addMenu(tr("绘制工具"));
+    drawing_menu->addAction(calibration_action_);
+    drawing_menu->addSeparator();
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polyline)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polygon)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::Ellipse)));
+    drawing_menu->addAction(measurement_tool_actions_.value(static_cast<int>(CanvasTool::ProfileLine)));
+    QMenu* management_menu = toolbar_more_menu_->addMenu(tr("测量管理"));
+    management_menu->addActions({rename_measurement_action_, measurement_color_action_,
+        reset_measurement_color_action_});
+    management_menu->addSeparator();
+    management_menu->addActions({delete_measurement_action_, clear_measurements_action_,
+        export_measurements_action_});
+    QMenu* smart_menu = toolbar_more_menu_->addMenu(tr("智能测量"));
+    smart_menu->addActions({smart_sample_action_, smart_run_action_, edge_snap_action_});
+    QMenu* view_functions_menu = toolbar_more_menu_->addMenu(tr("视图功能"));
+    view_functions_menu->addActions({point_cloud_action_, fit_action_, surface_action_});
+    toolbar_more_action_ = new QAction(toolbar_more_default_icon_, tr("更多"), this);
+    toolbar_more_action_->setObjectName(QStringLiteral("ToolbarMoreAction"));
+    toolbar_more_action_->setMenu(toolbar_more_menu_);
+    toolbar_more_action_->setCheckable(true);
+    toolbar_more_action_->setProperty("role", QStringLiteral("toolbarMore"));
+    toolbar_more_action_->setToolTip(tr("更多工具与命令"));
+
+    bindMeasurementPanelActions();
+    measurement_list_->addAction(rename_measurement_action_);
+    measurement_list_->addAction(delete_measurement_action_);
+    updateToolbarPresentation();
+    updateToolbarToolState(canvas_->tool());
+    updateToolbarActionStates();
+    updateMeasurementStyleUi();
+}
+
+void CameraMainWindow::bindMeasurementPanelActions()
+{
+    const QList<QAction*> shared_actions{
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Point)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Length)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polyline)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Angle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Rectangle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Polygon)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Circle)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::Ellipse)),
+        measurement_tool_actions_.value(static_cast<int>(CanvasTool::ProfileLine)),
+        selection_action_, rename_measurement_action_, measurement_color_action_,
+        reset_measurement_color_action_, delete_measurement_action_, clear_measurements_action_,
+        export_measurements_action_};
+
+    for (QAction* action : shared_actions) {
+        if (!action) continue;
+        const QString object_name = action->property("measurementPanelButton").toString();
+        auto* button = findChild<QToolButton*>(object_name);
+        if (!button) continue;
+        QObject::disconnect(button, nullptr, this, nullptr);
+        button->setDefaultAction(action);
+        button->setObjectName(object_name);
+        button->setProperty("role", action->property("role"));
+        button->setIconSize(QSize(30, 30));
+        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+    }
+
+    auto bind_push_button = [this](const QString& object_name, QAction* action) {
+        auto* button = findChild<QPushButton*>(object_name);
+        if (!button || !action) return;
+        QObject::disconnect(button, nullptr, this, nullptr);
+        button->setIcon(action->icon());
+        button->setToolTip(action->toolTip());
+        button->setEnabled(action->isEnabled());
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+        connect(button, &QPushButton::clicked, action, &QAction::trigger);
+        connect(action, &QAction::changed, button, [button, action] {
+            button->setIcon(action->icon());
+            button->setToolTip(action->toolTip());
+            button->setEnabled(action->isEnabled());
+            button->setAccessibleDescription(action->toolTip());
+        });
+    };
+    bind_push_button(QStringLiteral("CalibrationStartButton"), calibration_action_);
+    bind_push_button(QStringLiteral("SmartCountSelectButton"), smart_sample_action_);
+    bind_push_button(QStringLiteral("SmartCountRunButton"), smart_run_action_);
+}
+
+void CameraMainWindow::updateToolbarPresentation()
+{
+    if (!main_toolbar_ || !toolbar_more_action_) return;
+
+    ToolbarPresentationMode mode = ToolbarPresentationMode::Standard;
+    if (width() < 1280) mode = ToolbarPresentationMode::Compact;
+    else if (width() >= 1680) mode = ToolbarPresentationMode::Expanded;
+
+    Qt::ToolButtonStyle button_style = Qt::ToolButtonTextUnderIcon;
+    if (toolbar_display_preference_ == ToolbarDisplayPreference::IconsOnly ||
+        (toolbar_display_preference_ == ToolbarDisplayPreference::Automatic &&
+         mode == ToolbarPresentationMode::Compact)) {
+        button_style = Qt::ToolButtonIconOnly;
+    }
+
+    const int presentation_key = static_cast<int>(mode) * 10 + static_cast<int>(button_style);
+    if (main_toolbar_->property("presentationKey").toInt() == presentation_key &&
+        main_toolbar_->property("presentationReady").toBool()) {
+        updateToolbarToolState(canvas_ ? canvas_->tool() : CanvasTool::None);
+        return;
+    }
+
+    toolbar_presentation_mode_ = mode;
+    main_toolbar_->setProperty("presentationKey", presentation_key);
+    main_toolbar_->setProperty("presentationReady", true);
+    main_toolbar_->setProperty("presentationMode",
+        mode == ToolbarPresentationMode::Compact ? QStringLiteral("compact") :
+        (mode == ToolbarPresentationMode::Expanded ? QStringLiteral("expanded") :
+                                                     QStringLiteral("standard")));
+    main_toolbar_->setToolButtonStyle(button_style);
+    main_toolbar_->setIconSize(QSize(30, 30));
+    main_toolbar_->clear();
+
+    const auto tool_action = [this](CanvasTool tool) {
+        return measurement_tool_actions_.value(static_cast<int>(tool));
+    };
+    auto add_group = [this](const QList<QAction*>& actions) {
+        if (actions.isEmpty()) return;
+        if (!main_toolbar_->actions().isEmpty()) main_toolbar_->addSeparator();
+        for (QAction* action : actions) {
+            if (action) main_toolbar_->addAction(action);
+        }
+    };
+
+    if (mode == ToolbarPresentationMode::Compact) {
+        add_group({open_action_, fit_action_});
+        add_group({selection_action_, tool_action(CanvasTool::Point),
+            tool_action(CanvasTool::Length), tool_action(CanvasTool::Angle),
+            tool_action(CanvasTool::Rectangle), tool_action(CanvasTool::Circle)});
+    } else {
+        add_group({open_action_, export_action_, point_cloud_action_, fit_action_, surface_action_});
+        add_group({calibration_action_, selection_action_, tool_action(CanvasTool::Point),
+            tool_action(CanvasTool::Length), tool_action(CanvasTool::Angle),
+            tool_action(CanvasTool::Rectangle), tool_action(CanvasTool::Circle)});
+        if (mode == ToolbarPresentationMode::Expanded) {
+            add_group({measurement_color_action_, delete_measurement_action_,
+                clear_measurements_action_, export_measurements_action_});
+        }
+    }
+    main_toolbar_->addSeparator();
+    main_toolbar_->addAction(toolbar_more_action_);
+
+    for (QAction* action : main_toolbar_->actions()) {
+        if (action->isSeparator()) continue;
+        auto* button = qobject_cast<QToolButton*>(main_toolbar_->widgetForAction(action));
+        if (!button) continue;
+        button->setProperty("role", action->property("role"));
+        button->setIconSize(QSize(30, 30));
+        button->setToolButtonStyle(button_style);
+        button->setMinimumHeight(60);
+        button->setAccessibleName(action->text());
+        button->setAccessibleDescription(action->toolTip());
+        if (action == toolbar_more_action_) {
+            button->setObjectName(QStringLiteral("ToolbarMoreButton"));
+            button->setPopupMode(QToolButton::InstantPopup);
+        }
+    }
+    main_toolbar_->style()->unpolish(main_toolbar_);
+    main_toolbar_->style()->polish(main_toolbar_);
+    updateToolbarToolState(canvas_ ? canvas_->tool() : CanvasTool::None);
+}
+
+void CameraMainWindow::updateToolbarToolState(CanvasTool tool)
+{
+    if (!toolbar_more_action_ || !main_toolbar_) return;
+    QAction* active_action = tool == CanvasTool::SmartCountSample
+        ? smart_sample_action_
+        : measurement_tool_actions_.value(static_cast<int>(tool));
+    const bool hidden_active = active_action && tool != CanvasTool::None &&
+        !main_toolbar_->actions().contains(active_action);
+    if (hidden_active) {
+        toolbar_more_action_->setIcon(active_action->icon());
+        toolbar_more_action_->setText(active_action->text());
+        toolbar_more_action_->setToolTip(tr("当前工具：%1；点击打开更多命令").arg(active_action->text()));
+    } else {
+        toolbar_more_action_->setIcon(toolbar_more_default_icon_);
+        toolbar_more_action_->setText(tr("更多"));
+        toolbar_more_action_->setToolTip(tr("更多工具与命令"));
+    }
+    toolbar_more_action_->setChecked(hidden_active);
+    toolbar_more_action_->setProperty("hiddenActiveTool", hidden_active);
+    if (auto* button = qobject_cast<QToolButton*>(
+            main_toolbar_->widgetForAction(toolbar_more_action_))) {
+        button->setProperty("hiddenActiveTool", hidden_active);
+        button->setAccessibleName(toolbar_more_action_->text());
+        button->setAccessibleDescription(toolbar_more_action_->toolTip());
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+    }
+}
+
+void CameraMainWindow::updateToolbarActionStates()
+{
+    const bool has_image = currentVisibleFrame().IsValid();
+    const bool has_measurements = !measurements_.Empty();
+    const bool has_selection = measurement_list_ && measurement_list_->currentRow() >= 0;
+
+    auto set_available = [](QAction* action, bool enabled, const QString& reason = {}) {
+        if (!action) return;
+        action->setEnabled(enabled);
+        const QString base = action->property("baseToolTip").toString();
+        action->setToolTip(enabled || reason.isEmpty() ? base : base + QStringLiteral("\n") + reason);
+    };
+    const QString image_reason = tr("当前不可用：请先打开图像或连接相机");
+    const QString measurement_reason = tr("当前不可用：还没有测量结果");
+    const QString selection_reason = tr("当前不可用：请先选择一项测量结果");
+
+    set_available(export_action_, has_image, image_reason);
+    set_available(surface_action_, has_image, image_reason);
+    set_available(calibration_action_, has_image, image_reason);
+    for (auto it = measurement_tool_actions_.cbegin(); it != measurement_tool_actions_.cend(); ++it) {
+        if (it.key() == static_cast<int>(CanvasTool::None)) continue;
+        set_available(it.value(), has_image, image_reason);
+    }
+    set_available(selection_action_, has_measurements, measurement_reason);
+    set_available(rename_measurement_action_, has_selection, selection_reason);
+    set_available(delete_measurement_action_, has_selection, selection_reason);
+    set_available(clear_measurements_action_, has_measurements, measurement_reason);
+    set_available(export_measurements_action_, has_measurements, measurement_reason);
+    set_available(edge_snap_action_, has_image, image_reason);
+    set_available(smart_sample_action_, has_image && !smart_count_running_,
+        smart_count_running_ ? tr("当前不可用：智能计数任务正在运行") : image_reason);
+    const bool can_run_smart = smart_count_running_ ||
+        (has_image && SmartTargetCounter::IsAvailable() && !smart_target_samples_.empty());
+    set_available(smart_run_action_, can_run_smart,
+        smart_target_samples_.empty() ? tr("当前不可用：请先框选至少一个样本") : image_reason);
+    if (smart_run_action_) {
+        smart_run_action_->setText(smart_count_running_ ? tr("取消计数") : tr("开始计数"));
+        smart_run_action_->setIcon(measurementToolIcon(
+            smart_count_running_ ? MeasurementToolGlyph::ClearMeasurements
+                                 : MeasurementToolGlyph::SmartCountRun));
+    }
+}
+
+QString cameraFrameFormatName(int format)
+{
+    switch (format) {
+    case 0: return QObject::tr("Bayer GR/BG");
+    case 1: return QObject::tr("Bayer BG/GR");
+    case 2: return QObject::tr("Bayer GB/RG");
+    case 3: return QObject::tr("Bayer RG/GB");
+    case 4: return QObject::tr("RGB");
+    case 5: return QObject::tr("BGR");
+    case 6: return QObject::tr("单色");
+    default: return QObject::tr("未知");
+    }
+}
+
+QWidget* addCollapsibleSection(
+    QBoxLayout* parentLayout,
+    const QString& title,
+    bool expanded = true)
+{
+    auto* container = new QWidget;
+    container->setProperty("cameraSection", true);
+    auto* layout = new QVBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    auto* header = new QToolButton;
+    header->setText(title);
+    header->setCheckable(true);
+    header->setChecked(expanded);
+    header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+    header->setProperty("cameraSectionHeader", true);
+    auto* body = new QWidget;
+    body->setVisible(expanded);
+    layout->addWidget(header);
+    layout->addWidget(body);
+    QObject::connect(header, &QToolButton::toggled, body, &QWidget::setVisible);
+    QObject::connect(header, &QToolButton::toggled, header,
+        [header](bool checked) {
+            header->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
+        });
+    parentLayout->addWidget(container);
+    return body;
 }
 
 QWidget* CameraMainWindow::buildCameraPage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
-    auto* form = new QFormLayout;
+
+    auto* status_card = new QFrame;
+    status_card->setObjectName(QStringLiteral("CameraStatusCard"));
+    status_card->setProperty("cameraStatusCard", true);
+    auto* status_layout = new QVBoxLayout(status_card);
+    status_layout->setContentsMargins(12, 10, 12, 10);
+    status_layout->setSpacing(5);
+    auto* status_header = new QHBoxLayout;
+    camera_state_badge_ = new QLabel(tr("初始化"));
+    camera_state_badge_->setObjectName(QStringLiteral("CameraStateBadge"));
+    camera_state_badge_->setProperty("cameraState", QStringLiteral("busy"));
+    camera_state_label_ = new QLabel(tr("正在初始化 MUCam SDK…"));
+    camera_state_label_->setObjectName(QStringLiteral("CameraStateLabel"));
+    camera_state_label_->setWordWrap(true);
+    status_header->addWidget(camera_state_badge_);
+    status_header->addWidget(camera_state_label_, 1);
+    status_layout->addLayout(status_header);
+    camera_device_summary_label_ = new QLabel(tr("尚未选择设备"));
+    camera_device_summary_label_->setObjectName(QStringLiteral("CameraDeviceSummary"));
+    camera_device_summary_label_->setWordWrap(true);
+    camera_telemetry_label_ = new QLabel(tr("分辨率 —  ·  FPS —  ·  像素格式 —  ·  8 位"));
+    camera_telemetry_label_->setObjectName(QStringLiteral("CameraTelemetry"));
+    camera_telemetry_label_->setWordWrap(true);
+    status_layout->addWidget(camera_device_summary_label_);
+    status_layout->addWidget(camera_telemetry_label_);
+    layout->addWidget(status_card);
+
+    QWidget* device_body = addCollapsibleSection(layout, tr("设备与连接"));
+    auto* device_layout = new QVBoxLayout(device_body);
+    device_layout->setContentsMargins(0, 0, 0, 0);
+    device_layout->setSpacing(7);
     device_combo_ = new QComboBox;
-    form->addRow(tr("设备"), device_combo_);
+    device_combo_->setObjectName(QStringLiteral("CameraDeviceCombo"));
+    device_combo_->setPlaceholderText(tr("选择相机设备"));
+    device_layout->addWidget(device_combo_);
+    camera_refresh_button_ = new QPushButton(tr("刷新设备"));
+    camera_connection_button_ = new QPushButton(tr("连接相机"));
+    camera_refresh_button_->setObjectName(QStringLiteral("CameraRefreshButton"));
+    camera_connection_button_->setObjectName(QStringLiteral("CameraConnectionButton"));
+    camera_refresh_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    camera_connection_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    setButtonRole(camera_connection_button_, "primary");
+    device_layout->addWidget(buttonRow({camera_refresh_button_, camera_connection_button_}));
+
+    QWidget* basic_body = addCollapsibleSection(layout, tr("基础参数"));
+    auto* basic_layout = new QVBoxLayout(basic_body);
+    basic_layout->setContentsMargins(0, 0, 0, 0);
+    basic_layout->setSpacing(7);
     exposure_spin_ = new QDoubleSpinBox;
+    exposure_spin_->setObjectName(QStringLiteral("CameraExposureSpin"));
+    exposure_spin_->setDecimals(3);
     exposure_spin_->setRange(0.01, 10000.0);
     exposure_spin_->setValue(10.0);
     exposure_spin_->setSuffix(tr(" ms"));
-    form->addRow(tr("曝光"), exposure_spin_);
+    camera_exposure_slider_ = new QSlider(Qt::Horizontal);
+    camera_exposure_slider_->setObjectName(QStringLiteral("CameraExposureSlider"));
+    camera_exposure_slider_->setRange(0, 1000);
+    auto* exposure_row = new QWidget;
+    auto* exposure_row_layout = new QHBoxLayout(exposure_row);
+    exposure_row_layout->setContentsMargins(0, 0, 0, 0);
+    exposure_row_layout->addWidget(camera_exposure_slider_, 1);
+    exposure_row_layout->addWidget(exposure_spin_);
+    basic_layout->addWidget(new QLabel(tr("曝光时间")));
+    basic_layout->addWidget(exposure_row);
     gain_spin_ = new QDoubleSpinBox;
+    gain_spin_->setObjectName(QStringLiteral("CameraGainSpin"));
+    gain_spin_->setDecimals(3);
     gain_spin_->setRange(0.01, 100.0);
     gain_spin_->setValue(1.0);
-    form->addRow(tr("增益"), gain_spin_);
-    layout->addLayout(form);
+    camera_gain_slider_ = new QSlider(Qt::Horizontal);
+    camera_gain_slider_->setObjectName(QStringLiteral("CameraGainSlider"));
+    camera_gain_slider_->setRange(1, 10000);
+    camera_gain_slider_->setValue(100);
+    auto* gain_row = new QWidget;
+    auto* gain_row_layout = new QHBoxLayout(gain_row);
+    gain_row_layout->setContentsMargins(0, 0, 0, 0);
+    gain_row_layout->addWidget(camera_gain_slider_, 1);
+    gain_row_layout->addWidget(gain_spin_);
+    basic_layout->addWidget(new QLabel(tr("总增益")));
+    basic_layout->addWidget(gain_row);
+    camera_auto_exposure_button_ = new QPushButton(tr("自动曝光一次"));
+    camera_white_balance_button_ = new QPushButton(tr("白平衡一次"));
+    camera_auto_exposure_button_->setObjectName(QStringLiteral("CameraAutoExposureButton"));
+    camera_white_balance_button_->setObjectName(QStringLiteral("CameraWhiteBalanceButton"));
+    camera_auto_exposure_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    camera_white_balance_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    basic_layout->addWidget(buttonRow({camera_auto_exposure_button_, camera_white_balance_button_}));
 
-    auto* refresh = new QPushButton(tr("刷新"));
-    auto* open = new QPushButton(tr("打开"));
-    auto* stop = new QPushButton(tr("停止"));
-    setButtonRole(open, "primary");
-    setButtonRole(stop, "danger");
-    layout->addWidget(buttonRow({refresh, open, stop}));
-    connect(refresh, &QPushButton::clicked, this, &CameraMainWindow::refreshDevices);
-    connect(open, &QPushButton::clicked, this, &CameraMainWindow::openSelectedCamera);
-    connect(stop, &QPushButton::clicked, this, &CameraMainWindow::stopCamera);
+    QWidget* color_body = addCollapsibleSection(layout, tr("颜色控制"), false);
+    camera_color_group_ = new QGroupBox;
+    camera_color_group_->setObjectName(QStringLiteral("CameraColorControls"));
+    auto* color_layout = new QGridLayout(camera_color_group_);
+    color_layout->setContentsMargins(0, 0, 0, 0);
+    camera_link_channels_check_ = new QCheckBox(tr("通道联动"));
+    camera_link_channels_check_->setChecked(true);
+    color_layout->addWidget(camera_link_channels_check_, 0, 0, 1, 3);
+    const QStringList channel_names{tr("R"), tr("G"), tr("B")};
+    for (int channel = 0; channel < 3; ++channel) {
+        color_layout->addWidget(new QLabel(channel_names[channel]), channel + 1, 0);
+        camera_rgb_gain_spins_[channel] = new QDoubleSpinBox;
+        camera_rgb_gain_spins_[channel]->setDecimals(3);
+        camera_rgb_gain_spins_[channel]->setRange(0.01, 100.0);
+        camera_rgb_gain_spins_[channel]->setValue(1.0);
+        camera_rgb_gain_spins_[channel]->setPrefix(tr("增益 "));
+        camera_rgb_offset_spins_[channel] = new QSpinBox;
+        camera_rgb_offset_spins_[channel]->setRange(-255, 255);
+        camera_rgb_offset_spins_[channel]->setPrefix(tr("偏移 "));
+        color_layout->addWidget(camera_rgb_gain_spins_[channel], channel + 1, 1);
+        color_layout->addWidget(camera_rgb_offset_spins_[channel], channel + 1, 2);
+    }
+    auto* color_outer_layout = new QVBoxLayout(color_body);
+    color_outer_layout->setContentsMargins(0, 0, 0, 0);
+    color_outer_layout->addWidget(camera_color_group_);
 
-    auto* apply_exposure = addButton(layout, tr("应用曝光"));
-    auto* auto_exposure = addButton(layout, tr("自动曝光"));
-    auto* apply_gain = addButton(layout, tr("应用增益"));
-    auto* white_balance = addButton(layout, tr("白平衡"));
-    connect(apply_exposure, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
-            Q_ARG(double, exposure_spin_->value()));
+    QWidget* capture_body = addCollapsibleSection(layout, tr("采集参数"), false);
+    auto* capture_form = new QFormLayout(capture_body);
+    capture_form->setContentsMargins(0, 0, 0, 0);
+    camera_resolution_combo_ = new QComboBox;
+    camera_resolution_combo_->setObjectName(QStringLiteral("CameraResolutionCombo"));
+    camera_trigger_combo_ = new QComboBox;
+    camera_trigger_combo_->setObjectName(QStringLiteral("CameraTriggerCombo"));
+    camera_trigger_combo_->addItem(tr("自由采集"), static_cast<int>(CameraTriggerMode::Free));
+    camera_trigger_combo_->addItem(tr("软件触发"), static_cast<int>(CameraTriggerMode::Software));
+    camera_trigger_combo_->addItem(tr("硬件触发（上升沿）"), static_cast<int>(CameraTriggerMode::HardwareRise));
+    camera_trigger_combo_->addItem(tr("硬件触发（下降沿）"), static_cast<int>(CameraTriggerMode::HardwareFall));
+    camera_flip_check_ = new QCheckBox(tr("垂直翻转"));
+    camera_mirror_check_ = new QCheckBox(tr("水平镜像"));
+    camera_single_frame_button_ = new QPushButton(tr("采集一帧"));
+    camera_single_frame_button_->setObjectName(QStringLiteral("CameraSingleFrameButton"));
+    camera_single_frame_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    capture_form->addRow(tr("分辨率 / Binning"), camera_resolution_combo_);
+    capture_form->addRow(tr("触发模式"), camera_trigger_combo_);
+    capture_form->addRow(camera_flip_check_);
+    capture_form->addRow(camera_mirror_check_);
+    capture_form->addRow(camera_single_frame_button_);
+
+    QWidget* roi_body = addCollapsibleSection(layout, tr("ROI"), false);
+    auto* roi_layout = new QVBoxLayout(roi_body);
+    roi_layout->setContentsMargins(0, 0, 0, 0);
+    auto* roi_grid = new QGridLayout;
+    const QStringList roi_names{tr("X"), tr("Y"), tr("宽"), tr("高")};
+    for (int index = 0; index < 4; ++index) {
+        camera_roi_spins_[index] = new QSpinBox;
+        camera_roi_spins_[index]->setRange(0, 100000);
+        camera_roi_spins_[index]->setObjectName(
+            QStringLiteral("CameraRoi%1Spin").arg(roi_names[index]));
+        roi_grid->addWidget(new QLabel(roi_names[index]), index / 2, (index % 2) * 2);
+        roi_grid->addWidget(camera_roi_spins_[index], index / 2, (index % 2) * 2 + 1);
+    }
+    roi_layout->addLayout(roi_grid);
+    camera_roi_select_button_ = new QPushButton(tr("在画面框选 ROI"));
+    camera_roi_apply_button_ = new QPushButton(tr("应用数值 ROI"));
+    camera_roi_reset_button_ = new QPushButton(tr("恢复全幅"));
+    camera_roi_select_button_->setObjectName(QStringLiteral("CameraRoiSelectButton"));
+    camera_roi_apply_button_->setObjectName(QStringLiteral("CameraRoiApplyButton"));
+    camera_roi_reset_button_->setObjectName(QStringLiteral("CameraRoiResetButton"));
+    camera_roi_select_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    camera_roi_apply_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    camera_roi_reset_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    roi_layout->addWidget(camera_roi_select_button_);
+    roi_layout->addWidget(buttonRow({camera_roi_apply_button_, camera_roi_reset_button_}));
+
+    camera_feedback_label_ = new QLabel(tr("参数可在连接前预设，连接后自动应用"));
+    camera_feedback_label_->setObjectName(QStringLiteral("CameraInlineFeedback"));
+    camera_feedback_label_->setWordWrap(true);
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    layout->addWidget(camera_feedback_label_);
+
+    camera_parameter_timer_ = new QTimer(page);
+    camera_parameter_timer_->setSingleShot(true);
+    camera_parameter_timer_->setInterval(250);
+    connect(camera_parameter_timer_, &QTimer::timeout,
+        this, &CameraMainWindow::applyPendingCameraParameters);
+    connect(camera_refresh_button_, &QPushButton::clicked, this, &CameraMainWindow::refreshDevices);
+    connect(camera_connection_button_, &QPushButton::clicked, this, [this] {
+        camera_open_ ? stopCamera() : openSelectedCamera();
     });
-    connect(auto_exposure, &QPushButton::clicked, this, [this] {
+    connect(device_combo_, &QComboBox::currentIndexChanged, this, [this](int) {
+        if (!camera_open_ && !camera_ui_updating_) loadCameraProfile();
+        updateCameraControlAvailability();
+    });
+    connect(camera_auto_exposure_button_, &QPushButton::clicked, this, [this] {
+        camera_feedback_label_->setText(tr("正在执行自动曝光…"));
         QMetaObject::invokeMethod(camera_worker_, "autoExposure", Qt::QueuedConnection);
     });
-    connect(apply_gain, &QPushButton::clicked, this, [this] {
-        QMetaObject::invokeMethod(camera_worker_, "setGain", Qt::QueuedConnection,
-            Q_ARG(double, gain_spin_->value()));
-    });
-    connect(white_balance, &QPushButton::clicked, this, [this] {
+    connect(camera_white_balance_button_, &QPushButton::clicked, this, [this] {
+        camera_feedback_label_->setText(tr("正在执行白平衡…"));
         QMetaObject::invokeMethod(camera_worker_, "whiteBalance", Qt::QueuedConnection);
     });
-    camera_state_label_ = new QLabel(tr("正在初始化 MUCam SDK…"));
-    camera_state_label_->setWordWrap(true);
-    layout->addWidget(camera_state_label_);
+    connect(camera_single_frame_button_, &QPushButton::clicked, this, [this] {
+        QMetaObject::invokeMethod(camera_worker_, "captureOneFrame", Qt::QueuedConnection);
+    });
+    connect(camera_roi_select_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::startCameraRoiSelection);
+    connect(camera_roi_apply_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::applyCameraRoiInputs);
+    connect(camera_roi_reset_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::resetCameraRoi);
+
+    connect(exposure_spin_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (camera_ui_updating_) return;
+        const double minimum = exposure_spin_->minimum();
+        const double span = exposure_spin_->maximum() - minimum;
+        const QSignalBlocker blocker(camera_exposure_slider_);
+        camera_exposure_slider_->setValue(span > 0.0
+            ? qRound((value - minimum) * 1000.0 / span) : 0);
+        scheduleCameraParameterApply();
+    });
+    connect(camera_exposure_slider_, &QSlider::valueChanged, this, [this](int value) {
+        if (camera_ui_updating_) return;
+        const double target = exposure_spin_->minimum() +
+            (exposure_spin_->maximum() - exposure_spin_->minimum()) * value / 1000.0;
+        const QSignalBlocker blocker(exposure_spin_);
+        exposure_spin_->setValue(target);
+        scheduleCameraParameterApply();
+    });
+    connect(gain_spin_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+        if (camera_ui_updating_) return;
+        {
+            const QSignalBlocker blocker(camera_gain_slider_);
+            camera_gain_slider_->setValue(qRound(value * 100.0));
+        }
+        if (camera_link_channels_check_->isChecked()) {
+            for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+                const QSignalBlocker blocker(spin);
+                spin->setValue(value);
+            }
+        }
+        scheduleCameraParameterApply();
+    });
+    connect(camera_gain_slider_, &QSlider::valueChanged, this, [this](int value) {
+        if (camera_ui_updating_) return;
+        gain_spin_->setValue(value / 100.0);
+    });
+    for (int channel = 0; channel < 3; ++channel) {
+        connect(camera_rgb_gain_spins_[channel], &QDoubleSpinBox::valueChanged,
+            this, [this, channel](double value) {
+                if (camera_ui_updating_) return;
+                if (camera_link_channels_check_->isChecked()) {
+                    for (int other = 0; other < 3; ++other) {
+                        if (other == channel) continue;
+                        const QSignalBlocker blocker(camera_rgb_gain_spins_[other]);
+                        camera_rgb_gain_spins_[other]->setValue(value);
+                    }
+                    const QSignalBlocker blocker(gain_spin_);
+                    gain_spin_->setValue(value);
+                }
+                scheduleCameraParameterApply();
+            });
+        connect(camera_rgb_offset_spins_[channel], &QSpinBox::valueChanged,
+            this, [this](int) {
+                if (!camera_ui_updating_) scheduleCameraParameterApply();
+            });
+    }
+    auto structural_change = [this] {
+        if (!camera_ui_updating_) applyCameraConfigurationFromUi();
+    };
+    connect(camera_resolution_combo_, &QComboBox::currentIndexChanged,
+        this, [structural_change](int) { structural_change(); });
+    connect(camera_trigger_combo_, &QComboBox::currentIndexChanged,
+        this, [structural_change](int) { structural_change(); });
+    connect(camera_flip_check_, &QCheckBox::toggled,
+        this, [structural_change](bool) { structural_change(); });
+    connect(camera_mirror_check_, &QCheckBox::toggled,
+        this, [structural_change](bool) { structural_change(); });
+
+    setCameraPanelState(CameraPanelState::Initializing, tr("正在初始化 MUCam SDK…"));
+    updateCameraControlAvailability();
     layout->addStretch();
     return page;
 }
@@ -659,11 +1457,13 @@ QWidget* CameraMainWindow::buildImagePage()
     for (const ImageFilterKind kind : filter_kinds) {
         image_filter_combo_->addItem(imageFilterName(kind), static_cast<int>(kind));
     }
-    image_filter_parameter_spin_ = new QSpinBox;
-    image_filter_parameter_spin_->setObjectName(QStringLiteral("ImageFilterParameterSpin"));
+    image_filter_parameter_slider_ = new NumericSlider;
+    image_filter_parameter_slider_->setObjectName(QStringLiteral("ImageFilterParameterSlider"));
+    image_filter_parameter_slider_->slider()->setObjectName(
+        QStringLiteral("ImageFilterParameterSliderHandle"));
     image_filter_parameter_label_ = new QLabel(tr("参数"));
     filter_form->addRow(tr("处理功能"), image_filter_combo_);
-    filter_form->addRow(image_filter_parameter_label_, image_filter_parameter_spin_);
+    filter_form->addRow(image_filter_parameter_label_, image_filter_parameter_slider_);
     filter_layout->addLayout(filter_form);
     auto* apply_filter = new QPushButton(tr("添加到处理链"));
     apply_filter->setObjectName(QStringLiteral("ApplyImageFilterButton"));
@@ -698,56 +1498,255 @@ QWidget* CameraMainWindow::buildFluorescencePage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
+    auto* workflow_hint = new QLabel(tr(
+        "按染料依次采集单通道图像。自动拉伸只改变显示范围，不修改原始像素；"
+        "曝光提示用于发现欠曝和饱和。"));
+    workflow_hint->setWordWrap(true);
+    workflow_hint->setProperty("role", QStringLiteral("summary"));
+    layout->addWidget(workflow_hint);
+    fluorescence_preset_group_ = new QGroupBox(tr("采集预设"));
+    fluorescence_preset_group_->setObjectName(QStringLiteral("FluorescencePresetGroup"));
+    auto* preset_layout = new QVBoxLayout(fluorescence_preset_group_);
+    fluorescence_preset_list_ = new QListWidget;
+    fluorescence_preset_list_->setObjectName(QStringLiteral("FluorescencePresetList"));
+    fluorescence_preset_list_->setMinimumHeight(100);
+    fluorescence_preset_list_->setMaximumHeight(170);
+    fluorescence_preset_list_->setToolTip(tr("按列表顺序逐通道采集；每项保存独立曝光与伪彩。"));
+    preset_layout->addWidget(fluorescence_preset_list_);
     dye_combo_ = new QComboBox;
+    dye_combo_->setObjectName(QStringLiteral("FluorescenceDyeCombo"));
     for (const DyeProfile& dye : dyes_) {
-        dye_combo_->addItem(QString::fromStdWString(dye.name));
+        dye_combo_->addItem(QString::fromStdWString(FluorescenceFormatter::FormatDyeLabel(dye)));
     }
-    layout->addWidget(new QLabel(tr("染料")));
-    layout->addWidget(dye_combo_);
+    fluorescence_preset_exposure_spin_ = new QDoubleSpinBox;
+    fluorescence_preset_exposure_spin_->setObjectName(
+        QStringLiteral("FluorescencePresetExposure"));
+    fluorescence_preset_exposure_spin_->setRange(0.01, 10000.0);
+    fluorescence_preset_exposure_spin_->setDecimals(2);
+    fluorescence_preset_exposure_spin_->setSuffix(tr(" ms"));
+    fluorescence_preset_color_button_ = new QPushButton(tr("选择伪彩…"));
+    fluorescence_preset_color_button_->setObjectName(
+        QStringLiteral("FluorescencePresetColorButton"));
+    auto* preset_form = new QFormLayout;
+    preset_form->addRow(tr("染料 / 激发-发射"), dye_combo_);
+    preset_form->addRow(tr("曝光参数"), fluorescence_preset_exposure_spin_);
+    preset_form->addRow(tr("伪彩"), fluorescence_preset_color_button_);
+    preset_layout->addLayout(preset_form);
+    auto* preset_add = new QPushButton(tr("新增预设"));
+    auto* preset_save = new QPushButton(tr("保存修改"));
+    auto* preset_delete = new QPushButton(tr("删除预设"));
+    preset_add->setObjectName(QStringLiteral("FluorescencePresetAddButton"));
+    preset_save->setObjectName(QStringLiteral("FluorescencePresetSaveButton"));
+    preset_delete->setObjectName(QStringLiteral("FluorescencePresetDeleteButton"));
+    preset_layout->addWidget(buttonRow({preset_add, preset_save, preset_delete}));
+    layout->addWidget(fluorescence_preset_group_);
+
+    auto* capture_group = new QGroupBox(tr("逐通道采集"));
+    capture_group->setObjectName(QStringLiteral("FluorescenceCaptureGroup"));
+    auto* capture_layout = new QVBoxLayout(capture_group);
+    fluorescence_capture_status_label_ = new QLabel;
+    fluorescence_capture_status_label_->setObjectName(
+        QStringLiteral("FluorescenceCaptureStatus"));
+    fluorescence_capture_status_label_->setWordWrap(true);
+    fluorescence_capture_status_label_->setProperty("role", QStringLiteral("summary"));
+    capture_layout->addWidget(fluorescence_capture_status_label_);
+    fluorescence_capture_start_button_ = new QPushButton(tr("开始逐通道采集"));
+    fluorescence_capture_button_ = new QPushButton(tr("采集当前通道"));
+    fluorescence_capture_cancel_button_ = new QPushButton(tr("取消"));
+    fluorescence_capture_start_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureStartButton"));
+    fluorescence_capture_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureCurrentButton"));
+    fluorescence_capture_cancel_button_->setObjectName(
+        QStringLiteral("FluorescenceCaptureCancelButton"));
+    setButtonRole(fluorescence_capture_start_button_, "primary");
+    setButtonRole(fluorescence_capture_cancel_button_, "danger");
+    capture_layout->addWidget(buttonRow({
+        fluorescence_capture_start_button_, fluorescence_capture_button_,
+        fluorescence_capture_cancel_button_}));
+    layout->addWidget(capture_group);
+
     auto* add = addButton(layout, tr("当前帧添加为通道"));
-    auto* clear = addButton(layout, tr("清空通道"));
+    add->setObjectName(QStringLiteral("FluorescenceAddChannelButton"));
     fusion_check_ = new QCheckBox(tr("显示融合预览"));
+    fusion_check_->setObjectName(QStringLiteral("FluorescencePreviewCheck"));
     layout->addWidget(fusion_check_);
+
+    auto* fusion_form = new QFormLayout;
+    fluorescence_blend_combo_ = new QComboBox;
+    fluorescence_blend_combo_->setObjectName(QStringLiteral("FluorescenceBlendCombo"));
+    fluorescence_blend_combo_->addItem(
+        tr("加法（高亮共定位）"), static_cast<int>(FluorescenceBlendMode::Additive));
+    fluorescence_blend_combo_->addItem(
+        tr("屏幕（推荐，减少硬饱和）"), static_cast<int>(FluorescenceBlendMode::Screen));
+    fluorescence_blend_combo_->addItem(
+        tr("最大值（保留主导通道）"), static_cast<int>(FluorescenceBlendMode::Maximum));
+    fluorescence_blend_combo_->setCurrentIndex(1);
+    fusion_form->addRow(tr("融合方式"), fluorescence_blend_combo_);
+    layout->addLayout(fusion_form);
+
     channel_list_ = new QListWidget;
-    layout->addWidget(channel_list_, 1);
+    channel_list_->setObjectName(QStringLiteral("FluorescenceChannelList"));
+    channel_list_->setToolTip(tr("双击通道可隔离显示；列表显示可见性、尺寸和黑白点。"));
+    channel_list_->setMinimumHeight(120);
+    channel_list_->setMaximumHeight(210);
+    layout->addWidget(channel_list_);
+    auto* remove_channel = new QPushButton(tr("删除选中"));
+    auto* isolate_channel = new QPushButton(tr("仅显示选中"));
+    auto* show_all_channels = new QPushButton(tr("显示全部"));
+    auto* clear = new QPushButton(tr("清空"));
+    remove_channel->setObjectName(QStringLiteral("FluorescenceRemoveChannelButton"));
+    isolate_channel->setObjectName(QStringLiteral("FluorescenceIsolateChannelButton"));
+    show_all_channels->setObjectName(QStringLiteral("FluorescenceShowAllButton"));
+    clear->setObjectName(QStringLiteral("FluorescenceClearButton"));
+    setButtonRole(remove_channel, "danger");
+    setButtonRole(clear, "danger");
+    layout->addWidget(buttonRow({remove_channel, isolate_channel, show_all_channels, clear}));
+
     auto* channel_form = new QFormLayout;
     channel_visible_check_ = new QCheckBox(tr("可见"));
+    channel_visible_check_->setObjectName(QStringLiteral("FluorescenceChannelVisible"));
     channel_visible_check_->setChecked(true);
-    channel_black_spin_ = new QSpinBox;
-    channel_black_spin_->setRange(0, 254);
-    channel_white_spin_ = new QSpinBox;
-    channel_white_spin_->setRange(1, 255);
-    channel_white_spin_->setValue(255);
+    channel_black_slider_ = new NumericSlider;
+    channel_black_slider_->setObjectName(QStringLiteral("FluorescenceBlackLevelSlider"));
+    channel_black_slider_->slider()->setObjectName(QStringLiteral("FluorescenceBlackLevel"));
+    channel_black_slider_->setRange(0, 254);
+    channel_white_slider_ = new NumericSlider;
+    channel_white_slider_->setObjectName(QStringLiteral("FluorescenceWhiteLevelSlider"));
+    channel_white_slider_->slider()->setObjectName(QStringLiteral("FluorescenceWhiteLevel"));
+    channel_white_slider_->setRange(1, 255);
+    channel_white_slider_->setValue(255);
     channel_form->addRow(tr("通道"), channel_visible_check_);
-    channel_form->addRow(tr("黑电平"), channel_black_spin_);
-    channel_form->addRow(tr("白电平"), channel_white_spin_);
+    channel_form->addRow(tr("黑电平"), channel_black_slider_);
+    channel_form->addRow(tr("白电平"), channel_white_slider_);
     layout->addLayout(channel_form);
-    auto* apply_channel = addButton(layout, tr("应用通道设置"));
+    auto* apply_channel = new QPushButton(tr("应用显示范围"));
+    auto* auto_level = new QPushButton(tr("稳健自动拉伸"));
+    apply_channel->setObjectName(QStringLiteral("FluorescenceApplyLevelsButton"));
+    auto_level->setObjectName(QStringLiteral("FluorescenceAutoLevelsButton"));
+    setButtonRole(auto_level, "primary");
+    layout->addWidget(buttonRow({apply_channel, auto_level}));
+    fluorescence_statistics_label_ = new QLabel(tr("选择通道后显示强度与曝光质量。"));
+    fluorescence_statistics_label_->setObjectName(QStringLiteral("FluorescenceStatisticsLabel"));
+    fluorescence_statistics_label_->setWordWrap(true);
+    fluorescence_statistics_label_->setProperty("role", QStringLiteral("summary"));
+    layout->addWidget(fluorescence_statistics_label_);
+    connect(fluorescence_preset_list_, &QListWidget::currentRowChanged,
+        this, [this](int) { updateFluorescencePresetEditor(); });
+    connect(fluorescence_preset_color_button_, &QPushButton::clicked, this, [this] {
+        const QColor current(fluorescence_preset_editor_color_.r,
+            fluorescence_preset_editor_color_.g, fluorescence_preset_editor_color_.b);
+        const QColor selected = QColorDialog::getColor(
+            current, this, tr("选择荧光通道伪彩"), QColorDialog::DontUseNativeDialog);
+        if (!selected.isValid()) return;
+        fluorescence_preset_editor_color_ = {
+            static_cast<unsigned char>(selected.red()),
+            static_cast<unsigned char>(selected.green()),
+            static_cast<unsigned char>(selected.blue())};
+        QPixmap swatch(22, 22);
+        swatch.fill(selected);
+        fluorescence_preset_color_button_->setIcon(QIcon(swatch));
+        fluorescence_preset_color_button_->setIconSize(swatch.size());
+        fluorescence_preset_color_button_->setText(
+            tr("伪彩 %1").arg(selected.name(QColor::HexRgb).toUpper()));
+    });
+    connect(preset_add, &QPushButton::clicked, this, [this] {
+        const int dye_index = dye_combo_->currentIndex();
+        if (dye_index < 0 || dye_index >= static_cast<int>(dyes_.size())) return;
+        const DyeProfile& dye = dyes_[static_cast<std::size_t>(dye_index)];
+        fluorescence_capture_presets_.push_back({
+            dye.name, fluorescence_preset_exposure_spin_->value(),
+            fluorescence_preset_editor_color_});
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(
+            static_cast<int>(fluorescence_capture_presets_.size()) - 1);
+    });
+    connect(preset_save, &QPushButton::clicked, this, [this] {
+        const int row = fluorescence_preset_list_->currentRow();
+        const int dye_index = dye_combo_->currentIndex();
+        if (row < 0 || row >= static_cast<int>(fluorescence_capture_presets_.size()) ||
+            dye_index < 0 || dye_index >= static_cast<int>(dyes_.size())) return;
+        FluorescenceCapturePreset& preset =
+            fluorescence_capture_presets_[static_cast<std::size_t>(row)];
+        preset.dye_name = dyes_[static_cast<std::size_t>(dye_index)].name;
+        preset.exposure_ms = fluorescence_preset_exposure_spin_->value();
+        preset.color = fluorescence_preset_editor_color_;
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(row);
+    });
+    connect(preset_delete, &QPushButton::clicked, this, [this] {
+        const int row = fluorescence_preset_list_->currentRow();
+        if (row < 0 || row >= static_cast<int>(fluorescence_capture_presets_.size())) return;
+        fluorescence_capture_presets_.erase(fluorescence_capture_presets_.begin() + row);
+        saveFluorescenceCapturePresets();
+        refreshFluorescencePresetList(std::min(
+            row, static_cast<int>(fluorescence_capture_presets_.size()) - 1));
+    });
+    connect(fluorescence_capture_start_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::startFluorescenceCaptureSequence);
+    connect(fluorescence_capture_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::captureCurrentFluorescencePreset);
+    connect(fluorescence_capture_cancel_button_, &QPushButton::clicked,
+        this, &CameraMainWindow::cancelFluorescenceCaptureSequence);
     connect(add, &QPushButton::clicked, this, &CameraMainWindow::addFluorescenceChannel);
     connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearFluorescenceChannels);
+    connect(remove_channel, &QPushButton::clicked,
+        this, &CameraMainWindow::removeSelectedFluorescenceChannel);
+    connect(isolate_channel, &QPushButton::clicked,
+        this, &CameraMainWindow::isolateSelectedFluorescenceChannel);
+    connect(show_all_channels, &QPushButton::clicked,
+        this, &CameraMainWindow::showAllFluorescenceChannels);
+    connect(auto_level, &QPushButton::clicked,
+        this, &CameraMainWindow::autoLevelSelectedFluorescenceChannel);
     connect(fusion_check_, &QCheckBox::toggled, this, &CameraMainWindow::toggleFusion);
-    connect(channel_list_, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (row < 0 || row >= static_cast<int>(channels_.size())) {
-            return;
+    connect(fluorescence_blend_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this] {
+            fluorescence_blend_mode_ = static_cast<FluorescenceBlendMode>(
+                fluorescence_blend_combo_->currentData().toInt());
+            updateImagePresentation();
+        });
+    connect(canvas_, &ImageCanvas::overlaySelected, this, [this](int sourceIndex) {
+        if (!measurement_list_) return;
+        if (sourceIndex >= 0 && sourceIndex < measurement_list_->count()) {
+            measurement_list_->setCurrentRow(sourceIndex);
+        } else {
+            measurement_list_->setCurrentRow(-1);
         }
-        const FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
-        channel_visible_check_->setChecked(channel.visible);
-        channel_black_spin_->setValue(channel.black_level);
-        channel_white_spin_->setValue(channel.white_level);
+        updateMeasurementStyleUi();
     });
+    connect(canvas_, &ImageCanvas::overlayMoved, this,
+        [this](int sourceIndex, const QPointF& delta, bool finished) {
+            if (sourceIndex < 0) return;
+            const auto reference = measurements_.AtFlatIndex(
+                static_cast<std::size_t>(sourceIndex));
+            if (!reference) return;
+            const bool has_delta = !qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y());
+            if (has_delta && !measurements_.Translate(*reference, imagePoint(delta))) return;
+            if (measurement_list_ && measurement_list_->currentRow() != sourceIndex) {
+                measurement_list_->setCurrentRow(sourceIndex);
+            }
+            if (finished) {
+                updateMeasurementList();
+                statusBar()->showMessage(tr("测量覆盖层位置已更新"), 2500);
+            }
+        });
+    connect(channel_list_, &QListWidget::currentRowChanged,
+        this, [this](int) { updateFluorescenceChannelUi(); });
+    connect(channel_list_, &QListWidget::itemDoubleClicked,
+        this, [this](QListWidgetItem*) { isolateSelectedFluorescenceChannel(); });
     connect(apply_channel, &QPushButton::clicked, this, [this] {
         const int row = channel_list_->currentRow();
-        if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        const FluorescenceChannelUpdateResult result = FluorescenceChannelUpdater::Apply(
+            channels_,
+            row,
+            channel_visible_check_->isChecked(),
+            channel_black_slider_->integerValue(),
+            channel_white_slider_->integerValue());
+        if (!result.applied) {
+            QMessageBox::warning(this, tr("通道设置"), QString::fromStdWString(result.message));
             return;
         }
-        if (channel_black_spin_->value() >= channel_white_spin_->value()) {
-            QMessageBox::warning(this, tr("通道设置"), tr("黑电平必须小于白电平。"));
-            return;
-        }
-        FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
-        channel.visible = channel_visible_check_->isChecked();
-        channel.black_level = static_cast<unsigned char>(channel_black_spin_->value());
-        channel.white_level = static_cast<unsigned char>(channel_white_spin_->value());
+        refreshFluorescenceChannelList(row);
         updateImagePresentation();
     });
     return page;
@@ -766,14 +1765,18 @@ QWidget* CameraMainWindow::buildProcessingPage()
     auto* live_group = new QGroupBox(tr("相机实时拼接"));
     auto* live_layout = new QVBoxLayout(live_group);
     auto* live_form = new QFormLayout;
-    live_stitch_interval_spin_ = new QSpinBox;
-    live_stitch_interval_spin_->setRange(250, 10000);
-    live_stitch_interval_spin_->setValue(750);
-    live_stitch_interval_spin_->setSuffix(tr(" ms"));
-    live_form->addRow(tr("检测间隔"), live_stitch_interval_spin_);
+    live_stitch_interval_slider_ = new NumericSlider;
+    live_stitch_interval_slider_->setObjectName(QStringLiteral("LiveStitchIntervalSlider"));
+    live_stitch_interval_slider_->slider()->setObjectName(QStringLiteral("LiveStitchIntervalSpin"));
+    live_stitch_interval_slider_->setRange(250, 10000);
+    live_stitch_interval_slider_->setValue(1200);
+    live_stitch_interval_slider_->setSuffix(tr(" ms"));
+    live_form->addRow(tr("检测间隔"), live_stitch_interval_slider_);
     live_layout->addLayout(live_form);
     live_stitch_start_button_ = new QPushButton(tr("开始实时拼接"));
     live_stitch_stop_button_ = new QPushButton(tr("停止"));
+    live_stitch_start_button_->setObjectName(QStringLiteral("LiveStitchStartButton"));
+    live_stitch_stop_button_->setObjectName(QStringLiteral("LiveStitchStopButton"));
     live_stitch_stop_button_->setEnabled(false);
     setButtonRole(live_stitch_start_button_, "primary");
     setButtonRole(live_stitch_stop_button_, "danger");
@@ -803,13 +1806,14 @@ QWidget* CameraMainWindow::buildProcessingPage()
     grid_size_layout->addWidget(stitch_rows_spin_);
     grid_size_layout->addWidget(new QLabel(QStringLiteral("×")));
     grid_size_layout->addWidget(stitch_cols_spin_);
-    stitch_overlap_spin_ = new QSpinBox;
-    stitch_overlap_spin_->setObjectName(QStringLiteral("StitchOverlapSpin"));
-    stitch_overlap_spin_->setRange(
+    stitch_overlap_slider_ = new NumericSlider;
+    stitch_overlap_slider_->setObjectName(QStringLiteral("StitchOverlapSlider"));
+    stitch_overlap_slider_->slider()->setObjectName(QStringLiteral("StitchOverlapSpin"));
+    stitch_overlap_slider_->setRange(
         ProcessingParameterRules::MinStitchOverlapPercent(),
         ProcessingParameterRules::MaxStitchOverlapPercent());
-    stitch_overlap_spin_->setValue(ProcessingParameterRules::DefaultStitchOverlapPercent());
-    stitch_overlap_spin_->setSuffix(QStringLiteral(" %"));
+    stitch_overlap_slider_->setValue(ProcessingParameterRules::DefaultStitchOverlapPercent());
+    stitch_overlap_slider_->setSuffix(QStringLiteral(" %"));
     stitch_registration_combo_ = new QComboBox;
     stitch_registration_combo_->setObjectName(QStringLiteral("StitchRegistrationCombo"));
     stitch_registration_combo_->addItem(tr("显微图像（推荐）"), static_cast<int>(StitchRegistrationMethod::Micro));
@@ -829,7 +1833,7 @@ QWidget* CameraMainWindow::buildProcessingPage()
     stitch_blend_combo_->addItem(tr("不融合"), static_cast<int>(StitchBlendMode::None));
     settings_form->addRow(tr("排列方式"), stitch_layout_combo_);
     settings_form->addRow(tr("网格行 × 列"), grid_size);
-    settings_form->addRow(tr("预计重叠"), stitch_overlap_spin_);
+    settings_form->addRow(tr("预计重叠"), stitch_overlap_slider_);
     settings_form->addRow(tr("配准方法"), stitch_registration_combo_);
     settings_form->addRow(tr("变换模型"), stitch_transform_combo_);
     settings_form->addRow(tr("接缝融合"), stitch_blend_combo_);
@@ -843,11 +1847,18 @@ QWidget* CameraMainWindow::buildProcessingPage()
     auto* add_tile = addButton(stitch_layout, tr("添加当前帧"));
     auto* import_tiles = addButton(stitch_layout, tr("导入多张图像…"));
     auto* import_directory = addButton(stitch_layout, tr("导入目录…"));
+    add_tile->setObjectName(QStringLiteral("StitchAddCurrentButton"));
+    import_tiles->setObjectName(QStringLiteral("StitchImportFilesButton"));
+    import_directory->setObjectName(QStringLiteral("StitchImportDirectoryButton"));
     auto* tile_actions = new QHBoxLayout;
     auto* move_up = new QPushButton(tr("上移"));
     auto* move_down = new QPushButton(tr("下移"));
     auto* delete_tile = new QPushButton(tr("删除"));
     auto* clear_tiles = new QPushButton(tr("清空"));
+    move_up->setObjectName(QStringLiteral("StitchMoveUpButton"));
+    move_down->setObjectName(QStringLiteral("StitchMoveDownButton"));
+    delete_tile->setObjectName(QStringLiteral("StitchDeleteButton"));
+    clear_tiles->setObjectName(QStringLiteral("StitchClearButton"));
     setButtonRole(delete_tile, "danger");
     setButtonRole(clear_tiles, "danger");
     tile_actions->addWidget(move_up);
@@ -856,6 +1867,7 @@ QWidget* CameraMainWindow::buildProcessingPage()
     tile_actions->addWidget(clear_tiles);
     stitch_layout->addLayout(tile_actions);
     stitch_start_button_ = addButton(stitch_layout, tr("生成拼接图"));
+    stitch_start_button_->setObjectName(QStringLiteral("StitchBuildButton"));
     setButtonRole(stitch_start_button_, "primary");
     stitch_progress_ = new QProgressBar;
     stitch_progress_->setObjectName(QStringLiteral("StitchProgress"));
@@ -863,12 +1875,17 @@ QWidget* CameraMainWindow::buildProcessingPage()
     stitch_progress_->setValue(0);
     stitch_layout->addWidget(stitch_progress_);
     stitch_cancel_button_ = addButton(stitch_layout, tr("取消拼接"));
+    stitch_cancel_button_->setObjectName(QStringLiteral("StitchCancelButton"));
     stitch_cancel_button_->setEnabled(false);
     setButtonRole(stitch_cancel_button_, "danger");
+    stitch_retry_button_ = addButton(stitch_layout, tr("重试上次拼接"));
+    stitch_retry_button_->setObjectName(QStringLiteral("StitchRetryButton"));
+    stitch_retry_button_->setEnabled(false);
     stitch_backend_label_ = new QLabel(tr("后端：OpenCV 优先，缺失时使用内置算法"));
     stitch_backend_label_->setWordWrap(true);
     stitch_layout->addWidget(stitch_backend_label_);
     stitch_save_button_ = addButton(stitch_layout, tr("导出拼接结果…"));
+    stitch_save_button_->setObjectName(QStringLiteral("StitchSaveButton"));
     stitch_save_button_->setEnabled(false);
     layout->addWidget(stitch_group);
 
@@ -905,10 +1922,19 @@ QWidget* CameraMainWindow::buildProcessingPage()
         const QString directory = QFileDialog::getExistingDirectory(this, tr("选择拼接图像目录"));
         if (directory.isEmpty()) return;
         QDir dir(directory);
-        const QStringList names = dir.entryList(
+        QStringList names = dir.entryList(
             {QStringLiteral("*.bmp"), QStringLiteral("*.png"), QStringLiteral("*.jpg"),
              QStringLiteral("*.jpeg"), QStringLiteral("*.tif"), QStringLiteral("*.tiff")},
-            QDir::Files, QDir::Name);
+            QDir::Files, QDir::NoSort);
+        names.erase(std::remove_if(names.begin(), names.end(), [](const QString& name) {
+            return name.startsWith(QLatin1Char('_'));
+        }), names.end());
+        QCollator collator;
+        collator.setNumericMode(true);
+        collator.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(names.begin(), names.end(), [&collator](const QString& left, const QString& right) {
+            return collator.compare(left, right) < 0;
+        });
         QStringList files;
         for (const QString& name : names) files.push_back(dir.filePath(name));
         importStitchFiles(files, QDir::toNativeSeparators(directory));
@@ -952,6 +1978,7 @@ QWidget* CameraMainWindow::buildProcessingPage()
         stitch_cancel_button_->setEnabled(false);
         statusBar()->showMessage(tr("正在取消拼接…"));
     });
+    connect(stitch_retry_button_, &QPushButton::clicked, this, &CameraMainWindow::retryStitch);
     connect(stitch_save_button_, &QPushButton::clicked, this, &CameraMainWindow::saveStitchResult);
     connect(add_edf, &QPushButton::clicked, this, &CameraMainWindow::addEdfFrame);
     connect(import_edf, &QPushButton::clicked, this, [this] {
@@ -979,19 +2006,39 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* layout = panelLayout(page);
     auto* calibration_group = new QGroupBox(tr("标定"));
     auto* calibration_form = new QFormLayout(calibration_group);
+    objective_combo_ = new QComboBox;
+    objective_combo_->setObjectName(QStringLiteral("CalibrationObjective"));
+    for (const std::wstring& objective : objective_labels_) {
+        objective_combo_->addItem(QString::fromStdWString(objective));
+    }
+    calibration_form->addRow(tr("系统当前物镜"), objective_combo_);
+    auto* add_objective = new QPushButton(tr("新增"));
+    add_objective->setObjectName(QStringLiteral("CalibrationObjectiveAddButton"));
+    auto* edit_objective = new QPushButton(tr("编辑"));
+    edit_objective->setObjectName(QStringLiteral("CalibrationObjectiveEditButton"));
+    auto* delete_objective = new QPushButton(tr("删除"));
+    delete_objective->setObjectName(QStringLiteral("CalibrationObjectiveDeleteButton"));
+    calibration_form->addRow(
+        tr("标定数据管理"), buttonRow({add_objective, edit_objective, delete_objective}));
     calibration_length_spin_ = new QDoubleSpinBox;
+    calibration_length_spin_->setObjectName(QStringLiteral("CalibrationLength"));
+    calibration_length_spin_->setDecimals(6);
     calibration_length_spin_->setRange(0.001, 1000000.0);
     calibration_length_spin_->setValue(100.0);
     calibration_unit_combo_ = new QComboBox;
+    calibration_unit_combo_->setObjectName(QStringLiteral("CalibrationUnit"));
     calibration_unit_combo_->addItems({tr("µm"), tr("mm")});
     calibration_form->addRow(tr("真实长度"), calibration_length_spin_);
     calibration_form->addRow(tr("单位"), calibration_unit_combo_);
     auto* calibrate = new QPushButton(tr("两点标定"));
+    calibrate->setObjectName(QStringLiteral("CalibrationStartButton"));
     calibrate->setIcon(measurementToolIcon(MeasurementToolGlyph::Calibration));
     calibrate->setIconSize(QSize(22, 22));
     auto* clear_calibration = new QPushButton(tr("清除标定"));
+    clear_calibration->setObjectName(QStringLiteral("CalibrationClearButton"));
     calibration_form->addRow(buttonRow({calibrate, clear_calibration}));
     calibration_label_ = new QLabel(tr("未标定"));
+    calibration_label_->setObjectName(QStringLiteral("CalibrationStatus"));
     calibration_form->addRow(calibration_label_);
     layout->addWidget(calibration_group);
 
@@ -1035,6 +2082,42 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         tr("椭圆"), tr("选择椭圆外接矩形的两个对角点"), QStringLiteral("MeasurementEllipseButton"), 2, 1);
     auto* profile = make_tool_button(MeasurementToolGlyph::Profile, CanvasTool::ProfileLine,
         tr("剖线"), tr("选择两个端点分析亮度与 RGB 强度曲线"), QStringLiteral("MeasurementProfileButton"), 2, 2);
+    auto* select_tool = make_tool_button(
+        MeasurementToolGlyph::SelectMeasurement, CanvasTool::None,
+        tr("选择"), tr("进入选择模式：选择、拖动或编辑测量对象"),
+        QStringLiteral("MeasurementSelectionButton"), 3, 0);
+    select_tool->setChecked(canvas_->tool() == CanvasTool::None);
+    auto* rename_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::RenameMeasurement, tr("重命名"),
+        tr("重命名当前选中的测量结果"), tool_group);
+    rename_tool->setObjectName(QStringLiteral("MeasurementRenameToolButton"));
+    measurement_color_button_ = createMeasurementActionButton(
+        MeasurementToolGlyph::MeasurementColor, tr("设置颜色"),
+        tr("设置全部测量统一使用的全局颜色"), tool_group);
+    measurement_color_button_->setObjectName(QStringLiteral("MeasurementColorToolButton"));
+    measurement_reset_color_button_ = createMeasurementActionButton(
+        MeasurementToolGlyph::ResetMeasurementColor, tr("默认颜色"),
+        tr("恢复系统默认的全局测量颜色"), tool_group);
+    measurement_reset_color_button_->setObjectName(
+        QStringLiteral("MeasurementResetColorToolButton"));
+    auto* delete_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::DeleteMeasurement, tr("删除选中"),
+        tr("删除当前选中的测量结果"), tool_group);
+    delete_tool->setObjectName(QStringLiteral("MeasurementDeleteToolButton"));
+    auto* clear_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::ClearMeasurements, tr("清空测量"),
+        tr("清空全部测量结果"), tool_group);
+    clear_tool->setObjectName(QStringLiteral("MeasurementClearToolButton"));
+    auto* export_tool = createMeasurementActionButton(
+        MeasurementToolGlyph::ExportCsv, tr("导出 CSV"),
+        tr("导出全部测量结果为 CSV"), tool_group);
+    export_tool->setObjectName(QStringLiteral("MeasurementExportToolButton"));
+    tool_grid->addWidget(rename_tool, 3, 1);
+    tool_grid->addWidget(measurement_color_button_, 3, 2);
+    tool_grid->addWidget(measurement_reset_color_button_, 4, 0);
+    tool_grid->addWidget(delete_tool, 4, 1);
+    tool_grid->addWidget(clear_tool, 4, 2);
+    tool_grid->addWidget(export_tool, 5, 1);
     tool_layout->addLayout(tool_grid);
     display_unit_combo_ = new QComboBox;
     display_unit_combo_->addItems({tr("像素"), tr("µm"), tr("mm")});
@@ -1047,12 +2130,13 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* edge_group = new QGroupBox(tr("自动寻边"));
     auto* edge_form = new QFormLayout(edge_group);
     edge_snap_check_ = new QCheckBox(tr("落点吸附到附近最清晰的边缘"));
-    edge_snap_radius_spin_ = new QSpinBox;
-    edge_snap_radius_spin_->setRange(2, 40);
-    edge_snap_radius_spin_->setValue(12);
-    edge_snap_radius_spin_->setSuffix(tr(" px"));
+    edge_snap_radius_slider_ = new NumericSlider;
+    edge_snap_radius_slider_->setObjectName(QStringLiteral("EdgeSnapRadiusSlider"));
+    edge_snap_radius_slider_->setRange(2, 40);
+    edge_snap_radius_slider_->setValue(12);
+    edge_snap_radius_slider_->setSuffix(tr(" px"));
     edge_form->addRow(edge_snap_check_);
-    edge_form->addRow(tr("搜索半径"), edge_snap_radius_spin_);
+    edge_form->addRow(tr("搜索半径"), edge_snap_radius_slider_);
     layout->addWidget(edge_group);
 
     auto* smart_group = new QGroupBox(tr("智能目标计数"));
@@ -1068,18 +2152,19 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     auto* clear_smart = new QPushButton(tr("清除"));
     smart_layout->addWidget(buttonRow({smart_select_button_, remove_smart_sample, clear_smart}));
     auto* smart_form = new QFormLayout;
-    smart_similarity_spin_ = new QDoubleSpinBox;
-    smart_similarity_spin_->setObjectName(QStringLiteral("SmartCountSimilaritySpin"));
-    smart_similarity_spin_->setRange(0.40, 0.99);
-    smart_similarity_spin_->setSingleStep(0.01);
-    smart_similarity_spin_->setDecimals(2);
-    smart_similarity_spin_->setValue(0.78);
-    smart_scale_tolerance_spin_ = new QSpinBox;
-    smart_scale_tolerance_spin_->setRange(0, 40);
-    smart_scale_tolerance_spin_->setValue(15);
-    smart_scale_tolerance_spin_->setSuffix(tr(" %"));
-    smart_form->addRow(tr("相似度阈值"), smart_similarity_spin_);
-    smart_form->addRow(tr("尺寸变化范围"), smart_scale_tolerance_spin_);
+    smart_similarity_slider_ = new NumericSlider;
+    smart_similarity_slider_->setObjectName(QStringLiteral("SmartCountSimilaritySlider"));
+    smart_similarity_slider_->setRange(0.40, 0.99);
+    smart_similarity_slider_->setSingleStep(0.01);
+    smart_similarity_slider_->setDecimals(2);
+    smart_similarity_slider_->setValue(0.78);
+    smart_scale_tolerance_slider_ = new NumericSlider;
+    smart_scale_tolerance_slider_->setObjectName(QStringLiteral("SmartCountScaleToleranceSlider"));
+    smart_scale_tolerance_slider_->setRange(0, 40);
+    smart_scale_tolerance_slider_->setValue(15);
+    smart_scale_tolerance_slider_->setSuffix(tr(" %"));
+    smart_form->addRow(tr("相似度阈值"), smart_similarity_slider_);
+    smart_form->addRow(tr("尺寸变化范围"), smart_scale_tolerance_slider_);
     smart_layout->addLayout(smart_form);
     smart_sample_label_ = new QLabel(tr("已框选 0 个样本"));
     smart_layout->addWidget(smart_sample_label_);
@@ -1109,23 +2194,90 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     layout->addWidget(measurement_count_label_);
     measurement_list_ = new QListWidget;
     measurement_list_->setAlternatingRowColors(true);
+    measurement_list_->setObjectName(QStringLiteral("MeasurementResultList"));
     measurement_list_->setToolTip(tr("单击高亮，双击在图像中定位；F2 重命名，Delete 删除"));
     layout->addWidget(measurement_list_, 1);
-    auto* rename_selected = new QPushButton(tr("重命名"));
-    auto* delete_selected = new QPushButton(tr("删除选中"));
-    auto* clear = new QPushButton(tr("清空"));
-    layout->addWidget(buttonRow({rename_selected, delete_selected, clear}));
-    auto* export_csv = addButton(layout, tr("导出测量 CSV"));
-    setButtonRole(clear, "danger");
-    setButtonRole(export_csv, "primary");
 
     connect(calibrate, &QPushButton::clicked, this, [this] {
         setMeasurementTool(CanvasTool::Calibration, tr("请在图像上选择标定线的两个端点"));
     });
+    connect(objective_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this](int index) { selectObjective(index); });
+    connect(add_objective, &QPushButton::clicked, this, [this] {
+        QString label;
+        double microns_per_pixel = 0.0;
+        if (!editObjectiveCalibrationRecord(
+                this, tr("新增物镜标定"), label, microns_per_pixel)) return;
+        const auto duplicate = std::find(
+            objective_labels_.begin(), objective_labels_.end(), label.toStdWString());
+        if (duplicate != objective_labels_.end()) {
+            QMessageBox::warning(this, tr("物镜标定"), tr("该物镜倍率已存在。"));
+            return;
+        }
+        objective_labels_.push_back(label.toStdWString());
+        objective_calibrations_.push_back(
+            CalibrationProfile::FromMicronsPerPixel(microns_per_pixel));
+        selected_objective_index_ = static_cast<int>(objective_labels_.size()) - 1;
+        calibration_ = objective_calibrations_.back();
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("已新增并设为当前物镜：%1").arg(label), 3500);
+    });
+    connect(edit_objective, &QPushButton::clicked, this, [this] {
+        if (selected_objective_index_ < 0 ||
+            selected_objective_index_ >= static_cast<int>(objective_labels_.size())) return;
+        const std::size_t index = static_cast<std::size_t>(selected_objective_index_);
+        QString label = QString::fromStdWString(objective_labels_[index]);
+        double microns_per_pixel = objective_calibrations_[index].MicronsPerPixel();
+        if (!editObjectiveCalibrationRecord(
+                this, tr("编辑物镜标定"), label, microns_per_pixel)) return;
+        for (std::size_t candidate = 0; candidate < objective_labels_.size(); ++candidate) {
+            if (candidate != index && objective_labels_[candidate] == label.toStdWString()) {
+                QMessageBox::warning(this, tr("物镜标定"), tr("该物镜倍率已存在。"));
+                return;
+            }
+        }
+        objective_labels_[index] = label.toStdWString();
+        objective_calibrations_[index] =
+            CalibrationProfile::FromMicronsPerPixel(microns_per_pixel);
+        calibration_ = objective_calibrations_[index];
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("物镜标定记录已更新：%1").arg(label), 3500);
+    });
+    connect(delete_objective, &QPushButton::clicked, this, [this] {
+        if (objective_labels_.size() <= 1) {
+            QMessageBox::warning(this, tr("物镜标定"), tr("系统至少需要保留一个物镜倍率。"));
+            return;
+        }
+        const int index = selected_objective_index_;
+        if (index < 0 || index >= static_cast<int>(objective_labels_.size())) return;
+        const QString label = QString::fromStdWString(
+            objective_labels_[static_cast<std::size_t>(index)]);
+        if (QMessageBox::question(
+                this, tr("删除物镜标定"),
+                tr("确定删除“%1”及其标定数据吗？").arg(label)) != QMessageBox::Yes) return;
+        objective_labels_.erase(objective_labels_.begin() + index);
+        objective_calibrations_.erase(objective_calibrations_.begin() + index);
+        selected_objective_index_ = std::min(
+            index, static_cast<int>(objective_labels_.size()) - 1);
+        calibration_ = objective_calibrations_[
+            static_cast<std::size_t>(selected_objective_index_)];
+        refreshObjectiveControls();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(tr("物镜标定记录已删除：%1").arg(label), 3500);
+    });
     connect(clear_calibration, &QPushButton::clicked, this, [this] {
         calibration_ = CalibrationProfile::Uncalibrated();
-        calibration_label_->setText(tr("未标定"));
+        if (selected_objective_index_ >= 0 &&
+            selected_objective_index_ < static_cast<int>(objective_calibrations_.size())) {
+            objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)] = calibration_;
+        }
+        updateCalibrationUi();
         updateMeasurementList();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(
+            tr("%1 物镜标定已清除").arg(currentObjectiveLabel()), 3000);
     });
     connect(length, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Length, tr("请选择长度的两个端点")); });
     connect(profile, &QToolButton::clicked, this, &CameraMainWindow::startProfileMeasurement);
@@ -1136,6 +2288,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
     connect(polyline, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Polyline, tr("依次选择折线节点，双击完成")); });
     connect(circle, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Circle, tr("请选择圆心和圆周上的一点")); });
     connect(ellipse, &QToolButton::clicked, this, [this] { setMeasurementTool(CanvasTool::Ellipse, tr("请选择椭圆外接矩形的两个对角点")); });
+    connect(select_tool, &QToolButton::clicked,
+        this, &CameraMainWindow::enterMeasurementSelectionMode);
     connect(canvas_, &ImageCanvas::toolChanged, page, [tool_buttons](CanvasTool tool) {
         tool_buttons->setExclusive(false);
         for (QAbstractButton* button : tool_buttons->buttons()) {
@@ -1147,8 +2301,8 @@ QWidget* CameraMainWindow::buildMeasurementPage()
         canvas_->setEdgeSnappingEnabled(enabled);
         statusBar()->showMessage(enabled ? tr("自动寻边已开启") : tr("自动寻边已关闭"), 2500);
     });
-    connect(edge_snap_radius_spin_, qOverload<int>(&QSpinBox::valueChanged),
-        canvas_, &ImageCanvas::setEdgeSnapRadius);
+    connect(edge_snap_radius_slider_, &NumericSlider::valueChanged,
+        this, [this](double value) { canvas_->setEdgeSnapRadius(qRound(value)); });
     connect(smart_select_button_, &QPushButton::clicked,
         this, &CameraMainWindow::startSmartTargetSampleSelection);
     connect(remove_smart_sample, &QPushButton::clicked, this, [this] {
@@ -1178,33 +2332,24 @@ QWidget* CameraMainWindow::buildMeasurementPage()
             (index == 1 ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters);
         updateMeasurementList();
     });
-    auto rename_current = [this] {
-        const int row = measurement_list_->currentRow();
-        const std::optional<MeasurementReference> reference = row >= 0
-            ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
-        if (!reference) {
-            return;
-        }
-        bool accepted = false;
-        const QString name = QInputDialog::getText(
-            this, tr("重命名测量"), tr("名称"), QLineEdit::Normal,
-            QString::fromStdWString(measurements_.Name(*reference)), &accepted).trimmed();
-        if (accepted && !name.isEmpty() && measurements_.SetName(*reference, name.toStdWString())) {
-            updateMeasurementList();
-        }
-    };
-    connect(rename_selected, &QPushButton::clicked, this, rename_current);
+    connect(rename_tool, &QToolButton::clicked,
+        this, &CameraMainWindow::renameSelectedMeasurement);
     connect(measurement_list_, &QListWidget::currentRowChanged, this,
-        [this](int) { rebuildOverlays(); });
+        [this](int) {
+            rebuildOverlays();
+            updateMeasurementStyleUi();
+            updateToolbarActionStates();
+        });
     connect(measurement_list_, &QListWidget::itemDoubleClicked, this,
         [this](QListWidgetItem*) { focusSelectedMeasurement(); });
-    auto* rename_shortcut = new QShortcut(QKeySequence(Qt::Key_F2), measurement_list_);
-    connect(rename_shortcut, &QShortcut::activated, this, rename_current);
-    auto* delete_shortcut = new QShortcut(QKeySequence::Delete, measurement_list_);
-    connect(delete_shortcut, &QShortcut::activated, this, &CameraMainWindow::deleteSelectedMeasurement);
-    connect(delete_selected, &QPushButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
-    connect(clear, &QPushButton::clicked, this, &CameraMainWindow::clearMeasurements);
-    connect(export_csv, &QPushButton::clicked, this, &CameraMainWindow::exportMeasurements);
+    connect(delete_tool, &QToolButton::clicked, this, &CameraMainWindow::deleteSelectedMeasurement);
+    connect(clear_tool, &QToolButton::clicked, this, &CameraMainWindow::clearMeasurements);
+    connect(export_tool, &QToolButton::clicked, this, &CameraMainWindow::exportMeasurements);
+    connect(measurement_color_button_, &QToolButton::clicked,
+        this, &CameraMainWindow::chooseSelectedMeasurementColor);
+    connect(measurement_reset_color_button_, &QToolButton::clicked,
+        this, &CameraMainWindow::resetSelectedMeasurementColor);
+    updateMeasurementStyleUi();
     updateSmartTargetUi();
     return page;
 }
@@ -1213,14 +2358,48 @@ QWidget* CameraMainWindow::buildProjectPage()
 {
     auto* page = new QWidget;
     auto* layout = panelLayout(page);
+    auto* project_group = new QGroupBox(tr("项目"));
+    auto* project_layout = new QVBoxLayout(project_group);
     auto* open = addButton(layout, tr("打开项目…"));
     auto* save = addButton(layout, tr("保存项目…"));
+    layout->removeWidget(open);
+    layout->removeWidget(save);
+    project_layout->addWidget(open);
+    project_layout->addWidget(save);
     setButtonRole(save, "primary");
-    layout->addWidget(new QLabel(tr("项目文件保存标定、测量、染料、荧光通道配置以及处理参数。图像数据请单独导出。")));
-    layout->itemAt(2)->widget()->setProperty("wordWrap", true);
+    auto* project_hint = new QLabel(tr("项目文件保存标定、测量、染料、荧光通道配置以及处理参数。图像数据请单独导出。"));
+    project_hint->setWordWrap(true);
+    project_layout->addWidget(project_hint);
+    layout->addWidget(project_group);
+
+    auto* report_group = new QGroupBox(tr("报告"));
+    auto* report_layout = new QVBoxLayout(report_group);
+    auto* report_export = new QPushButton(tr("导出图文报告…"));
+    auto* report_design = new QPushButton(tr("设计报告模板…"));
+    auto* report_load = new QPushButton(tr("载入报告模板…"));
+    auto* report_clear = new QPushButton(tr("清除自定义模板"));
+    report_export->setObjectName(QStringLiteral("ProjectExportImageReportButton"));
+    report_design->setObjectName(QStringLiteral("ProjectDesignReportTemplateButton"));
+    report_load->setObjectName(QStringLiteral("ProjectLoadReportTemplateButton"));
+    report_clear->setObjectName(QStringLiteral("ProjectClearReportTemplateButton"));
+    setButtonRole(report_export, "primary");
+    report_layout->addWidget(report_export);
+    report_layout->addWidget(report_design);
+    auto* template_row = new QHBoxLayout;
+    template_row->addWidget(report_load);
+    template_row->addWidget(report_clear);
+    report_layout->addLayout(template_row);
+    auto* report_hint = new QLabel(tr("图文报告包含当前图像、标定信息和测量结果；模板设置会自动记忆。"));
+    report_hint->setWordWrap(true);
+    report_layout->addWidget(report_hint);
+    layout->addWidget(report_group);
     layout->addStretch();
     connect(open, &QPushButton::clicked, this, &CameraMainWindow::openProject);
     connect(save, &QPushButton::clicked, this, &CameraMainWindow::saveProject);
+    connect(report_export, &QPushButton::clicked, this, &CameraMainWindow::exportImageReport);
+    connect(report_design, &QPushButton::clicked, this, &CameraMainWindow::showReportTemplateDesigner);
+    connect(report_load, &QPushButton::clicked, this, &CameraMainWindow::loadReportTemplate);
+    connect(report_clear, &QPushButton::clicked, this, &CameraMainWindow::clearReportTemplate);
     return page;
 }
 
@@ -1322,6 +2501,251 @@ void CameraMainWindow::exportImage()
     statusBar()->showMessage(tr("图像已导出：%1").arg(file_name), 5000);
 }
 
+DiagnosticReportActionInput CameraMainWindow::buildDiagnosticReportInput() const
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDate date = now.date();
+    const QTime time = now.time();
+    DiagnosticReportActionInput input;
+    input.generated = DiagnosticReportTimestamp{
+        date.year(), date.month(), date.day(), time.hour(), time.minute(), time.second()};
+    input.status = statusBar()->currentMessage().toStdWString();
+    input.preview_telemetry = preview_fps_label_ ? preview_fps_label_->text().toStdWString() : L"";
+    input.viewport_zoom = canvas_
+        ? QStringLiteral("%1%").arg(canvas_->zoom() * 100.0, 0, 'f', 0).toStdWString()
+        : L"";
+    input.preview_running = camera_open_;
+    input.processing_running = busy_;
+    input.sdk.loaded = camera_open_ || !camera_indices_.isEmpty();
+    input.sdk.last_error = camera_state_label_ ? camera_state_label_->text().toStdWString() : L"";
+    input.enumerated_cameras = camera_indices_.size();
+    input.selected_camera_index = device_combo_ ? device_combo_->currentIndex() : -1;
+    if (device_combo_) {
+        for (int row = 0; row < device_combo_->count(); ++row) {
+            CameraDevice device;
+            device.index = row < camera_indices_.size() ? camera_indices_.at(row) : row;
+            device.display_name = device_combo_->itemText(row).toStdWString();
+            input.enumerated_devices.push_back(std::move(device));
+        }
+    }
+    input.latest_frame_source = current_source_.toStdWString();
+    input.latest_frame = currentVisibleFrame();
+    input.objective_label = currentObjectiveLabel().toStdWString();
+    input.calibration = calibration_;
+    input.display_unit = display_unit_;
+    input.preview_display_mode = fusion_enabled_
+        ? L"Fluorescence fusion"
+        : PseudoColorMapper::Label(palette_);
+    input.pseudo_color = palette_;
+    input.dye_profiles = dyes_.size();
+    input.fluorescence_channels = channels_.size();
+    input.stitch_tiles = stitch_tiles_.size();
+    input.stitch_search_percent = stitch_overlap_slider_ ? stitch_overlap_slider_->value() : 0;
+    if (stitch_result_metadata_.available) {
+        input.stitch_result_backend = stitch_result_metadata_.backend;
+        input.stitch_result_layout = stitch_result_metadata_.layout_mode;
+        input.stitch_result_registration = stitch_result_metadata_.registration_method;
+        input.stitch_result_transform = stitch_result_metadata_.transform_model;
+        input.stitch_result_blend = stitch_result_metadata_.blend_mode;
+        input.stitch_result_overlap_percent = stitch_result_metadata_.overlap_percent;
+        input.stitch_result_tiles = stitch_result_metadata_.tiles.size();
+        input.stitch_result_relations = stitch_result_metadata_.relation_count;
+        QStringList positions;
+        for (int index = 0; index < static_cast<int>(stitch_result_metadata_.tiles.size()); ++index) {
+            const StitchResultTileMetadata& tile = stitch_result_metadata_.tiles[static_cast<std::size_t>(index)];
+            positions.push_back(tr("%1: %2x%3 @ %4,%5%6")
+                .arg(index + 1).arg(tile.width).arg(tile.height)
+                .arg(tile.offset_x).arg(tile.offset_y)
+                .arg(tile.estimated_position ? tr("（估计）") : QString{}));
+        }
+        input.stitch_result_tile_positions = positions.join(QStringLiteral("; ")).toStdWString();
+    }
+    input.edf_frames = edf_stack_.size();
+    input.edf_focus_radius = 1;
+    input.edf_composite_available = edf_result_.composite_frame.IsValid();
+    input.edf_focus_map_available = edf_result_.focus_map.IsValid();
+    if (stitch_result_.IsValid()) {
+        input.processing_result_visible = true;
+        input.processing_result_kind = L"Stitch";
+        input.processing_result_source = L"Stitch result";
+        input.processing_result_width = stitch_result_.width;
+        input.processing_result_height = stitch_result_.height;
+    } else if (edf_result_.composite_frame.IsValid()) {
+        input.processing_result_visible = true;
+        input.processing_result_kind = L"EDF";
+        input.processing_result_source = L"EDF composite";
+        input.processing_result_width = edf_result_.composite_frame.width;
+        input.processing_result_height = edf_result_.composite_frame.height;
+    }
+    return input;
+}
+
+void CameraMainWindow::exportImageReport()
+{
+    const ImageFrame report_frame = currentVisibleFrame();
+    if (!report_frame.IsValid()) {
+        QMessageBox::information(this, tr("导出图文报告"), tr("请先打开图像或启动相机预览。"));
+        return;
+    }
+
+    QString file_name = QFileDialog::getSaveFileName(
+        this, tr("导出图文报告"), QStringLiteral("CameraView-report.html"),
+        tr("HTML 报告 (*.html)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    if (QFileInfo(file_name).suffix().isEmpty()) {
+        file_name += QStringLiteral(".html");
+    }
+
+    const QFileInfo report_info(file_name);
+    const QString stem = report_info.completeBaseName().isEmpty()
+        ? QStringLiteral("CameraView-report")
+        : report_info.completeBaseName();
+    const QString image_name = stem + QStringLiteral("_image.png");
+    const QString image_file = report_info.dir().filePath(image_name);
+    const std::wstring display_mode = fusion_enabled_
+        ? L"Fluorescence fusion"
+        : PseudoColorMapper::Label(palette_);
+    const ExportActionResult image_result = ExportActions::SaveImage(
+        std::filesystem::path(image_file.toStdWString()), report_frame,
+        measurements_, display_mode, &calibration_);
+    if (!image_result.saved) {
+        QMessageBox::warning(this, tr("报告图像导出失败"),
+            QString::fromStdWString(image_result.message));
+        return;
+    }
+
+    const std::wstring report = DiagnosticReportActions::BuildImageReport(
+        buildDiagnosticReportInput(), measurements_, image_name.toStdWString(),
+        report_frame, report_template_text_);
+    const ExportActionResult report_result = ExportActions::SaveReportHtml(
+        std::filesystem::path(file_name.toStdWString()), report);
+    if (!report_result.saved) {
+        QMessageBox::warning(this, tr("报告导出失败"),
+            QString::fromStdWString(report_result.message));
+        return;
+    }
+    statusBar()->showMessage(
+        tr("图文报告已导出：%1（报告图像：%2）").arg(file_name, image_name), 7000);
+}
+
+void CameraMainWindow::exportDiagnosticReport()
+{
+    QString file_name = QFileDialog::getSaveFileName(
+        this, tr("导出诊断信息"), QStringLiteral("CameraView-diagnostics.txt"),
+        tr("文本文件 (*.txt)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    if (QFileInfo(file_name).suffix().isEmpty()) {
+        file_name += QStringLiteral(".txt");
+    }
+    const ExportActionResult result = ExportActions::SaveDiagnosticReport(
+        std::filesystem::path(file_name.toStdWString()),
+        DiagnosticReportActions::BuildReport(buildDiagnosticReportInput(), measurements_));
+    if (!result.saved) {
+        QMessageBox::warning(this, tr("诊断信息导出失败"),
+            QString::fromStdWString(result.message));
+        return;
+    }
+    statusBar()->showMessage(tr("诊断信息已导出：%1").arg(file_name), 5000);
+}
+
+void CameraMainWindow::showReportTemplateDesigner()
+{
+    ImageReportTemplateOptions parsed;
+    const bool visual_template = report_template_text_.empty() ||
+        DiagnosticReportActions::TryParseImageReportTemplateOptions(report_template_text_, parsed);
+    if (!visual_template && QMessageBox::question(
+            this, tr("替换自定义模板"),
+            tr("当前载入的是手写 HTML 模板，进入可视化设计并应用后会替换它。是否继续？"))
+            != QMessageBox::Yes) {
+        return;
+    }
+    if (visual_template && !report_template_text_.empty()) {
+        report_template_options_ = parsed;
+    }
+    ReportTemplateDialog dialog(report_template_options_, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    report_template_options_ = dialog.options();
+    report_template_text_ = DiagnosticReportActions::BuildImageReportTemplate(report_template_options_);
+    report_template_path_.clear();
+    saveReportTemplateSettings();
+    statusBar()->showMessage(tr("报告模板已应用并记忆"), 5000);
+}
+
+void CameraMainWindow::loadReportTemplate()
+{
+    const QString file_name = QFileDialog::getOpenFileName(
+        this, tr("载入报告模板"), report_template_path_,
+        tr("HTML 模板 (*.html *.htm);;所有文件 (*.*)"));
+    if (file_name.isEmpty()) {
+        return;
+    }
+    QFile file(file_name);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("载入报告模板失败"), file.errorString());
+        return;
+    }
+    const QByteArray bytes = file.readAll();
+    QString text = QString::fromUtf8(bytes);
+    if (!text.isEmpty() && text.front() == QChar::ByteOrderMark) {
+        text.remove(0, 1);
+    }
+    if (text.trimmed().isEmpty()) {
+        QMessageBox::warning(this, tr("载入报告模板失败"), tr("模板文件为空。"));
+        return;
+    }
+    report_template_text_ = text.toStdWString();
+    report_template_path_ = file_name;
+    ImageReportTemplateOptions parsed;
+    const bool visual = DiagnosticReportActions::TryParseImageReportTemplateOptions(
+        report_template_text_, parsed);
+    report_template_options_ = visual ? parsed : ImageReportTemplateOptions{};
+    saveReportTemplateSettings();
+    statusBar()->showMessage(visual
+        ? tr("报告模板已载入，可在设计器中继续编辑：%1").arg(QFileInfo(file_name).fileName())
+        : tr("自定义 HTML 报告模板已载入：%1").arg(QFileInfo(file_name).fileName()), 6000);
+}
+
+void CameraMainWindow::clearReportTemplate()
+{
+    if (report_template_text_.empty()) {
+        statusBar()->showMessage(tr("当前已经使用默认报告模板"), 3000);
+        return;
+    }
+    report_template_text_.clear();
+    report_template_path_.clear();
+    report_template_options_ = ImageReportTemplateOptions{};
+    saveReportTemplateSettings();
+    statusBar()->showMessage(tr("已恢复默认报告模板"), 4000);
+}
+
+void CameraMainWindow::loadReportTemplateSettings()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Report"));
+    report_template_text_ = settings.value(QStringLiteral("templateText")).toString().toStdWString();
+    report_template_path_ = settings.value(QStringLiteral("templatePath")).toString();
+    settings.endGroup();
+    ImageReportTemplateOptions parsed;
+    if (DiagnosticReportActions::TryParseImageReportTemplateOptions(report_template_text_, parsed)) {
+        report_template_options_ = std::move(parsed);
+    }
+}
+
+void CameraMainWindow::saveReportTemplateSettings() const
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Report"));
+    settings.setValue(QStringLiteral("templateText"), QString::fromStdWString(report_template_text_));
+    settings.setValue(QStringLiteral("templatePath"), report_template_path_);
+    settings.endGroup();
+}
+
 void CameraMainWindow::saveProject()
 {
     QString file_name = QFileDialog::getSaveFileName(
@@ -1332,9 +2756,26 @@ void CameraMainWindow::saveProject()
     if (QFileInfo(file_name).suffix().isEmpty()) {
         file_name += QStringLiteral(".cvproject");
     }
-    const ProjectDocument document = ProjectSessionMapper::ToDocument(
-        calibration_, measurements_, dyes_, channels_, EdfOptions{}, 85,
-        {L"Default"}, {calibration_}, 0, true);
+    const StitchProcessingOptions stitch_options = stitchOptionsFromUi();
+    const int stitch_search_percent =
+        ProcessingParameterRules::SearchPercentFromOverlap(stitch_options.overlap_percent);
+    ProjectDocument document = ProjectSessionMapper::ToDocument(
+        calibration_, measurements_, dyes_, channels_, EdfOptions{}, stitch_search_percent,
+        objective_labels_, objective_calibrations_, selected_objective_index_,
+        stitch_options.registration_method != StitchRegistrationMethod::Phase);
+    document.processing_settings.stitch_overlap_percent = stitch_options.overlap_percent;
+    document.processing_settings.stitch_layout_mode = static_cast<int>(stitch_options.layout_mode);
+    document.processing_settings.stitch_grid_rows = stitch_options.grid_rows;
+    document.processing_settings.stitch_grid_cols = stitch_options.grid_cols;
+    document.processing_settings.stitch_registration_method =
+        static_cast<int>(stitch_options.registration_method);
+    document.processing_settings.stitch_transform_model =
+        static_cast<int>(stitch_options.transform_model);
+    document.processing_settings.stitch_blend_mode = static_cast<int>(stitch_options.blend_mode);
+    document.processing_settings.live_stitch_interval_ms =
+        live_stitch_interval_slider_->integerValue();
+    document.processing_settings.fluorescence_blend_mode =
+        static_cast<int>(fluorescence_blend_mode_);
     std::wstring error;
     if (!ProjectRepository::Save(std::filesystem::path(file_name.toStdWString()), document, error)) {
         QMessageBox::warning(this, tr("保存失败"), errorText(error));
@@ -1357,65 +2798,692 @@ void CameraMainWindow::openProject()
         return;
     }
     ProjectSessionState state = ProjectSessionMapper::FromDocument(std::move(document));
-    calibration_ = state.calibration;
+    if (live_stitch_active_) stopLiveStitch(false);
+    stitch_tiles_.clear();
+    stitch_tile_sources_.clear();
+    edf_stack_.clear();
+    stitch_result_ = {};
+    stitch_result_metadata_ = {};
+    stitch_retry_tiles_.clear();
+    stitch_retry_sources_.clear();
+    stitch_retry_available_ = false;
+    if (stitch_retry_button_) stitch_retry_button_->setEnabled(false);
+    edf_result_ = {};
+    objective_labels_ = std::move(state.objective_labels);
+    objective_calibrations_ = std::move(state.objective_calibrations);
+    selected_objective_index_ = state.selected_objective_index;
+    if (objective_labels_.empty()) {
+        const ObjectiveCalibrationState defaults = ObjectiveCalibrationSettings::Defaults();
+        objective_labels_ = defaults.labels;
+        objective_calibrations_ = defaults.calibrations;
+        selected_objective_index_ = defaults.selected_index;
+    }
+    if (objective_calibrations_.size() < objective_labels_.size()) {
+        objective_calibrations_.resize(
+            objective_labels_.size(), CalibrationProfile::Uncalibrated());
+    }
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
     measurements_ = std::move(state.measurements);
+    applyGlobalMeasurementColor();
+    refreshObjectiveControls();
     dyes_ = std::move(state.dye_profiles);
     channels_ = std::move(state.fluorescence_channels);
+    const auto restore_combo = [](QComboBox* combo, int value) {
+        const int index = combo ? combo->findData(value) : -1;
+        if (index >= 0) combo->setCurrentIndex(index);
+    };
+    restore_combo(stitch_layout_combo_, state.stitch_layout_mode);
+    stitch_rows_spin_->setValue(state.stitch_grid_rows);
+    stitch_cols_spin_->setValue(state.stitch_grid_cols);
+    stitch_overlap_slider_->setValue(state.stitch_overlap_percent);
+    restore_combo(stitch_registration_combo_, state.stitch_registration_method);
+    restore_combo(stitch_transform_combo_, state.stitch_transform_model);
+    restore_combo(stitch_blend_combo_, state.stitch_blend_mode);
+    live_stitch_interval_slider_->setValue(state.live_stitch_interval_ms);
+    restore_combo(fluorescence_blend_combo_, state.fluorescence_blend_mode);
     if (dyes_.empty()) {
         dyes_ = DyeLibrary::DefaultDyes();
     }
     dye_combo_->clear();
     for (const DyeProfile& dye : dyes_) {
-        dye_combo_->addItem(QString::fromStdWString(dye.name));
+        dye_combo_->addItem(QString::fromStdWString(FluorescenceFormatter::FormatDyeLabel(dye)));
     }
-    channel_list_->clear();
-    for (const FluorescenceChannel& channel : channels_) {
-        channel_list_->addItem(QString::fromStdWString(channel.name));
-    }
-    calibration_label_->setText(calibration_.IsCalibrated()
-        ? tr("%1 µm / px").arg(calibration_.MicronsPerPixel(), 0, 'g', 7)
-        : tr("未标定"));
+    refreshFluorescenceChannelList(channels_.empty() ? -1 : 0);
+    updateCalibrationUi();
     updateMeasurementList();
+    saveObjectiveCalibrationMemory();
+    invalidateStitchResult();
+    refreshStitchTileList();
+    focus_map_button_->setEnabled(false);
     updateImagePresentation();
     statusBar()->showMessage(tr("项目已打开：%1").arg(file_name), 5000);
 }
 
 void CameraMainWindow::refreshDevices()
 {
-    camera_state_label_->setText(tr("正在刷新设备…"));
+    if (camera_open_ || camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) {
+        camera_feedback_label_->setText(tr("请先断开相机，再刷新设备列表"));
+        return;
+    }
+    setCameraPanelState(CameraPanelState::Initializing, tr("正在刷新设备…"));
+    updateCameraControlAvailability();
     QMetaObject::invokeMethod(camera_worker_, "refreshDevices", Qt::QueuedConnection);
 }
 
 void CameraMainWindow::openSelectedCamera()
 {
+    if (camera_open_ || camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) return;
     const int row = device_combo_->currentIndex();
     const int device_index = row >= 0 && row < camera_indices_.size() ? camera_indices_[row] : -1;
-    camera_state_label_->setText(tr("正在打开相机…"));
+    if (device_index < 0) {
+        setCameraPanelState(CameraPanelState::NoDevice, tr("请先选择相机设备"));
+        return;
+    }
+    loadCameraProfile();
+    camera_profile_reconfigure_pending_ = camera_profile_loaded_;
+    QSettings settings;
+    settings.setValue(QStringLiteral("CameraPanel/lastDeviceKey"), currentCameraDeviceKey());
+    setCameraPanelState(CameraPanelState::Connecting, tr("正在连接相机…"));
+    updateCameraControlAvailability();
     QMetaObject::invokeMethod(camera_worker_, "openCamera", Qt::QueuedConnection,
         Q_ARG(int, device_index), Q_ARG(double, exposure_spin_->value()));
 }
 
 void CameraMainWindow::stopCamera()
 {
+    if (camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring) {
+        camera_feedback_label_->setText(tr("当前操作完成后即可断开相机"));
+        return;
+    }
     if (live_stitch_active_) stopLiveStitch(false);
+    if (FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) {
+        cancelFluorescenceCaptureSequence();
+    }
+    camera_profile_reconfigure_pending_ = false;
+    camera_roi_selection_pending_ = false;
+    setCameraPanelState(CameraPanelState::Disconnected, tr("正在断开相机…"));
     QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::QueuedConnection);
 }
 
 void CameraMainWindow::onDevicesReady(QStringList labels, QVector<int> indices, QString diagnostic)
 {
+    QSettings settings;
+    const QString remembered_key = settings.value(
+        QStringLiteral("CameraPanel/lastDeviceKey")).toString();
     camera_indices_ = std::move(indices);
-    device_combo_->clear();
-    device_combo_->addItems(labels);
-    camera_state_label_->setText(diagnostic);
+    {
+        const QSignalBlocker blocker(device_combo_);
+        device_combo_->clear();
+        device_combo_->addItems(labels);
+        int remembered_row = -1;
+        for (int row = 0; row < labels.size(); ++row) {
+            const QString raw_key = QStringLiteral("%1|%2")
+                .arg(labels[row])
+                .arg(row < camera_indices_.size() ? camera_indices_[row] : row);
+            const QString key = QString::fromLatin1(raw_key.toUtf8().toBase64(
+                QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+            if (key == remembered_key) {
+                remembered_row = row;
+                break;
+            }
+        }
+        if (remembered_row >= 0) device_combo_->setCurrentIndex(remembered_row);
+        else if (!labels.isEmpty()) device_combo_->setCurrentIndex(0);
+    }
+    loadCameraProfile();
+    if (labels.isEmpty()) {
+        setCameraPanelState(
+            diagnostic.contains(tr("失败")) ? CameraPanelState::Error : CameraPanelState::NoDevice,
+            diagnostic);
+    } else {
+        setCameraPanelState(CameraPanelState::Ready, diagnostic);
+    }
     statusBar()->showMessage(diagnostic, 5000);
+    updateCameraControlAvailability();
+
+    if (!startup_auto_connect_attempted_) {
+        startup_auto_connect_attempted_ = true;
+        if (!remembered_key.isEmpty() && currentCameraDeviceKey() == remembered_key) {
+            QTimer::singleShot(0, this, &CameraMainWindow::openSelectedCamera);
+        }
+    }
+}
+
+void CameraMainWindow::onCameraCapabilities(
+    CameraCapabilities capabilities,
+    CameraConfiguration configuration,
+    CameraOpenInfo openInfo)
+{
+    camera_capabilities_ = std::move(capabilities);
+    camera_configuration_ = configuration;
+    camera_open_info_ = openInfo;
+
+    camera_ui_updating_ = true;
+    camera_resolution_combo_->clear();
+    for (const CameraResolutionOption& option : camera_capabilities_.resolutions) {
+        camera_resolution_combo_->addItem(
+            tr("%1 × %2").arg(option.width).arg(option.height), option.index);
+    }
+    exposure_spin_->setRange(
+        camera_capabilities_.exposure_minimum,
+        camera_capabilities_.exposure_maximum);
+    double gain_minimum = 0.01;
+    double gain_maximum = 100.0;
+    if (!camera_capabilities_.gain_values.empty()) {
+        const auto [minimum, maximum] = std::minmax_element(
+            camera_capabilities_.gain_values.begin(), camera_capabilities_.gain_values.end());
+        gain_minimum = *minimum;
+        gain_maximum = *maximum;
+    }
+    gain_spin_->setRange(gain_minimum, gain_maximum);
+    camera_gain_slider_->setRange(
+        qRound(gain_minimum * 100.0), qRound(gain_maximum * 100.0));
+    for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+        spin->setRange(gain_minimum, gain_maximum);
+    }
+    for (QSpinBox* spin : camera_rgb_offset_spins_) {
+        spin->setRange(
+            camera_capabilities_.offset_minimum,
+            camera_capabilities_.offset_maximum);
+    }
+    camera_ui_updating_ = false;
+
+    camera_device_summary_label_->setText(
+        tr("%1 · 类型 %2").arg(device_combo_->currentText()).arg(openInfo.type));
+    camera_telemetry_label_->setText(
+        tr("分辨率 %1 × %2  ·  FPS —  ·  %3  ·  8 位")
+            .arg(openInfo.width).arg(openInfo.height)
+            .arg(cameraFrameFormatName(camera_capabilities_.frame_format)));
+
+    if (camera_profile_reconfigure_pending_ && camera_profile_loaded_) {
+        camera_profile_reconfigure_pending_ = false;
+        CameraConfiguration desired = camera_profile_configuration_;
+        desired.roi = {};
+        const bool resolution_available = std::any_of(
+            camera_capabilities_.resolutions.begin(),
+            camera_capabilities_.resolutions.end(),
+            [&desired](const CameraResolutionOption& option) {
+                return option.index == desired.resolution_index;
+            });
+        if (!resolution_available) desired.resolution_index = configuration.resolution_index;
+        if (!camera_capabilities_.has_trigger) desired.trigger_mode = CameraTriggerMode::Free;
+        if (!camera_capabilities_.has_flip) desired.vertical_flip = false;
+        if (!camera_capabilities_.has_mirror) desired.horizontal_mirror = false;
+        desired.exposure_ms = static_cast<float>(std::clamp(
+            static_cast<double>(desired.exposure_ms),
+            exposure_spin_->minimum(), exposure_spin_->maximum()));
+        const auto differs = [](double left, double right) {
+            return std::abs(left - right) > 0.0001;
+        };
+        const bool requires_reconfigure =
+            desired.resolution_index != configuration.resolution_index ||
+            desired.trigger_mode != configuration.trigger_mode ||
+            desired.vertical_flip != configuration.vertical_flip ||
+            desired.horizontal_mirror != configuration.horizontal_mirror ||
+            differs(desired.exposure_ms, configuration.exposure_ms) ||
+            (camera_capabilities_.has_gain &&
+                (differs(desired.red_gain, configuration.red_gain) ||
+                 differs(desired.green_gain, configuration.green_gain) ||
+                 differs(desired.blue_gain, configuration.blue_gain))) ||
+            (camera_capabilities_.has_offset &&
+                (desired.red_offset != configuration.red_offset ||
+                 desired.green_offset != configuration.green_offset ||
+                 desired.blue_offset != configuration.blue_offset));
+        if (!requires_reconfigure) {
+            updateCameraConfigurationUi(configuration);
+            last_sent_exposure_ = configuration.exposure_ms;
+            last_sent_rgb_gain_ = {
+                configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+            last_sent_rgb_offset_ = {
+                configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+            updateCameraControlAvailability();
+            return;
+        }
+        setCameraPanelState(CameraPanelState::Reconfiguring, tr("正在恢复此设备的参数…"));
+        QMetaObject::invokeMethod(camera_worker_, "reconfigureCamera", Qt::QueuedConnection,
+            Q_ARG(CameraConfiguration, desired));
+        return;
+    }
+
+    updateCameraConfigurationUi(configuration);
+    updateCameraControlAvailability();
+}
+
+void CameraMainWindow::setCameraPanelState(CameraPanelState state, const QString& message)
+{
+    camera_panel_state_ = state;
+    if (!camera_state_label_ || !camera_state_badge_) return;
+    QString badge;
+    QString visual_state;
+    switch (state) {
+    case CameraPanelState::Initializing: badge = tr("初始化"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::NoDevice: badge = tr("无设备"); visual_state = QStringLiteral("warning"); break;
+    case CameraPanelState::Ready: badge = tr("待连接"); visual_state = QStringLiteral("ready"); break;
+    case CameraPanelState::Connecting: badge = tr("连接中"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::Previewing: badge = tr("预览中"); visual_state = QStringLiteral("success"); break;
+    case CameraPanelState::Reconfiguring: badge = tr("重配置"); visual_state = QStringLiteral("busy"); break;
+    case CameraPanelState::WaitingTrigger: badge = tr("等待触发"); visual_state = QStringLiteral("warning"); break;
+    case CameraPanelState::Disconnected: badge = tr("已断开"); visual_state = QStringLiteral("ready"); break;
+    case CameraPanelState::Error: badge = tr("错误"); visual_state = QStringLiteral("error"); break;
+    }
+    camera_state_badge_->setText(badge);
+    camera_state_badge_->setProperty("cameraState", visual_state);
+    camera_state_badge_->style()->unpolish(camera_state_badge_);
+    camera_state_badge_->style()->polish(camera_state_badge_);
+    camera_state_label_->setText(message);
+}
+
+void CameraMainWindow::updateCameraControlAvailability()
+{
+    if (!device_combo_) return;
+    const bool transitioning = camera_panel_state_ == CameraPanelState::Initializing ||
+        camera_panel_state_ == CameraPanelState::Connecting ||
+        camera_panel_state_ == CameraPanelState::Reconfiguring;
+    const bool has_device = device_combo_->currentIndex() >= 0 && !camera_indices_.isEmpty();
+    device_combo_->setEnabled(!camera_open_ && !transitioning);
+    camera_refresh_button_->setEnabled(!camera_open_ && !transitioning);
+    camera_connection_button_->setEnabled(camera_open_ || (has_device && !transitioning));
+    camera_connection_button_->setText(camera_open_ ? tr("断开相机") : tr("连接相机"));
+    camera_connection_button_->setIcon(style()->standardIcon(
+        camera_open_ ? QStyle::SP_DialogCloseButton : QStyle::SP_DialogApplyButton));
+    camera_connection_button_->setProperty(
+        "role", camera_open_ ? QStringLiteral("danger") : QStringLiteral("primary"));
+    camera_connection_button_->style()->unpolish(camera_connection_button_);
+    camera_connection_button_->style()->polish(camera_connection_button_);
+
+    // Exposure and gain remain editable while offline as per-device presets.
+    exposure_spin_->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_exposure));
+    camera_exposure_slider_->setEnabled(exposure_spin_->isEnabled());
+    gain_spin_->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_gain));
+    camera_gain_slider_->setEnabled(gain_spin_->isEnabled());
+    camera_auto_exposure_button_->setEnabled(
+        camera_open_ && !transitioning && camera_capabilities_.has_auto_exposure);
+    camera_white_balance_button_->setEnabled(
+        camera_open_ && !transitioning && camera_capabilities_.has_white_balance);
+
+    camera_color_group_->setVisible(!camera_open_ || camera_capabilities_.color);
+    for (QDoubleSpinBox* spin : camera_rgb_gain_spins_) {
+        spin->setEnabled(!transitioning && (!camera_open_ || camera_capabilities_.has_gain));
+        spin->setToolTip(camera_open_ && !camera_capabilities_.has_gain
+            ? tr("当前设备未提供颜色增益接口") : QString());
+    }
+    for (QSpinBox* spin : camera_rgb_offset_spins_) {
+        spin->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_offset);
+        spin->setToolTip(camera_open_ && !camera_capabilities_.has_offset
+            ? tr("当前设备未提供颜色偏移接口") : QString());
+    }
+
+    camera_resolution_combo_->setEnabled(camera_open_ && !transitioning &&
+        camera_capabilities_.resolutions.size() > 1);
+    camera_trigger_combo_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_trigger);
+    camera_flip_check_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_flip);
+    camera_mirror_check_->setEnabled(camera_open_ && !transitioning && camera_capabilities_.has_mirror);
+    const bool software_trigger = camera_configuration_.trigger_mode == CameraTriggerMode::Software;
+    camera_single_frame_button_->setVisible(software_trigger);
+    camera_single_frame_button_->setEnabled(camera_open_ && !transitioning && software_trigger);
+    const bool roi_enabled = camera_open_ && !transitioning && camera_capabilities_.has_roi;
+    camera_roi_select_button_->setEnabled(roi_enabled && !latest_camera_image_.isNull());
+    camera_roi_apply_button_->setEnabled(roi_enabled);
+    camera_roi_reset_button_->setEnabled(roi_enabled && camera_configuration_.roi.Enabled());
+    for (QSpinBox* spin : camera_roi_spins_) spin->setEnabled(roi_enabled);
+}
+
+QString CameraMainWindow::currentCameraDeviceKey() const
+{
+    const int row = device_combo_ ? device_combo_->currentIndex() : -1;
+    if (row < 0) return {};
+    const int index = row < camera_indices_.size() ? camera_indices_[row] : row;
+    const QString raw = QStringLiteral("%1|%2").arg(device_combo_->itemText(row)).arg(index);
+    return QString::fromLatin1(raw.toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+void CameraMainWindow::loadCameraProfile()
+{
+    const QString key = currentCameraDeviceKey();
+    camera_profile_loaded_ = false;
+    if (key.isEmpty()) return;
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("CameraProfiles/%1").arg(key));
+    const bool has_saved_profile = settings.contains(QStringLiteral("exposureMs")) ||
+        settings.contains(QStringLiteral("resolutionIndex")) ||
+        settings.contains(QStringLiteral("triggerMode"));
+    camera_profile_configuration_ = {};
+    camera_profile_configuration_.exposure_ms = settings.value(
+        QStringLiteral("exposureMs"), 10.0).toFloat();
+    camera_profile_configuration_.red_gain = settings.value(QStringLiteral("redGain"), 1.0).toFloat();
+    camera_profile_configuration_.green_gain = settings.value(QStringLiteral("greenGain"), 1.0).toFloat();
+    camera_profile_configuration_.blue_gain = settings.value(QStringLiteral("blueGain"), 1.0).toFloat();
+    camera_profile_configuration_.red_offset = settings.value(QStringLiteral("redOffset"), 0).toInt();
+    camera_profile_configuration_.green_offset = settings.value(QStringLiteral("greenOffset"), 0).toInt();
+    camera_profile_configuration_.blue_offset = settings.value(QStringLiteral("blueOffset"), 0).toInt();
+    camera_profile_configuration_.resolution_index = settings.value(QStringLiteral("resolutionIndex"), 0).toInt();
+    camera_profile_configuration_.trigger_mode = static_cast<CameraTriggerMode>(
+        settings.value(QStringLiteral("triggerMode"), 0).toInt());
+    camera_profile_configuration_.vertical_flip = settings.value(QStringLiteral("verticalFlip"), false).toBool();
+    camera_profile_configuration_.horizontal_mirror = settings.value(QStringLiteral("horizontalMirror"), false).toBool();
+    settings.endGroup();
+    camera_profile_configuration_.roi = {};
+    camera_profile_loaded_ = has_saved_profile;
+    updateCameraConfigurationUi(camera_profile_configuration_);
+}
+
+void CameraMainWindow::saveCameraProfile() const
+{
+    const QString key = currentCameraDeviceKey();
+    if (key.isEmpty()) return;
+    QSettings settings;
+    settings.setValue(QStringLiteral("CameraPanel/lastDeviceKey"), key);
+    settings.beginGroup(QStringLiteral("CameraProfiles/%1").arg(key));
+    settings.setValue(QStringLiteral("exposureMs"), exposure_spin_->value());
+    settings.setValue(QStringLiteral("redGain"), camera_rgb_gain_spins_[0]->value());
+    settings.setValue(QStringLiteral("greenGain"), camera_rgb_gain_spins_[1]->value());
+    settings.setValue(QStringLiteral("blueGain"), camera_rgb_gain_spins_[2]->value());
+    settings.setValue(QStringLiteral("redOffset"), camera_rgb_offset_spins_[0]->value());
+    settings.setValue(QStringLiteral("greenOffset"), camera_rgb_offset_spins_[1]->value());
+    settings.setValue(QStringLiteral("blueOffset"), camera_rgb_offset_spins_[2]->value());
+    settings.setValue(QStringLiteral("resolutionIndex"),
+        camera_resolution_combo_->currentData().toInt());
+    settings.setValue(QStringLiteral("triggerMode"),
+        camera_trigger_combo_->currentData().toInt());
+    settings.setValue(QStringLiteral("verticalFlip"), camera_flip_check_->isChecked());
+    settings.setValue(QStringLiteral("horizontalMirror"), camera_mirror_check_->isChecked());
+    settings.endGroup();
+}
+
+void CameraMainWindow::updateCameraConfigurationUi(const CameraConfiguration& configuration)
+{
+    camera_ui_updating_ = true;
+    exposure_spin_->setValue(std::clamp(
+        static_cast<double>(configuration.exposure_ms),
+        exposure_spin_->minimum(), exposure_spin_->maximum()));
+    const double exposure_span = exposure_spin_->maximum() - exposure_spin_->minimum();
+    camera_exposure_slider_->setValue(exposure_span > 0.0
+        ? qRound((exposure_spin_->value() - exposure_spin_->minimum()) * 1000.0 / exposure_span) : 0);
+    const std::array<double, 3> gains{
+        configuration.red_gain, configuration.green_gain, configuration.blue_gain};
+    const std::array<int, 3> offsets{
+        configuration.red_offset, configuration.green_offset, configuration.blue_offset};
+    for (int channel = 0; channel < 3; ++channel) {
+        camera_rgb_gain_spins_[channel]->setValue(std::clamp(
+            gains[channel],
+            camera_rgb_gain_spins_[channel]->minimum(),
+            camera_rgb_gain_spins_[channel]->maximum()));
+        camera_rgb_offset_spins_[channel]->setValue(offsets[channel]);
+    }
+    gain_spin_->setValue(camera_rgb_gain_spins_[0]->value());
+    camera_gain_slider_->setValue(qRound(gain_spin_->value() * 100.0));
+    const int resolution_row = camera_resolution_combo_->findData(configuration.resolution_index);
+    if (resolution_row >= 0) camera_resolution_combo_->setCurrentIndex(resolution_row);
+    const int trigger_row = camera_trigger_combo_->findData(
+        static_cast<int>(configuration.trigger_mode));
+    if (trigger_row >= 0) camera_trigger_combo_->setCurrentIndex(trigger_row);
+    camera_flip_check_->setChecked(configuration.vertical_flip);
+    camera_mirror_check_->setChecked(configuration.horizontal_mirror);
+    camera_roi_spins_[0]->setValue(configuration.roi.x);
+    camera_roi_spins_[1]->setValue(configuration.roi.y);
+    camera_roi_spins_[2]->setValue(configuration.roi.width);
+    camera_roi_spins_[3]->setValue(configuration.roi.height);
+    camera_ui_updating_ = false;
+}
+
+void CameraMainWindow::scheduleCameraParameterApply()
+{
+    saveCameraProfile();
+    camera_feedback_label_->setText(
+        camera_open_ ? tr("参数将在输入停止后自动应用…") : tr("参数预设已保存，连接时应用"));
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    if (camera_open_) camera_parameter_timer_->start();
+}
+
+void CameraMainWindow::applyPendingCameraParameters()
+{
+    if (!camera_open_ || camera_panel_state_ == CameraPanelState::Reconfiguring) return;
+    const double exposure = exposure_spin_->value();
+    if (camera_capabilities_.has_exposure && !qFuzzyCompare(exposure + 1.0, last_sent_exposure_ + 1.0)) {
+        last_sent_exposure_ = exposure;
+        QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
+            Q_ARG(double, exposure));
+    }
+    std::array<double, 3> gains{
+        camera_rgb_gain_spins_[0]->value(),
+        camera_rgb_gain_spins_[1]->value(),
+        camera_rgb_gain_spins_[2]->value()};
+    if (camera_capabilities_.has_gain && gains != last_sent_rgb_gain_) {
+        last_sent_rgb_gain_ = gains;
+        QMetaObject::invokeMethod(camera_worker_, "setRgbGain", Qt::QueuedConnection,
+            Q_ARG(double, gains[0]), Q_ARG(double, gains[1]), Q_ARG(double, gains[2]));
+    }
+    std::array<int, 3> offsets{
+        camera_rgb_offset_spins_[0]->value(),
+        camera_rgb_offset_spins_[1]->value(),
+        camera_rgb_offset_spins_[2]->value()};
+    if (camera_capabilities_.has_offset && offsets != last_sent_rgb_offset_) {
+        last_sent_rgb_offset_ = offsets;
+        QMetaObject::invokeMethod(camera_worker_, "setRgbOffset", Qt::QueuedConnection,
+            Q_ARG(int, offsets[0]), Q_ARG(int, offsets[1]), Q_ARG(int, offsets[2]));
+    }
+}
+
+void CameraMainWindow::applyCameraConfigurationFromUi(bool includeRoi)
+{
+    saveCameraProfile();
+    if (!camera_open_ || camera_ui_updating_) return;
+    CameraConfiguration requested = camera_configuration_;
+    requested.resolution_index = camera_resolution_combo_->currentData().toInt();
+    requested.trigger_mode = static_cast<CameraTriggerMode>(camera_trigger_combo_->currentData().toInt());
+    requested.vertical_flip = camera_flip_check_->isChecked();
+    requested.horizontal_mirror = camera_mirror_check_->isChecked();
+    requested.exposure_ms = static_cast<float>(exposure_spin_->value());
+    requested.red_gain = static_cast<float>(camera_rgb_gain_spins_[0]->value());
+    requested.green_gain = static_cast<float>(camera_rgb_gain_spins_[1]->value());
+    requested.blue_gain = static_cast<float>(camera_rgb_gain_spins_[2]->value());
+    requested.red_offset = camera_rgb_offset_spins_[0]->value();
+    requested.green_offset = camera_rgb_offset_spins_[1]->value();
+    requested.blue_offset = camera_rgb_offset_spins_[2]->value();
+    if (includeRoi) {
+        requested.roi = {
+            camera_roi_spins_[0]->value(), camera_roi_spins_[1]->value(),
+            camera_roi_spins_[2]->value(), camera_roi_spins_[3]->value()};
+    }
+    setCameraPanelState(CameraPanelState::Reconfiguring, tr("正在重配置相机…"));
+    updateCameraControlAvailability();
+    QMetaObject::invokeMethod(camera_worker_, "reconfigureCamera", Qt::QueuedConnection,
+        Q_ARG(CameraConfiguration, requested));
+}
+
+void CameraMainWindow::applyCameraRoiInputs()
+{
+    const int resolution_index = camera_resolution_combo_->currentData().toInt();
+    const auto option = std::find_if(
+        camera_capabilities_.resolutions.begin(), camera_capabilities_.resolutions.end(),
+        [resolution_index](const CameraResolutionOption& value) {
+            return value.index == resolution_index;
+        });
+    if (option == camera_capabilities_.resolutions.end()) return;
+    const int x = std::clamp(camera_roi_spins_[0]->value(), 0, option->width - 1);
+    const int y = std::clamp(camera_roi_spins_[1]->value(), 0, option->height - 1);
+    const int width = std::clamp(camera_roi_spins_[2]->value(), 1, option->width - x);
+    const int height = std::clamp(camera_roi_spins_[3]->value(), 1, option->height - y);
+    camera_ui_updating_ = true;
+    camera_roi_spins_[0]->setValue(x);
+    camera_roi_spins_[1]->setValue(y);
+    camera_roi_spins_[2]->setValue(width);
+    camera_roi_spins_[3]->setValue(height);
+    camera_ui_updating_ = false;
+    applyCameraConfigurationFromUi();
+}
+
+void CameraMainWindow::resetCameraRoi()
+{
+    camera_ui_updating_ = true;
+    for (QSpinBox* spin : camera_roi_spins_) spin->setValue(0);
+    camera_ui_updating_ = false;
+    applyCameraConfigurationFromUi();
+}
+
+void CameraMainWindow::startCameraRoiSelection()
+{
+    if (!camera_open_ || !camera_capabilities_.has_roi || latest_camera_image_.isNull()) return;
+    if (camera_configuration_.roi.Enabled()) {
+        camera_roi_selection_pending_ = true;
+        camera_feedback_label_->setText(tr("正在恢复全幅，随后进入 ROI 框选…"));
+        resetCameraRoi();
+        return;
+    }
+    camera_roi_previous_tool_ = canvas_->tool();
+    camera_roi_previous_edge_snapping_ = canvas_->edgeSnappingEnabled();
+    canvas_->setEdgeSnappingEnabled(false);
+    canvas_->setTool(CanvasTool::CameraRoi);
+    camera_feedback_label_->setText(tr("在画面中拖动框选 ROI，按 Esc 取消"));
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("warning"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
+    canvas_->setFocus();
+}
+
+void CameraMainWindow::restoreToolAfterCameraRoi(const QString& message)
+{
+    canvas_->setEdgeSnappingEnabled(camera_roi_previous_edge_snapping_);
+    canvas_->setTool(camera_roi_previous_tool_);
+    camera_feedback_label_->setText(message);
+    camera_feedback_label_->setProperty("feedbackState", QStringLiteral("info"));
+    camera_feedback_label_->style()->unpolish(camera_feedback_label_);
+    camera_feedback_label_->style()->polish(camera_feedback_label_);
 }
 
 void CameraMainWindow::onCameraFrame(QImage image, quint64 sequence, quint32 timestamp)
 {
-    latest_camera_frame_ = imageFrameFromQImage(image, sequence, timestamp);
-    if (!busy_ && !live_stitch_active_ && !smart_count_session_active_) {
-        setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
+    const bool first_frame = latest_camera_image_.isNull();
+    latest_camera_image_ = std::move(image);
+    latest_camera_sequence_ = sequence;
+    latest_camera_timestamp_ = timestamp;
+    if (live_stitch_active_) {
+        canvas_->setLivePreviewOverlay(latest_camera_image_);
+    } else if (!busy_ && !smart_count_session_active_) {
+        if (hasNeutralPresentation()) {
+            presentLiveCameraImage();
+        } else {
+            setCurrentFrame(latestCameraFrame(), tr("MUCam 实时预览"), QStringLiteral("camera-live"));
+        }
     }
+    if (camera_open_) {
+        if (!preview_fps_timer_.isValid()) {
+            preview_fps_timer_.start();
+        }
+        ++preview_frames_since_sample_;
+        const qint64 elapsed_ms = preview_fps_timer_.elapsed();
+        if (elapsed_ms >= 500) {
+            const double fps = static_cast<double>(preview_frames_since_sample_) * 1000.0 /
+                static_cast<double>(elapsed_ms);
+            camera_telemetry_label_->setText(tr("分辨率 %1 × %2  ·  FPS %3  ·  %4  ·  8 位")
+                .arg(latest_camera_image_.width())
+                .arg(latest_camera_image_.height())
+                .arg(fps, 0, 'f', 1)
+                .arg(cameraFrameFormatName(camera_capabilities_.frame_format)));
+            preview_fps_label_->setText(tr("FPS %1").arg(fps, 0, 'f', 1));
+            preview_frames_since_sample_ = 0;
+            preview_fps_timer_.restart();
+        }
+    }
+    if (FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) {
+        updateFluorescenceCaptureUi();
+    }
+    if (camera_open_) {
+        QMetaObject::invokeMethod(camera_worker_, "frameConsumed", Qt::QueuedConnection);
+    }
+    if (first_frame) {
+        updateCameraControlAvailability();
+        updateToolbarActionStates();
+    }
+}
+
+void CameraMainWindow::presentLiveCameraImage()
+{
+    if (latest_camera_image_.isNull()) return;
+    const QString identity = QStringLiteral("camera-live");
+    const bool source_changed = current_source_identity_ != identity;
+    if (source_changed) {
+        profile_line_points_.clear();
+        if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
+        smart_target_samples_.clear();
+        smart_target_result_ = {};
+        smart_count_session_active_ = false;
+        updateSmartTargetUi();
+        current_frame_ = {};
+        current_source_ = tr("MUCam 实时预览");
+        current_source_identity_ = identity;
+        rebuildOverlays();
+    }
+    ++image_generation_;
+    display_frame_ = {};
+    source_label_->setText(tr("%1 · %2 × %3")
+        .arg(current_source_)
+        .arg(latest_camera_image_.width())
+        .arg(latest_camera_image_.height()));
+    if (export_action_) export_action_->setEnabled(true);
+    canvas_->setImage(latest_camera_image_);
+    canvas_->setProperty("directCameraPreview", true);
+    canvas_->setProperty("cameraPreviewSequence", QVariant::fromValue<qulonglong>(latest_camera_sequence_));
+    if (yolo_workspace_ && function_tabs_ && function_tabs_->currentWidget() == yolo_workspace_) {
+        yolo_workspace_->setCurrentImage(
+            latest_camera_image_, current_source_, current_source_identity_);
+    }
+    updateLiveHistogram();
+    if (source_changed) updateToolbarActionStates();
+}
+
+bool CameraMainWindow::hasNeutralPresentation() const
+{
+    return (!brightness_slider_ || brightness_slider_->value() == 0) &&
+        (!contrast_slider_ || contrast_slider_->value() == 0) &&
+        (!gamma_slider_ || gamma_slider_->value() == 10) &&
+        (!level_slider_ || level_slider_->value() == 128) &&
+        (!width_slider_ || width_slider_->value() == 256) &&
+        palette_ == PseudoColorPalette::Original &&
+        image_filter_pipeline_.empty() &&
+        (!fusion_enabled_ || channels_.empty());
+}
+
+ImageFrame CameraMainWindow::latestCameraFrame() const
+{
+    return latest_camera_image_.isNull()
+        ? ImageFrame{}
+        : imageFrameFromQImage(
+            latest_camera_image_, latest_camera_sequence_, latest_camera_timestamp_);
+}
+
+ImageFrame CameraMainWindow::sourceFrame() const
+{
+    if (current_source_identity_ == QStringLiteral("camera-live") && !latest_camera_image_.isNull()) {
+        return latestCameraFrame();
+    }
+    return current_frame_;
+}
+
+void CameraMainWindow::updateLiveHistogram()
+{
+    if (!histogram_ || !histogram_->isVisible()) return;
+    if (!live_histogram_timer_.isValid()) {
+        live_histogram_timer_.start();
+    } else if (live_histogram_timer_.elapsed() < 250) {
+        return;
+    } else {
+        live_histogram_timer_.restart();
+    }
+    const ImageFrame frame = latestCameraFrame();
+    if (!frame.IsValid()) return;
+    const HistogramData data = ComputeHistogram(frame, histogram_channel_);
+    const QColor colors[] = {
+        QColor(120, 190, 255), QColor(239, 68, 68), QColor(34, 197, 94), QColor(59, 130, 246)};
+    histogram_->setHistogram(data, colors[static_cast<int>(histogram_channel_)]);
 }
 
 void CameraMainWindow::setCurrentFrame(
@@ -1438,59 +3506,58 @@ void CameraMainWindow::setCurrentFrame(
     current_frame_ = std::move(frame);
     current_source_ = source;
     current_source_identity_ = new_identity;
-    if (export_action_) export_action_->setEnabled(current_frame_.IsValid());
     source_label_->setText(tr("%1 · %2 × %3")
         .arg(source)
         .arg(current_frame_.width)
         .arg(current_frame_.height));
-    export_action_->setEnabled(current_frame_.IsValid());
     updateImagePresentation();
+    updateToolbarActionStates();
 }
 
 void CameraMainWindow::updateImageFilterControls()
 {
-    if (!image_filter_combo_ || !image_filter_parameter_spin_ || !image_filter_parameter_label_) return;
+    if (!image_filter_combo_ || !image_filter_parameter_slider_ || !image_filter_parameter_label_) return;
     const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
-    image_filter_parameter_spin_->setSuffix({});
+    image_filter_parameter_slider_->setSuffix({});
     switch (kind) {
     case ImageFilterKind::GaussianBlur:
         image_filter_parameter_label_->setText(tr("模糊半径"));
-        image_filter_parameter_spin_->setRange(1, 10);
-        image_filter_parameter_spin_->setValue(2);
-        image_filter_parameter_spin_->setSuffix(tr(" px"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(1, 10);
+        image_filter_parameter_slider_->setValue(2);
+        image_filter_parameter_slider_->setSuffix(tr(" px"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::MedianDenoise:
         image_filter_parameter_label_->setText(tr("降噪半径"));
-        image_filter_parameter_spin_->setRange(1, 3);
-        image_filter_parameter_spin_->setValue(1);
-        image_filter_parameter_spin_->setSuffix(tr(" px"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(1, 3);
+        image_filter_parameter_slider_->setValue(1);
+        image_filter_parameter_slider_->setSuffix(tr(" px"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::Sharpen:
         image_filter_parameter_label_->setText(tr("增强强度"));
-        image_filter_parameter_spin_->setRange(10, 300);
-        image_filter_parameter_spin_->setValue(100);
-        image_filter_parameter_spin_->setSuffix(tr(" %"));
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(10, 300);
+        image_filter_parameter_slider_->setValue(100);
+        image_filter_parameter_slider_->setSuffix(tr(" %"));
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::EdgeDetection:
         image_filter_parameter_label_->setText(tr("边缘阈值（0 为连续灰度）"));
-        image_filter_parameter_spin_->setRange(0, 255);
-        image_filter_parameter_spin_->setValue(40);
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(0, 255);
+        image_filter_parameter_slider_->setValue(40);
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     case ImageFilterKind::BinaryThreshold:
         image_filter_parameter_label_->setText(tr("二值阈值"));
-        image_filter_parameter_spin_->setRange(0, 255);
-        image_filter_parameter_spin_->setValue(128);
-        image_filter_parameter_spin_->setEnabled(true);
+        image_filter_parameter_slider_->setRange(0, 255);
+        image_filter_parameter_slider_->setValue(128);
+        image_filter_parameter_slider_->setEnabled(true);
         break;
     default:
         image_filter_parameter_label_->setText(tr("参数（当前功能无需设置）"));
-        image_filter_parameter_spin_->setRange(0, 0);
-        image_filter_parameter_spin_->setValue(0);
-        image_filter_parameter_spin_->setEnabled(false);
+        image_filter_parameter_slider_->setRange(0, 0);
+        image_filter_parameter_slider_->setValue(0);
+        image_filter_parameter_slider_->setEnabled(false);
         break;
     }
 }
@@ -1523,7 +3590,7 @@ void CameraMainWindow::applySelectedImageFilter()
         return;
     }
     const ImageFilterKind kind = static_cast<ImageFilterKind>(image_filter_combo_->currentData().toInt());
-    image_filter_pipeline_.push_back({kind, image_filter_parameter_spin_->value()});
+    image_filter_pipeline_.push_back({kind, image_filter_parameter_slider_->integerValue()});
     if (smart_count_cancel_token_) smart_count_cancel_token_->store(true);
     smart_target_result_ = {};
     ++image_generation_;
@@ -1579,9 +3646,24 @@ void CameraMainWindow::updateImagePresentation()
         histogram_channel_ = static_cast<HistogramChannel>(histogram_channel_combo_->currentIndex());
     }
 
-    const bool showing_fusion = fusion_enabled_ && !channels_.empty();
-    ImageFrame presentation_source = showing_fusion
-        ? ChannelFusionEngine::Fuse(channels_) : current_frame_;
+    bool showing_fusion = fusion_enabled_ && !channels_.empty();
+    if (!showing_fusion && current_source_identity_ == QStringLiteral("camera-live") &&
+        !latest_camera_image_.isNull() && hasNeutralPresentation()) {
+        presentLiveCameraImage();
+        return;
+    }
+    ImageFrame presentation_source;
+    if (showing_fusion) {
+        FluorescenceFusionOptions fusion_options;
+        fusion_options.blend_mode = fluorescence_blend_mode_;
+        presentation_source = ChannelFusionEngine::Fuse(channels_, fusion_options);
+        if (!presentation_source.IsValid()) {
+            showing_fusion = false;
+            presentation_source = sourceFrame();
+        }
+    } else {
+        presentation_source = sourceFrame();
+    }
     if (presentation_source.IsValid()) {
         ImageFrame adjusted = showing_fusion
             ? std::move(presentation_source) : ApplyAdjustments(presentation_source, adjustments_);
@@ -1590,13 +3672,18 @@ void CameraMainWindow::updateImagePresentation()
     } else {
         display_frame_ = {};
     }
-    canvas_->setImage(qImageFromFrame(display_frame_));
-    if (yolo_workspace_) {
+    const QImage presentation_image = qImageFromFrame(display_frame_);
+    canvas_->setImage(presentation_image);
+    canvas_->setProperty("directCameraPreview", false);
+    if (yolo_workspace_ &&
+        (current_source_identity_ != QStringLiteral("camera-live") ||
+         (function_tabs_ && function_tabs_->currentWidget() == yolo_workspace_))) {
         yolo_workspace_->setCurrentImage(
-            qImageFromFrame(display_frame_), current_source_, current_source_identity_);
+            presentation_image, current_source_, current_source_identity_);
     }
     rebuildOverlays();
-    if (histogram_) {
+    if (histogram_ &&
+        (current_source_identity_ != QStringLiteral("camera-live") || histogram_->isVisible())) {
         const HistogramData data = ComputeHistogram(display_frame_, histogram_channel_);
         const QColor colors[] = {
             QColor(120, 190, 255), QColor(239, 68, 68), QColor(34, 197, 94), QColor(59, 130, 246)};
@@ -1606,12 +3693,26 @@ void CameraMainWindow::updateImagePresentation()
 
 ImageFrame CameraMainWindow::currentVisibleFrame() const
 {
-    return display_frame_.IsValid() ? display_frame_ : current_frame_;
+    return display_frame_.IsValid() ? display_frame_ : sourceFrame();
 }
 
 void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
 {
     std::optional<MeasurementReference> added_measurement;
+    if (tool == CanvasTool::CameraRoi && points.size() == 2) {
+        const QRectF bounds(points[0], points[1]);
+        const QRectF normalized = bounds.normalized().intersected(
+            QRectF(0.0, 0.0, latest_camera_image_.width(), latest_camera_image_.height()));
+        camera_ui_updating_ = true;
+        camera_roi_spins_[0]->setValue(std::max(0, static_cast<int>(std::floor(normalized.left()))));
+        camera_roi_spins_[1]->setValue(std::max(0, static_cast<int>(std::floor(normalized.top()))));
+        camera_roi_spins_[2]->setValue(std::max(1, static_cast<int>(std::ceil(normalized.width()))));
+        camera_roi_spins_[3]->setValue(std::max(1, static_cast<int>(std::ceil(normalized.height()))));
+        camera_ui_updating_ = false;
+        restoreToolAfterCameraRoi(tr("ROI 已框选，正在应用…"));
+        applyCameraRoiInputs();
+        return;
+    }
     if (ai_annotation_active_ && yolo_workspace_ &&
         (tool == CanvasTool::Rectangle || tool == CanvasTool::Polygon)) {
         ai_annotation_active_ = false;
@@ -1642,16 +3743,46 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
         return;
     }
     if (tool == CanvasTool::Calibration && points.size() == 2) {
-        const MeasurementUnit unit = calibration_unit_combo_->currentIndex() == 0
-            ? MeasurementUnit::Micrometers : MeasurementUnit::Millimeters;
-        calibration_ = CalibrationProfile::FromTwoPointCalibration(
-            imagePoint(points[0]), imagePoint(points[1]), calibration_length_spin_->value(), unit);
-        if (!calibration_.IsCalibrated()) {
-            QMessageBox::warning(this, tr("标定失败"), tr("两个标定点不能重合。"));
-        } else {
-            calibration_label_->setText(tr("%1 µm / px").arg(calibration_.MicronsPerPixel(), 0, 'g', 7));
-            statusBar()->showMessage(tr("标定已完成"), 5000);
+        const double pixel_distance = QLineF(points[0], points[1]).length();
+        if (!std::isfinite(pixel_distance) || pixel_distance < 1.0) {
+            QMessageBox::warning(this, tr("标定失败"), tr("两个标定点距离太近，请重新选择。"));
+            setMeasurementTool(CanvasTool::Calibration, tr("请重新选择距离更远的两个标定点"));
+            return;
         }
+
+        const MeasurementUnit initial_unit = CalibrationProfile::CalibrationUnitAtIndex(
+            calibration_unit_combo_->currentIndex());
+        CalibrationDialog dialog(
+            pixel_distance, calibration_length_spin_->value(), initial_unit, this);
+        dialog.setWindowTitle(tr("%1 物镜两点标定").arg(currentObjectiveLabel()));
+        if (dialog.exec() != QDialog::Accepted) {
+            canvas_->setTool(CanvasTool::None);
+            statusBar()->showMessage(tr("已取消标定，原标定未改变"), 3500);
+            return;
+        }
+
+        const CalibrationProfile candidate = dialog.profile();
+        if (!candidate.IsCalibrated()) {
+            QMessageBox::warning(this, tr("标定失败"), tr("真实长度必须大于零。"));
+            setMeasurementTool(CanvasTool::Calibration, tr("请重新选择标定线的两个端点"));
+            return;
+        }
+
+        calibration_length_spin_->setValue(dialog.realLength());
+        calibration_unit_combo_->setCurrentIndex(
+            dialog.unit() == MeasurementUnit::Millimeters ? 1 : 0);
+        calibration_ = candidate;
+        if (selected_objective_index_ >= 0 &&
+            selected_objective_index_ < static_cast<int>(objective_calibrations_.size())) {
+            objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)] = calibration_;
+        }
+        updateCalibrationUi();
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(
+            tr("%1 物镜标定已完成（%2 px），已有测量结果已重新换算")
+                .arg(currentObjectiveLabel())
+                .arg(pixel_distance, 0, 'f', 2),
+            5000);
     } else if (tool == CanvasTool::ProfileLine && points.size() == 2) {
         profile_line_points_ = points;
         const ImageFrame frame = currentVisibleFrame();
@@ -1715,10 +3846,18 @@ void CameraMainWindow::onCanvasPoints(CanvasTool tool, QVector<QPointF> points)
             MeasurementNameFormatter::NextDefaultName(MeasurementKind::Ellipse, measurements_),
             imagePoint(points[0]), imagePoint(points[1]));
     }
-    canvas_->setTool(CanvasTool::None);
+    const bool repeatable_measurement = added_measurement.has_value() ||
+        tool == CanvasTool::ProfileLine;
+    if (!repeatable_measurement) {
+        canvas_->setTool(CanvasTool::None);
+    }
+    if (added_measurement) {
+        measurements_.SetStyle(*added_measurement, global_measurement_style_);
+    }
     updateMeasurementList();
     if (added_measurement) {
         measurement_list_->setCurrentRow(static_cast<int>(measurements_.FlatIndexOf(*added_measurement)));
+        statusBar()->showMessage(tr("测量已添加，可继续使用当前工具测量"), 3000);
     }
 }
 
@@ -1726,7 +3865,7 @@ void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
 {
     if (!currentVisibleFrame().IsValid()) {
         canvas_->setTool(CanvasTool::None);
-        QMessageBox::information(this, tr("测量"), tr("请先打开图像或连接相机。"));
+        statusBar()->showMessage(tr("请先打开图像或连接相机"), 3000);
         return;
     }
     ai_annotation_active_ = false;
@@ -1750,14 +3889,103 @@ void CameraMainWindow::updateMeasurementList()
     if (measurement_list_->count() > 0) {
         measurement_list_->setCurrentRow(std::clamp(previous, 0, measurement_list_->count() - 1));
     }
+    updateMeasurementStyleUi();
     rebuildOverlays();
+    updateToolbarActionStates();
+}
+
+void CameraMainWindow::updateCalibrationUi()
+{
+    if (!calibration_label_) {
+        return;
+    }
+    calibration_label_->setText(calibration_.IsCalibrated()
+        ? tr("%1：%2 µm / px")
+              .arg(currentObjectiveLabel())
+              .arg(calibration_.MicronsPerPixel(), 0, 'g', 10)
+        : tr("%1：未标定").arg(currentObjectiveLabel()));
+}
+
+void CameraMainWindow::selectObjective(int index, bool rememberSelection)
+{
+    if (objective_labels_.empty() || objective_calibrations_.empty()) {
+        return;
+    }
+    selected_objective_index_ = std::clamp(
+        index, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+    updateCalibrationUi();
+    updateMeasurementList();
+    if (rememberSelection) {
+        saveObjectiveCalibrationMemory();
+        statusBar()->showMessage(calibration_.IsCalibrated()
+            ? tr("已切换到 %1 物镜，并恢复该倍率标定").arg(currentObjectiveLabel())
+            : tr("已切换到 %1 物镜；该倍率尚未标定").arg(currentObjectiveLabel()),
+            3500);
+    }
+}
+
+void CameraMainWindow::refreshObjectiveControls()
+{
+    if (!objective_combo_ || objective_labels_.empty()) return;
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    const QSignalBlocker blocker(objective_combo_);
+    objective_combo_->clear();
+    for (std::size_t index = 0; index < objective_labels_.size(); ++index) {
+        const QString label = QString::fromStdWString(objective_labels_[index]);
+        const CalibrationProfile profile = index < objective_calibrations_.size()
+            ? objective_calibrations_[index] : CalibrationProfile::Uncalibrated();
+        objective_combo_->addItem(profile.IsCalibrated()
+            ? tr("%1  ·  %2 µm/px").arg(label).arg(profile.MicronsPerPixel(), 0, 'g', 8)
+            : tr("%1  ·  未标定").arg(label));
+    }
+    objective_combo_->setCurrentIndex(selected_objective_index_);
+    updateCalibrationUi();
+    updateMeasurementList();
+}
+
+void CameraMainWindow::loadObjectiveCalibrationMemory()
+{
+    QSettings settings;
+    ObjectiveCalibrationState state = ObjectiveCalibrationSettings::Load(settings);
+    objective_labels_ = std::move(state.labels);
+    objective_calibrations_ = std::move(state.calibrations);
+    selected_objective_index_ = state.selected_index;
+    if (objective_calibrations_.size() < objective_labels_.size()) {
+        objective_calibrations_.resize(
+            objective_labels_.size(), CalibrationProfile::Uncalibrated());
+    }
+    selected_objective_index_ = std::clamp(
+        selected_objective_index_, 0, static_cast<int>(objective_labels_.size()) - 1);
+    calibration_ = objective_calibrations_[static_cast<std::size_t>(selected_objective_index_)];
+    refreshObjectiveControls();
+}
+
+void CameraMainWindow::saveObjectiveCalibrationMemory() const
+{
+    QSettings settings;
+    ObjectiveCalibrationSettings::Save(settings, ObjectiveCalibrationState{
+        objective_labels_, objective_calibrations_, selected_objective_index_});
+}
+
+QString CameraMainWindow::currentObjectiveLabel() const
+{
+    if (selected_objective_index_ < 0 ||
+        selected_objective_index_ >= static_cast<int>(objective_labels_.size())) {
+        return tr("未知倍率");
+    }
+    return QString::fromStdWString(
+        objective_labels_[static_cast<std::size_t>(selected_objective_index_)]);
 }
 
 QVector<CanvasOverlay> CameraMainWindow::measurementOverlays() const
 {
     QVector<CanvasOverlay> overlays;
     const int selected = measurement_list_ ? measurement_list_->currentRow() : -1;
-    auto append = [&overlays, selected](CanvasOverlay overlay) {
+    auto append = [this, &overlays, selected](CanvasOverlay overlay) {
+        overlay.color = QColor(global_measurement_style_.red,
+            global_measurement_style_.green, global_measurement_style_.blue);
         overlay.highlighted = overlays.size() == selected;
         overlay.editable = true;
         overlay.source_index = overlays.size();
@@ -1914,6 +4142,126 @@ void CameraMainWindow::focusSelectedMeasurement()
     }
 }
 
+void CameraMainWindow::enterMeasurementSelectionMode()
+{
+    ai_annotation_active_ = false;
+    canvas_->setTool(CanvasTool::None);
+    canvas_->setFocus(Qt::OtherFocusReason);
+    statusBar()->showMessage(
+        tr("选择模式：单击选择测量，拖动控制点修改形状，拖动对象整体移动"), 5000);
+}
+
+void CameraMainWindow::renameSelectedMeasurement()
+{
+    const int row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const std::optional<MeasurementReference> reference = row >= 0
+        ? measurements_.AtFlatIndex(static_cast<std::size_t>(row)) : std::nullopt;
+    if (!reference) {
+        statusBar()->showMessage(tr("请先选择要重命名的测量结果"), 2500);
+        return;
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        this, tr("重命名测量"), tr("名称"), QLineEdit::Normal,
+        QString::fromStdWString(measurements_.Name(*reference)), &accepted).trimmed();
+    if (accepted && !name.isEmpty() && measurements_.SetName(*reference, name.toStdWString())) {
+        updateMeasurementList();
+        statusBar()->showMessage(tr("测量名称已更新：%1").arg(name), 2500);
+    }
+}
+
+void CameraMainWindow::chooseSelectedMeasurementColor()
+{
+    const QColor current(global_measurement_style_.red,
+        global_measurement_style_.green, global_measurement_style_.blue);
+    const QColor selected = QColorDialog::getColor(
+        current, this, tr("设置全局测量颜色"), QColorDialog::DontUseNativeDialog);
+    if (!selected.isValid()) return;
+    global_measurement_style_ = {
+        static_cast<std::uint8_t>(selected.red()),
+        static_cast<std::uint8_t>(selected.green()),
+        static_cast<std::uint8_t>(selected.blue())};
+    applyGlobalMeasurementColor();
+    saveMeasurementPreferences();
+    updateMeasurementStyleUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("全局测量颜色已更新，并应用到全部测量"), 3000);
+}
+
+void CameraMainWindow::resetSelectedMeasurementColor()
+{
+    global_measurement_style_ = {76, 201, 240};
+    applyGlobalMeasurementColor();
+    saveMeasurementPreferences();
+    updateMeasurementStyleUi();
+    rebuildOverlays();
+    statusBar()->showMessage(tr("已恢复系统默认测量颜色"), 2500);
+}
+
+void CameraMainWindow::updateMeasurementStyleUi()
+{
+    if (!measurement_color_button_ && !measurement_color_action_) return;
+    if (measurement_color_button_) measurement_color_button_->setEnabled(true);
+    if (measurement_reset_color_button_) measurement_reset_color_button_->setEnabled(true);
+    const QColor color(global_measurement_style_.red,
+        global_measurement_style_.green, global_measurement_style_.blue);
+    QPixmap swatch(30, 30);
+    swatch.fill(color);
+    const QString tool_tip = tr("设置全局测量颜色（%1），适用于现有及后续测量")
+        .arg(color.name(QColor::HexRgb).toUpper());
+    if (measurement_color_button_) {
+        measurement_color_button_->setIcon(QIcon(swatch));
+        measurement_color_button_->setIconSize(swatch.size());
+        measurement_color_button_->setToolTip(tool_tip);
+    }
+    if (measurement_color_action_) {
+        measurement_color_action_->setIcon(QIcon(swatch));
+        measurement_color_action_->setToolTip(tool_tip);
+        measurement_color_action_->setProperty("baseToolTip", tool_tip);
+        if (main_toolbar_) {
+            if (auto* toolbar_button = qobject_cast<QToolButton*>(
+                    main_toolbar_->widgetForAction(measurement_color_action_))) {
+                toolbar_button->setIconSize(swatch.size());
+            }
+        }
+    }
+}
+
+void CameraMainWindow::applyGlobalMeasurementColor()
+{
+    measurements_.SetStyles(std::vector<MeasurementOverlayStyle>(
+        measurements_.Count(), global_measurement_style_));
+}
+
+void CameraMainWindow::loadMeasurementPreferences()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Measurement"));
+    const QColor color = settings.value(
+        QStringLiteral("globalColor"), QColor(76, 201, 240)).value<QColor>();
+    settings.endGroup();
+    if (color.isValid()) {
+        global_measurement_style_ = {
+            static_cast<std::uint8_t>(color.red()),
+            static_cast<std::uint8_t>(color.green()),
+            static_cast<std::uint8_t>(color.blue())};
+    }
+    applyGlobalMeasurementColor();
+    updateMeasurementStyleUi();
+}
+
+void CameraMainWindow::saveMeasurementPreferences() const
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("Measurement"));
+    settings.setValue(QStringLiteral("globalColor"), QColor(
+        global_measurement_style_.red,
+        global_measurement_style_.green,
+        global_measurement_style_.blue));
+    settings.endGroup();
+    settings.sync();
+}
+
 QVector<CanvasOverlay> CameraMainWindow::smartTargetOverlays() const
 {
     QVector<CanvasOverlay> overlays;
@@ -1950,6 +4298,16 @@ void CameraMainWindow::rebuildOverlays()
 
 void CameraMainWindow::clearMeasurements()
 {
+    if (measurements_.Empty()) return;
+    if (QMessageBox::question(
+            this, tr("清空全部测量"),
+            tr("确定清空全部 %1 项测量结果吗？此操作无法撤销。")
+                .arg(static_cast<qulonglong>(measurements_.Count())),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) != QMessageBox::Yes) {
+        statusBar()->showMessage(tr("已取消清空，当前工具和选择保持不变"), 2500);
+        return;
+    }
     measurements_.Clear();
     profile_line_points_.clear();
     updateMeasurementList();
@@ -2000,9 +4358,10 @@ void CameraMainWindow::updateSmartTargetUi()
             (SmartTargetCounter::IsAvailable() && !smart_target_samples_.empty() && currentVisibleFrame().IsValid()));
     }
     if (smart_select_button_) smart_select_button_->setEnabled(!smart_count_running_);
-    if (smart_similarity_spin_) smart_similarity_spin_->setEnabled(!smart_count_running_);
-    if (smart_scale_tolerance_spin_) smart_scale_tolerance_spin_->setEnabled(!smart_count_running_);
+    if (smart_similarity_slider_) smart_similarity_slider_->setEnabled(!smart_count_running_);
+    if (smart_scale_tolerance_slider_) smart_scale_tolerance_slider_->setEnabled(!smart_count_running_);
     if (smart_count_progress_) smart_count_progress_->setVisible(smart_count_running_);
+    updateToolbarActionStates();
 }
 
 void CameraMainWindow::startSmartTargetSampleSelection()
@@ -2042,8 +4401,8 @@ void CameraMainWindow::runSmartTargetCounting()
 
     canvas_->setTool(CanvasTool::None);
     SmartTargetCountOptions options;
-    options.similarity_threshold = smart_similarity_spin_->value();
-    options.scale_tolerance = smart_scale_tolerance_spin_->value() / 100.0;
+    options.similarity_threshold = smart_similarity_slider_->value();
+    options.scale_tolerance = smart_scale_tolerance_slider_->value() / 100.0;
     options.scale_steps = options.scale_tolerance > 0.0 ? 5 : 1;
     const std::vector<SmartTargetRegion> samples = smart_target_samples_;
     const quint64 generation = image_generation_;
@@ -2131,7 +4490,8 @@ void CameraMainWindow::exportMeasurements()
     }
     std::wstring error;
     if (!MeasurementCsvExporter::Save(
-            std::filesystem::path(file_name.toStdWString()), measurements_, calibration_, display_unit_, L"Default", error)) {
+            std::filesystem::path(file_name.toStdWString()), measurements_, calibration_, display_unit_,
+            currentObjectiveLabel().toStdWString(), error)) {
         QMessageBox::warning(this, tr("导出失败"), errorText(error));
         return;
     }
@@ -2155,9 +4515,195 @@ void CameraMainWindow::startProfileMeasurement()
     setMeasurementTool(CanvasTool::ProfileLine, tr("请在图像上选择剖线的两个端点"));
 }
 
+void CameraMainWindow::showPointCloudWorkspace()
+{
+    auto* dialog = new PointCloudDialog(this);
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+    statusBar()->showMessage(tr("已打开 3D 点云工作台"), 3000);
+}
+
+void CameraMainWindow::refreshFluorescencePresetList(int selectedRow)
+{
+    if (!fluorescence_preset_list_) return;
+    if (selectedRow < 0) selectedRow = fluorescence_preset_list_->currentRow();
+    const QSignalBlocker blocker(fluorescence_preset_list_);
+    fluorescence_preset_list_->clear();
+    for (std::size_t index = 0; index < fluorescence_capture_presets_.size(); ++index) {
+        const FluorescenceCapturePreset& preset = fluorescence_capture_presets_[index];
+        auto* item = new QListWidgetItem(tr("%1. %2  ·  %3 ms")
+            .arg(index + 1)
+            .arg(QString::fromStdWString(preset.dye_name))
+            .arg(preset.exposure_ms, 0, 'f', 2));
+        item->setForeground(QColor(preset.color.r, preset.color.g, preset.color.b));
+        fluorescence_preset_list_->addItem(item);
+    }
+    if (!fluorescence_capture_presets_.empty()) {
+        fluorescence_preset_list_->setCurrentRow(std::clamp(
+            selectedRow, 0, static_cast<int>(fluorescence_capture_presets_.size()) - 1));
+    }
+    updateFluorescencePresetEditor();
+    updateFluorescenceCaptureUi();
+}
+
+void CameraMainWindow::updateFluorescencePresetEditor()
+{
+    if (!fluorescence_preset_list_ || !fluorescence_preset_exposure_spin_ ||
+        !fluorescence_preset_color_button_ || !dye_combo_) return;
+    const int row = fluorescence_preset_list_->currentRow();
+    if (row >= 0 && row < static_cast<int>(fluorescence_capture_presets_.size())) {
+        const FluorescenceCapturePreset& preset =
+            fluorescence_capture_presets_[static_cast<std::size_t>(row)];
+        fluorescence_preset_exposure_spin_->setValue(preset.exposure_ms);
+        fluorescence_preset_editor_color_ = preset.color;
+        for (std::size_t index = 0; index < dyes_.size(); ++index) {
+            if (dyes_[index].name == preset.dye_name) {
+                const QSignalBlocker blocker(dye_combo_);
+                dye_combo_->setCurrentIndex(static_cast<int>(index));
+                break;
+            }
+        }
+    } else if (dye_combo_->currentIndex() >= 0 &&
+        dye_combo_->currentIndex() < static_cast<int>(dyes_.size())) {
+        fluorescence_preset_editor_color_ =
+            dyes_[static_cast<std::size_t>(dye_combo_->currentIndex())].color;
+    }
+    const QColor color(fluorescence_preset_editor_color_.r,
+        fluorescence_preset_editor_color_.g, fluorescence_preset_editor_color_.b);
+    QPixmap swatch(22, 22);
+    swatch.fill(color);
+    fluorescence_preset_color_button_->setIcon(QIcon(swatch));
+    fluorescence_preset_color_button_->setIconSize(swatch.size());
+    fluorescence_preset_color_button_->setText(
+        tr("伪彩 %1").arg(color.name(QColor::HexRgb).toUpper()));
+}
+
+void CameraMainWindow::saveFluorescenceCapturePresets() const
+{
+    QSettings settings;
+    FluorescenceCaptureSettings::Save(settings, fluorescence_capture_presets_);
+}
+
+void CameraMainWindow::startFluorescenceCaptureSequence()
+{
+    if (fluorescence_capture_presets_.empty()) {
+        QMessageBox::information(this, tr("逐通道采集"), tr("请先建立至少一个采集预设。"));
+        return;
+    }
+    if (!camera_open_) {
+        QMessageBox::information(this, tr("逐通道采集"), tr("请先打开相机。"));
+        return;
+    }
+    if (!channels_.empty() && QMessageBox::question(
+            this, tr("逐通道采集"),
+            tr("开始新序列会清除当前已采集的荧光通道，是否继续？")) != QMessageBox::Yes) {
+        return;
+    }
+    channels_.clear();
+    fusion_check_->setChecked(false);
+    FluorescenceCaptureSequence::Start(
+        fluorescence_capture_state_, fluorescence_capture_presets_.size());
+    refreshFluorescenceChannelList();
+    applyCurrentFluorescencePreset();
+}
+
+void CameraMainWindow::applyCurrentFluorescencePreset()
+{
+    if (!FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) return;
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    if (!FluorescenceCaptureSequence::RequestExposure(
+            fluorescence_capture_state_, preset.exposure_ms,
+            latest_camera_sequence_)) return;
+    {
+        const QSignalBlocker blocker(exposure_spin_);
+        exposure_spin_->setValue(preset.exposure_ms);
+    }
+    QMetaObject::invokeMethod(camera_worker_, "setExposure", Qt::QueuedConnection,
+        Q_ARG(double, preset.exposure_ms));
+    updateFluorescenceCaptureUi();
+    statusBar()->showMessage(tr("已应用 %1 通道曝光 %2 ms；请切换对应滤光片并等待画面稳定")
+        .arg(QString::fromStdWString(preset.dye_name))
+        .arg(preset.exposure_ms, 0, 'f', 2), 6000);
+}
+
+void CameraMainWindow::captureCurrentFluorescencePreset()
+{
+    if (!FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_)) return;
+    if (!FluorescenceCaptureSequence::CanCapture(
+            fluorescence_capture_state_, latest_camera_sequence_)) {
+        statusBar()->showMessage(tr("正在等待曝光成功应用及新相机帧，请稍候。"), 2500);
+        return;
+    }
+    ImageFrame frame = latestCameraFrame();
+    if (!frame.IsValid()) {
+        statusBar()->showMessage(tr("当前没有可采集的相机帧。"), 2500);
+        return;
+    }
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    FluorescenceChannel channel;
+    channel.name = preset.dye_name;
+    channel.frame = std::move(frame);
+    channel.color = preset.color;
+    channel.exposure_ms = preset.exposure_ms;
+    channels_.push_back(std::move(channel));
+    refreshFluorescenceChannelList(static_cast<int>(channels_.size()) - 1);
+    const FluorescenceCaptureAdvance advance = FluorescenceCaptureSequence::Capture(
+        fluorescence_capture_state_, latest_camera_sequence_);
+    if (advance == FluorescenceCaptureAdvance::Complete) {
+        fusion_check_->setChecked(true);
+        showAllFluorescenceChannels();
+        updateFluorescenceCaptureUi();
+        statusBar()->showMessage(tr("全部荧光通道采集完成，已生成融合预览。"), 5000);
+        return;
+    }
+    applyCurrentFluorescencePreset();
+}
+
+void CameraMainWindow::cancelFluorescenceCaptureSequence()
+{
+    FluorescenceCaptureSequence::Cancel(fluorescence_capture_state_);
+    updateFluorescenceCaptureUi();
+    statusBar()->showMessage(tr("逐通道采集已取消，已采集通道予以保留。"), 3500);
+}
+
+void CameraMainWindow::updateFluorescenceCaptureUi()
+{
+    if (!fluorescence_capture_status_label_) return;
+    const bool active = FluorescenceCaptureSequence::IsActive(fluorescence_capture_state_);
+    fluorescence_capture_start_button_->setEnabled(!active && !fluorescence_capture_presets_.empty());
+    fluorescence_capture_button_->setEnabled(
+        FluorescenceCaptureSequence::CanCapture(
+            fluorescence_capture_state_, latest_camera_sequence_));
+    fluorescence_capture_cancel_button_->setEnabled(active);
+    fluorescence_preset_group_->setEnabled(!active);
+    if (!active) {
+        fluorescence_capture_status_label_->setText(
+            fluorescence_capture_presets_.empty()
+                ? tr("尚无采集预设。")
+                : tr("已配置 %1 个通道。开始后将依次应用曝光、采集并融合。")
+                    .arg(fluorescence_capture_presets_.size()));
+        return;
+    }
+    const FluorescenceCapturePreset& preset =
+        fluorescence_capture_presets_[static_cast<std::size_t>(
+            fluorescence_capture_state_.current_index)];
+    fluorescence_capture_status_label_->setText(
+        tr("步骤 %1/%2：%3，曝光 %4 ms。请切换对应滤光片，待画面稳定后采集。")
+            .arg(fluorescence_capture_state_.current_index + 1)
+            .arg(fluorescence_capture_presets_.size())
+            .arg(QString::fromStdWString(preset.dye_name))
+            .arg(preset.exposure_ms, 0, 'f', 2));
+}
+
 void CameraMainWindow::addFluorescenceChannel()
 {
-    if (!current_frame_.IsValid()) {
+    const ImageFrame frame = currentVisibleFrame();
+    if (!frame.IsValid()) {
         QMessageBox::information(this, tr("荧光通道"), tr("当前没有可添加的图像帧。"));
         return;
     }
@@ -2165,11 +4711,10 @@ void CameraMainWindow::addFluorescenceChannel()
     const DyeProfile dye = index >= 0 && index < static_cast<int>(dyes_.size())
         ? dyes_[static_cast<std::size_t>(index)] : DyeLibrary::FallbackDye();
     const FluorescenceChannelListActionResult result =
-        FluorescenceChannelListActions::AddCurrentFrame(channels_, current_frame_, dye);
+        FluorescenceChannelListActions::AddCurrentFrame(channels_, frame, dye);
     if (result.changed) {
-        const FluorescenceChannel& channel = channels_.back();
-        channel_list_->addItem(QString::fromStdWString(channel.name));
-        channel_list_->setCurrentRow(channel_list_->count() - 1);
+        channels_.back().exposure_ms = exposure_spin_->value();
+        refreshFluorescenceChannelList(static_cast<int>(channels_.size()) - 1);
         fusion_check_->setChecked(true);
     }
     statusBar()->showMessage(QString::fromStdWString(result.message), 4000);
@@ -2178,9 +4723,157 @@ void CameraMainWindow::addFluorescenceChannel()
 void CameraMainWindow::clearFluorescenceChannels()
 {
     FluorescenceChannelListActions::Clear(channels_);
-    channel_list_->clear();
+    refreshFluorescenceChannelList();
     fusion_check_->setChecked(false);
     updateImagePresentation();
+}
+
+void CameraMainWindow::refreshFluorescenceChannelList(int selectedRow)
+{
+    if (!channel_list_) {
+        return;
+    }
+    if (selectedRow < 0) {
+        selectedRow = channel_list_->currentRow();
+    }
+    const QSignalBlocker blocker(channel_list_);
+    channel_list_->clear();
+    for (const FluorescenceChannel& channel : channels_) {
+        channel_list_->addItem(
+            QString::fromStdWString(FluorescenceFormatter::FormatChannelLine(channel)));
+    }
+    if (!channels_.empty()) {
+        selectedRow = std::clamp(selectedRow, 0, static_cast<int>(channels_.size()) - 1);
+        channel_list_->setCurrentRow(selectedRow);
+    }
+    updateFluorescenceChannelUi();
+}
+
+void CameraMainWindow::updateFluorescenceChannelUi()
+{
+    if (!channel_list_ || !channel_visible_check_ || !channel_black_slider_ ||
+        !channel_white_slider_ || !fluorescence_statistics_label_) {
+        return;
+    }
+    const int row = channel_list_->currentRow();
+    if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        channel_visible_check_->setChecked(false);
+        channel_black_slider_->setValue(0);
+        channel_white_slider_->setValue(255);
+        fluorescence_statistics_label_->setText(
+            tr("选择通道后显示强度与曝光质量。"));
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        return;
+    }
+
+    const FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
+    channel_visible_check_->setChecked(channel.visible);
+    channel_black_slider_->setValue(channel.black_level);
+    channel_white_slider_->setValue(channel.white_level);
+    const FluorescenceChannelStatistics statistics =
+        FluorescenceChannelAnalysis::Analyze(channel.frame);
+    if (!statistics.IsValid()) {
+        fluorescence_statistics_label_->setText(tr("该通道尚无图像数据。"));
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        return;
+    }
+
+    QString state;
+    switch (statistics.exposure) {
+    case FluorescenceExposureState::Saturated:
+        state = tr("饱和：建议降低曝光或增益");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("warning"));
+        break;
+    case FluorescenceExposureState::Underexposed:
+        state = tr("欠曝：建议提高曝光或增益");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("warning"));
+        break;
+    case FluorescenceExposureState::LowContrast:
+        state = tr("低对比度：检查背景、焦点和染色");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("caution"));
+        break;
+    case FluorescenceExposureState::Balanced:
+        state = tr("曝光范围正常");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("ok"));
+        break;
+    case FluorescenceExposureState::NoData:
+    default:
+        state = tr("无数据");
+        fluorescence_statistics_label_->setProperty("exposureState", QStringLiteral("none"));
+        break;
+    }
+    fluorescence_statistics_label_->setText(
+        tr("%1\n原始范围 %2–%3，均值 %4；255 饱和像素 %5%\n建议显示范围 %6–%7")
+            .arg(state)
+            .arg(static_cast<int>(statistics.minimum))
+            .arg(static_cast<int>(statistics.maximum))
+            .arg(statistics.mean, 0, 'f', 1)
+            .arg(statistics.clipped_fraction * 100.0, 0, 'f', 2)
+            .arg(static_cast<int>(statistics.suggested_black_level))
+            .arg(static_cast<int>(statistics.suggested_white_level)));
+    fluorescence_statistics_label_->style()->unpolish(fluorescence_statistics_label_);
+    fluorescence_statistics_label_->style()->polish(fluorescence_statistics_label_);
+}
+
+void CameraMainWindow::autoLevelSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    if (row < 0 || row >= static_cast<int>(channels_.size())) {
+        statusBar()->showMessage(tr("请先选择荧光通道。"), 3000);
+        return;
+    }
+    FluorescenceChannel& channel = channels_[static_cast<std::size_t>(row)];
+    const FluorescenceChannelStatistics statistics =
+        FluorescenceChannelAnalysis::Analyze(channel.frame);
+    if (!FluorescenceChannelAnalysis::ApplySuggestedLevels(channel, statistics)) {
+        statusBar()->showMessage(tr("该通道没有可用于自动拉伸的图像数据。"), 3500);
+        return;
+    }
+    refreshFluorescenceChannelList(row);
+    updateImagePresentation();
+    statusBar()->showMessage(
+        tr("已按 1%–99.8% 分位设置显示范围；原始像素未修改。"), 4000);
+}
+
+void CameraMainWindow::removeSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::RemoveSelected(channels_, row);
+    refreshFluorescenceChannelList(
+        result.selected_index ? static_cast<int>(*result.selected_index) : -1);
+    if (!result.show_fusion_preview && fusion_check_) {
+        fusion_check_->setChecked(false);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
+}
+
+void CameraMainWindow::isolateSelectedFluorescenceChannel()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::ShowOnlySelected(channels_, row);
+    refreshFluorescenceChannelList(
+        result.selected_index ? static_cast<int>(*result.selected_index) : row);
+    if (result.changed && fusion_check_) {
+        fusion_check_->setChecked(true);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
+}
+
+void CameraMainWindow::showAllFluorescenceChannels()
+{
+    const int row = channel_list_ ? channel_list_->currentRow() : -1;
+    const FluorescenceChannelListActionResult result =
+        FluorescenceChannelListActions::ShowAll(channels_);
+    refreshFluorescenceChannelList(row);
+    if (result.changed && fusion_check_) {
+        fusion_check_->setChecked(true);
+    }
+    updateImagePresentation();
+    statusBar()->showMessage(QString::fromStdWString(result.message), 3500);
 }
 
 void CameraMainWindow::toggleFusion(bool enabled)
@@ -2193,13 +4886,15 @@ void CameraMainWindow::toggleFusion(bool enabled)
 void CameraMainWindow::addStitchTile()
 {
     if (busy_ || live_stitch_active_) return;
-    if (!current_frame_.IsValid()) {
+    const ImageFrame frame = currentVisibleFrame();
+    if (!frame.IsValid()) {
         QMessageBox::information(this, tr("图像拼接"), tr("当前没有可添加的图像帧。"));
         return;
     }
-    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(
+        stitch_overlap_slider_->integerValue());
     const StitchTileListActionResult result = StitchTileListActions::AddCurrentFrame(
-        stitch_tiles_, current_frame_, search_percent);
+        stitch_tiles_, frame, search_percent);
     if (result.changed) {
         stitch_tile_sources_.push_back(current_source_.isEmpty()
             ? tr("当前图像") : current_source_);
@@ -2224,8 +4919,32 @@ void CameraMainWindow::buildStitch()
         statusBar()->showMessage(tr("网格行数已按源图数量自动扩展"), 3000);
     }
     if (live_stitch_active_) stopLiveStitch(false);
-    const std::vector<StitchTile> tiles = stitch_tiles_;
-    const StitchProcessingOptions options = stitchOptionsFromUi();
+    startStitchJob(stitch_tiles_, stitchOptionsFromUi(), true);
+}
+
+void CameraMainWindow::retryStitch()
+{
+    if (busy_ || !stitch_retry_available_ || stitch_retry_tiles_.size() < 2) return;
+    if (live_stitch_active_) stopLiveStitch(false);
+    stitch_tiles_ = stitch_retry_tiles_;
+    stitch_tile_sources_ = stitch_retry_sources_;
+    refreshStitchTileList();
+    startStitchJob(stitch_retry_tiles_, stitch_retry_options_, false);
+}
+
+void CameraMainWindow::startStitchJob(
+    std::vector<StitchTile> tiles,
+    StitchProcessingOptions options,
+    bool rememberForRetry)
+{
+    if (busy_ || tiles.size() < 2) return;
+    if (rememberForRetry) {
+        stitch_retry_tiles_ = tiles;
+        stitch_retry_sources_ = stitch_tile_sources_;
+        stitch_retry_options_ = options;
+        stitch_retry_available_ = true;
+    }
+    stitch_retry_button_->setEnabled(false);
     stitch_cancel_token_ = std::make_shared<std::atomic_bool>(false);
     const std::shared_ptr<std::atomic_bool> cancel_token = stitch_cancel_token_;
     stitch_progress_->setValue(0);
@@ -2241,10 +4960,12 @@ void CameraMainWindow::buildStitch()
         stitch_cancel_token_.reset();
         stitch_start_button_->setEnabled(true);
         stitch_cancel_button_->setEnabled(false);
+        stitch_retry_button_->setEnabled(stitch_retry_available_);
         stitch_progress_->setValue(result.succeeded ? 100 : 0);
         setBusy(false, QString::fromStdWString(result.status));
         if (result.succeeded) {
             stitch_result_ = result.image;
+            stitch_result_metadata_ = result.stitch_metadata;
             stitch_save_button_->setEnabled(true);
             if (result.stitch_metadata.tiles.size() == stitch_tiles_.size()) {
                 for (std::size_t index = 0; index < stitch_tiles_.size(); ++index) {
@@ -2287,7 +5008,7 @@ StitchProcessingOptions CameraMainWindow::stitchOptionsFromUi() const
     options.layout_mode = static_cast<StitchLayoutMode>(stitch_layout_combo_->currentData().toInt());
     options.grid_rows = stitch_rows_spin_->value();
     options.grid_cols = stitch_cols_spin_->value();
-    options.overlap_percent = stitch_overlap_spin_->value();
+    options.overlap_percent = stitch_overlap_slider_->integerValue();
     options.registration_method = static_cast<StitchRegistrationMethod>(
         stitch_registration_combo_->currentData().toInt());
     options.transform_model = static_cast<StitchTransformModel>(
@@ -2342,7 +5063,8 @@ void CameraMainWindow::importStitchFiles(const QStringList& files, const QString
 {
     if (busy_ || live_stitch_active_ || files.isEmpty()) return;
     const int previous_count = static_cast<int>(stitch_tiles_.size());
-    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
+    const int search_percent = ProcessingParameterRules::SearchPercentFromOverlap(
+        stitch_overlap_slider_->integerValue());
     int failed = 0;
     for (const QString& file : files) {
         QImageReader reader(file);
@@ -2368,7 +5090,7 @@ void CameraMainWindow::importStitchFiles(const QStringList& files, const QString
 void CameraMainWindow::startLiveStitch()
 {
     if (live_stitch_active_ || busy_) return;
-    if (!camera_open_ || !latest_camera_frame_.IsValid()) {
+    if (!camera_open_ || latest_camera_image_.isNull()) {
         QMessageBox::information(this, tr("实时拼接"), tr("请先打开相机并等待图像出现。"));
         return;
     }
@@ -2376,11 +5098,19 @@ void CameraMainWindow::startLiveStitch()
     ++live_stitch_generation_;
     live_stitch_evaluating_ = false;
     live_stitch_preview_pending_ = false;
+    live_stitch_out_of_range_candidate_count_ = 0;
+    live_stitch_missing_match_count_ = 0;
+    live_stitch_out_of_range_warning_ = false;
+    live_stitch_warning_timer_.invalidate();
+    clearLiveStitchPreviewCache();
+    ensureLiveStitchPreviewCache();
+    canvas_->setLivePreviewOverlay(latest_camera_image_);
     live_stitch_start_button_->setEnabled(false);
     live_stitch_stop_button_->setEnabled(true);
-    live_stitch_interval_spin_->setEnabled(false);
+    live_stitch_interval_slider_->setEnabled(false);
     live_stitch_status_label_->setText(tr("实时拼接已启动，请缓慢移动载物台并保持视野重叠。"));
-    live_stitch_timer_->start(live_stitch_interval_spin_->value());
+    live_stitch_timer_->start(live_stitch_interval_slider_->integerValue());
+    if (!stitch_tiles_.empty()) refreshLiveStitchPreview();
     evaluateLiveStitch();
 }
 
@@ -2390,31 +5120,57 @@ void CameraMainWindow::stopLiveStitch(bool showStatus)
     live_stitch_active_ = false;
     ++live_stitch_generation_;
     live_stitch_timer_->stop();
+    canvas_->setLivePreviewOverlay({});
+    clearLiveStitchPreviewCache();
+    live_stitch_out_of_range_candidate_count_ = 0;
+    live_stitch_missing_match_count_ = 0;
+    live_stitch_out_of_range_warning_ = false;
     live_stitch_start_button_->setEnabled(true);
     live_stitch_stop_button_->setEnabled(false);
-    live_stitch_interval_spin_->setEnabled(true);
+    live_stitch_interval_slider_->setEnabled(true);
     live_stitch_status_label_->setText(tr("实时拼接已停止，共保留 %1 张源图。").arg(stitch_tiles_.size()));
-    if (latest_camera_frame_.IsValid()) {
-        setCurrentFrame(latest_camera_frame_, tr("MUCam 实时预览"), QStringLiteral("camera-live"));
+    if (!latest_camera_image_.isNull()) {
+        if (hasNeutralPresentation()) presentLiveCameraImage();
+        else setCurrentFrame(latestCameraFrame(), tr("MUCam 实时预览"), QStringLiteral("camera-live"));
     }
     if (showStatus) statusBar()->showMessage(tr("实时拼接已停止"), 4000);
 }
 
 void CameraMainWindow::evaluateLiveStitch()
 {
-    if (!live_stitch_active_ || live_stitch_evaluating_ || !latest_camera_frame_.IsValid()) return;
+    if (!live_stitch_active_ || live_stitch_evaluating_ || latest_camera_image_.isNull()) return;
     live_stitch_evaluating_ = true;
-    const std::vector<StitchTile> tiles = stitch_tiles_;
-    const ImageFrame candidate = latest_camera_frame_;
+    ensureLiveStitchPreviewCache();
+    std::vector<LiveStitchPreviewTile> references;
+    std::vector<std::pair<int, int>> reference_offsets;
+    const std::size_t first_reference = live_stitch_preview_cache_.size() >
+            static_cast<std::size_t>(kLiveStitchReferenceTileCount)
+        ? live_stitch_preview_cache_.size() - static_cast<std::size_t>(kLiveStitchReferenceTileCount)
+        : 0;
+    references.reserve(live_stitch_preview_cache_.size() - first_reference);
+    reference_offsets.reserve(live_stitch_preview_cache_.size() - first_reference);
+    for (std::size_t index = first_reference; index < live_stitch_preview_cache_.size(); ++index) {
+        references.push_back(live_stitch_preview_cache_[index]);
+        reference_offsets.emplace_back(
+            stitch_tiles_[index].offset_x,
+            stitch_tiles_[index].offset_y);
+    }
+    ImageFrame candidate = latestCameraFrame();
+    const int registration_scale = std::max(1, live_stitch_preview_cache_scale_);
     const quint64 generation = live_stitch_generation_;
     LiveStitchCaptureOptions options;
-    options.min_movement_percent = 20;
-    options.min_overlap_percent = std::max(5, stitch_overlap_spin_->value() - 10);
-    options.search_percent = ProcessingParameterRules::SearchPercentFromOverlap(stitch_overlap_spin_->value());
-    options.reference_tile_count = 3;
+    options.max_registration_edge = kLiveStitchRegistrationMaxEdge;
+    options.min_movement_percent = kLiveStitchMinMovementPercent;
+    options.min_overlap_percent = kLiveStitchMinOverlapPercent;
+    options.search_percent = std::max(
+        ProcessingParameterRules::SearchPercentFromOverlap(
+            stitch_overlap_slider_->integerValue()),
+        100 - kLiveStitchMinOverlapPercent);
+    options.fast_mode = true;
+    options.reference_tile_count = kLiveStitchReferenceTileCount;
     auto* watcher = new QFutureWatcher<LiveStitchEvaluation>(this);
     connect(watcher, &QFutureWatcher<LiveStitchEvaluation>::finished, this, [this, watcher] {
-        const LiveStitchEvaluation evaluation = watcher->result();
+        LiveStitchEvaluation evaluation = watcher->result();
         watcher->deleteLater();
         if (evaluation.generation != live_stitch_generation_) return;
         live_stitch_evaluating_ = false;
@@ -2423,8 +5179,11 @@ void CameraMainWindow::evaluateLiveStitch()
 
         const LiveStitchCaptureDecision& decision = evaluation.decision;
         if (decision.should_capture) {
+            live_stitch_out_of_range_candidate_count_ = 0;
+            live_stitch_missing_match_count_ = 0;
+            live_stitch_out_of_range_warning_ = false;
             StitchTile tile;
-            tile.frame = evaluation.frame;
+            tile.frame = std::move(evaluation.frame);
             tile.offset_x = decision.tile_offset_x;
             tile.offset_y = decision.tile_offset_y;
             tile.estimated_position = !decision.registration_valid && !decision.first_tile;
@@ -2434,22 +5193,96 @@ void CameraMainWindow::evaluateLiveStitch()
             refreshStitchTileList(static_cast<int>(stitch_tiles_.size()) - 1);
             live_stitch_status_label_->setText(decision.first_tile
                 ? tr("已采集基准图像，请移动载物台。")
-                : tr("已采集第 %1 张 · 移动 %2% · 重叠 %3%")
-                    .arg(stitch_tiles_.size()).arg(decision.movement_percent).arg(decision.overlap_percent));
+                : tr("已采集第 %1 张 · 移动 %2% · 重叠 %3% · 配准 %4 ms")
+                    .arg(stitch_tiles_.size()).arg(decision.movement_percent)
+                    .arg(decision.overlap_percent).arg(evaluation.elapsedMs));
             refreshLiveStitchPreview();
-        } else if (decision.out_of_range_warning || decision.match_missing) {
-            live_stitch_status_label_->setText(tr("未采集：重叠区域不足或配准不稳定，请向上一视野缓慢移回。"));
+        } else if (decision.match_missing) {
+            live_stitch_out_of_range_candidate_count_ = 0;
+            ++live_stitch_missing_match_count_;
+            const bool confirmed =
+                live_stitch_missing_match_count_ >= kLiveStitchMissingMatchWarningFrames;
+            live_stitch_out_of_range_warning_ = confirmed;
+            if (confirmed) {
+                if (!live_stitch_warning_timer_.isValid() ||
+                    live_stitch_warning_timer_.elapsed() >= kLiveStitchWarningBeepMinIntervalMs) {
+                    QApplication::beep();
+                    live_stitch_warning_timer_.restart();
+                }
+                live_stitch_status_label_->setText(
+                    tr("警告：连续多帧无法找到重叠区域，请向上一视野缓慢移回。"));
+            } else {
+                live_stitch_status_label_->setText(tr("正在确认重叠区域，请保持缓慢移动。"));
+            }
+        } else if (decision.out_of_range_warning) {
+            live_stitch_missing_match_count_ = 0;
+            ++live_stitch_out_of_range_candidate_count_;
+            const bool confirmed = live_stitch_out_of_range_candidate_count_ >=
+                kLiveStitchOutOfRangeWarningFrames;
+            live_stitch_out_of_range_warning_ = confirmed;
+            if (confirmed) {
+                if (!live_stitch_warning_timer_.isValid() ||
+                    live_stitch_warning_timer_.elapsed() >= kLiveStitchWarningBeepMinIntervalMs) {
+                    QApplication::beep();
+                    live_stitch_warning_timer_.restart();
+                }
+                live_stitch_status_label_->setText(
+                    tr("警告：重叠率低于 %1%，请向上一视野移回。")
+                        .arg(kLiveStitchMinOverlapPercent));
+            } else {
+                live_stitch_status_label_->setText(
+                    tr("配准暂不稳定，请保持至少 %1% 重叠。")
+                        .arg(kLiveStitchMinOverlapPercent));
+            }
         } else {
+            live_stitch_out_of_range_candidate_count_ = 0;
+            live_stitch_missing_match_count_ = 0;
+            live_stitch_out_of_range_warning_ = false;
             live_stitch_status_label_->setText(tr("等待移动 · 当前移动 %1% · 重叠 %2%")
                 .arg(decision.movement_percent).arg(decision.overlap_percent));
         }
     });
-    watcher->setFuture(QtConcurrent::run([tiles, candidate, options, generation] {
+    const std::size_t base_tile_count = stitch_tiles_.size();
+    watcher->setFuture(QtConcurrent::run(
+        [references = std::move(references), reference_offsets = std::move(reference_offsets),
+         candidate = std::move(candidate), options, generation, base_tile_count,
+         registration_scale]() mutable {
+        QElapsedTimer elapsed;
+        elapsed.start();
         LiveStitchEvaluation evaluation;
-        evaluation.baseTileCount = tiles.size();
-        evaluation.frame = candidate;
+        evaluation.baseTileCount = base_tile_count;
         evaluation.generation = generation;
-        evaluation.decision = LiveStitchCapturePlanner::Evaluate(tiles, candidate, options);
+        std::vector<StitchTile> registration_tiles;
+        registration_tiles.reserve(references.size());
+        for (const LiveStitchPreviewTile& reference : references) {
+            if (!reference.frame || !reference.frame->IsValid()) continue;
+            StitchTile tile;
+            tile.frame = *reference.frame;
+            tile.offset_x = reference.offset_x;
+            tile.offset_y = reference.offset_y;
+            tile.estimated_position = reference.estimated_position;
+            registration_tiles.push_back(std::move(tile));
+        }
+        const ImageFrame registration_candidate =
+            LiveStitchPreviewBuilder::DownsampleFrame(candidate, registration_scale);
+        evaluation.decision = LiveStitchCapturePlanner::Evaluate(
+            registration_tiles, registration_candidate, options);
+        if (registration_scale > 1 && !evaluation.decision.first_tile) {
+            evaluation.decision.dx *= registration_scale;
+            evaluation.decision.dy *= registration_scale;
+            const std::size_t reference_index = evaluation.decision.reference_tile_index;
+            if (reference_index < reference_offsets.size()) {
+                evaluation.decision.tile_offset_x =
+                    reference_offsets[reference_index].first + evaluation.decision.dx;
+                evaluation.decision.tile_offset_y =
+                    reference_offsets[reference_index].second + evaluation.decision.dy;
+            } else {
+                evaluation.decision.tile_offset_x *= registration_scale;
+                evaluation.decision.tile_offset_y *= registration_scale;
+            }
+        }
+        evaluation.elapsedMs = elapsed.elapsed();
+        evaluation.frame = std::move(candidate);
         return evaluation;
     }));
 }
@@ -2463,10 +5296,12 @@ void CameraMainWindow::refreshLiveStitchPreview()
     }
     live_stitch_preview_running_ = true;
     live_stitch_preview_pending_ = false;
-    const std::vector<StitchTile> tiles = stitch_tiles_;
+    ensureLiveStitchPreviewCache();
+    const std::vector<LiveStitchPreviewTile> tiles = live_stitch_preview_cache_;
     const quint64 generation = live_stitch_generation_;
     LiveStitchPreviewOptions options;
-    options.overlap_percent = stitch_overlap_spin_->value();
+    options.max_preview_edge = kLiveStitchPreviewMaxEdge;
+    options.overlap_percent = stitch_overlap_slider_->integerValue();
     options.blend_mode = static_cast<StitchBlendMode>(stitch_blend_combo_->currentData().toInt());
     auto* watcher = new QFutureWatcher<LiveStitchPreviewResult>(this);
     connect(watcher, &QFutureWatcher<LiveStitchPreviewResult>::finished, this, [this, watcher, generation] {
@@ -2485,6 +5320,93 @@ void CameraMainWindow::refreshLiveStitchPreview()
     }));
 }
 
+void CameraMainWindow::clearLiveStitchPreviewCache()
+{
+    live_stitch_preview_cache_.clear();
+    live_stitch_preview_cache_keys_.clear();
+    live_stitch_preview_cache_scale_ = 0;
+}
+
+quint64 CameraMainWindow::stitchTileFingerprint(const StitchTile& tile)
+{
+    quint64 value = static_cast<quint64>(reinterpret_cast<quintptr>(tile.frame.bgr.data()));
+    const auto mix = [&value](quint64 part) {
+        value ^= part + 0x9e3779b97f4a7c15ULL + (value << 6U) + (value >> 2U);
+    };
+    mix(tile.frame.sequence);
+    mix(static_cast<quint64>(static_cast<qint64>(tile.offset_x)));
+    mix(static_cast<quint64>(static_cast<qint64>(tile.offset_y)));
+    mix(static_cast<quint64>(tile.frame.width));
+    mix(static_cast<quint64>(tile.frame.height));
+    return value;
+}
+
+void CameraMainWindow::rebuildLiveStitchPreviewCache(int scale)
+{
+    clearLiveStitchPreviewCache();
+    live_stitch_preview_cache_scale_ = std::max(1, scale);
+    live_stitch_preview_cache_.reserve(stitch_tiles_.size());
+    live_stitch_preview_cache_keys_.reserve(stitch_tiles_.size());
+    for (const StitchTile& tile : stitch_tiles_) {
+        if (!tile.frame.IsValid()) continue;
+        ImageFrame preview = LiveStitchPreviewBuilder::DownsampleFrame(
+            tile.frame, live_stitch_preview_cache_scale_);
+        if (!preview.IsValid()) continue;
+        LiveStitchPreviewTile cached;
+        cached.frame = std::make_shared<ImageFrame>(std::move(preview));
+        cached.offset_x = static_cast<int>(std::lround(
+            static_cast<double>(tile.offset_x) / live_stitch_preview_cache_scale_));
+        cached.offset_y = static_cast<int>(std::lround(
+            static_cast<double>(tile.offset_y) / live_stitch_preview_cache_scale_));
+        cached.estimated_position = tile.estimated_position;
+        live_stitch_preview_cache_.push_back(std::move(cached));
+        live_stitch_preview_cache_keys_.push_back(stitchTileFingerprint(tile));
+    }
+}
+
+void CameraMainWindow::ensureLiveStitchPreviewCache()
+{
+    if (stitch_tiles_.empty()) {
+        clearLiveStitchPreviewCache();
+        return;
+    }
+    int required_scale = 1;
+    for (const StitchTile& tile : stitch_tiles_) {
+        required_scale = std::max(required_scale,
+            LiveStitchPreviewBuilder::DownsampleScaleFor(
+                tile.frame, kLiveStitchPreviewTileMaxEdge));
+    }
+    bool prefix_matches = live_stitch_preview_cache_scale_ == required_scale &&
+        live_stitch_preview_cache_keys_.size() <= stitch_tiles_.size();
+    for (std::size_t index = 0;
+         prefix_matches && index < live_stitch_preview_cache_keys_.size(); ++index) {
+        prefix_matches = live_stitch_preview_cache_keys_[index] ==
+            stitchTileFingerprint(stitch_tiles_[index]);
+    }
+    if (!prefix_matches) {
+        rebuildLiveStitchPreviewCache(required_scale);
+        return;
+    }
+    for (std::size_t index = live_stitch_preview_cache_keys_.size();
+         index < stitch_tiles_.size(); ++index) {
+        const StitchTile& tile = stitch_tiles_[index];
+        ImageFrame preview = LiveStitchPreviewBuilder::DownsampleFrame(tile.frame, required_scale);
+        if (!preview.IsValid()) {
+            rebuildLiveStitchPreviewCache(required_scale);
+            return;
+        }
+        LiveStitchPreviewTile cached;
+        cached.frame = std::make_shared<ImageFrame>(std::move(preview));
+        cached.offset_x = static_cast<int>(std::lround(
+            static_cast<double>(tile.offset_x) / required_scale));
+        cached.offset_y = static_cast<int>(std::lround(
+            static_cast<double>(tile.offset_y) / required_scale));
+        cached.estimated_position = tile.estimated_position;
+        live_stitch_preview_cache_.push_back(std::move(cached));
+        live_stitch_preview_cache_keys_.push_back(stitchTileFingerprint(tile));
+    }
+}
+
 void CameraMainWindow::saveStitchResult()
 {
     if (!stitch_result_.IsValid()) return;
@@ -2498,18 +5420,34 @@ void CameraMainWindow::saveStitchResult()
         QMessageBox::warning(this, tr("导出失败"), writer.errorString());
         return;
     }
-    statusBar()->showMessage(tr("拼接结果已导出：%1").arg(file_name), 5000);
+    QString metadata_message;
+    if (stitch_result_metadata_.available) {
+        std::filesystem::path metadata_path(file_name.toStdWString());
+        metadata_path.replace_extension(L".stitch.txt");
+        const ExportActionResult metadata_result =
+            ExportActions::SaveStitchMetadata(metadata_path, stitch_result_metadata_);
+        metadata_message = metadata_result.saved
+            ? tr("；元数据：%1").arg(QString::fromStdWString(metadata_path.wstring()))
+            : tr("；元数据导出失败：%1").arg(QString::fromStdWString(metadata_result.message));
+    }
+    statusBar()->showMessage(tr("拼接结果已导出：%1%2").arg(file_name, metadata_message), 7000);
+}
+
+void CameraMainWindow::importStitchFiles(QStringList files)
+{
+    importStitchFiles(files, tr("导入文件"));
 }
 
 void CameraMainWindow::invalidateStitchResult()
 {
     stitch_result_ = {};
+    stitch_result_metadata_ = {};
     if (stitch_save_button_) stitch_save_button_->setEnabled(false);
 }
 
 void CameraMainWindow::addEdfFrame()
 {
-    const EdfStackListActionResult result = EdfStackListActions::AddCurrentFrame(edf_stack_, current_frame_);
+    const EdfStackListActionResult result = EdfStackListActions::AddCurrentFrame(edf_stack_, currentVisibleFrame());
     updateProcessingLabels();
     statusBar()->showMessage(QString::fromStdWString(result.message), 3000);
 }
@@ -2558,6 +5496,11 @@ void CameraMainWindow::clearProcessing()
     edf_stack_.clear();
     edf_result_ = {};
     stitch_result_ = {};
+    stitch_result_metadata_ = {};
+    stitch_retry_tiles_.clear();
+    stitch_retry_sources_.clear();
+    stitch_retry_available_ = false;
+    if (stitch_retry_button_) stitch_retry_button_->setEnabled(false);
     if (stitch_save_button_) stitch_save_button_->setEnabled(false);
     focus_map_button_->setEnabled(false);
     updateProcessingLabels();
@@ -2617,15 +5560,25 @@ ImagePoint CameraMainWindow::imagePoint(const QPointF& point)
 void CameraMainWindow::closeEvent(QCloseEvent* event)
 {
     if (live_stitch_active_) stopLiveStitch(false);
+    saveObjectiveCalibrationMemory();
     QSettings settings;
     settings.beginGroup(QStringLiteral("MainWindow"));
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
     settings.setValue(QStringLiteral("state"), saveState());
+    settings.setValue(QStringLiteral("toolbarDisplay"),
+        static_cast<int>(toolbar_display_preference_));
+    settings.setValue(QStringLiteral("toolbarLayoutVersion"), 2);
     settings.endGroup();
     if (camera_thread_.isRunning()) {
         QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::BlockingQueuedConnection);
     }
     event->accept();
+}
+
+void CameraMainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    updateToolbarPresentation();
 }
 
 void CameraMainWindow::dragEnterEvent(QDragEnterEvent* event)
@@ -2638,7 +5591,23 @@ void CameraMainWindow::dragEnterEvent(QDragEnterEvent* event)
 void CameraMainWindow::dropEvent(QDropEvent* event)
 {
     const QList<QUrl> urls = event->mimeData()->urls();
-    if (!urls.isEmpty() && urls.front().isLocalFile() && loadImageFile(urls.front().toLocalFile())) {
+    QStringList local_files;
+    const QStringList supported_suffixes{
+        QStringLiteral("bmp"), QStringLiteral("png"), QStringLiteral("jpg"),
+        QStringLiteral("jpeg"), QStringLiteral("tif"), QStringLiteral("tiff")};
+    for (const QUrl& url : urls) {
+        if (!url.isLocalFile()) continue;
+        const QString path = url.toLocalFile();
+        const QString suffix = QFileInfo(path).suffix().toLower();
+        if (supported_suffixes.contains(suffix)) {
+            local_files.push_back(path);
+        }
+    }
+    if (local_files.size() > 1) {
+        importStitchFiles(local_files, tr("拖放文件"));
+        if (function_tabs_) function_tabs_->setCurrentIndex(3);
+        event->acceptProposedAction();
+    } else if (local_files.size() == 1 && loadImageFile(local_files.front())) {
         event->acceptProposedAction();
     }
 }

@@ -1,34 +1,48 @@
 #pragma once
 
 #include "ImageCanvas.h"
+#include "CameraQtTypes.h"
+#include "app/DiagnosticReportActions.h"
 #include "camera/CameraDevice.h"
 #include "domain/CalibrationProfile.h"
 #include "domain/ImageFrame.h"
 #include "domain/MeasurementCollection.h"
+#include "imaging/ChannelFusionEngine.h"
 #include "imaging/EdfProcessor.h"
 #include "imaging/Fluorescence.h"
+#include "imaging/FluorescenceCaptureSequence.h"
 #include "imaging/HistogramCalculator.h"
 #include "imaging/ImageAdjuster.h"
 #include "imaging/ImageFilterProcessor.h"
 #include "imaging/ImageStitcher.h"
+#include "imaging/LiveStitchPreviewBuilder.h"
 #include "imaging/PseudoColorMapper.h"
+#include "imaging/ProcessingJobState.h"
 #include "imaging/SmartTargetCounter.h"
 
 #include <QMainWindow>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QIcon>
 #include <QStringList>
 #include <QThread>
 
 #include <atomic>
+#include <array>
 #include <memory>
 
 class CameraWorker;
 class HistogramWidget;
+class NumericSlider;
 class YoloWorkspaceWidget;
 class QAction;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
+class QGroupBox;
+class QMenu;
+class QToolButton;
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -38,6 +52,7 @@ class QSpinBox;
 class QTabWidget;
 class QTimer;
 class QToolBar;
+class QResizeEvent;
 
 class CameraMainWindow final : public QMainWindow {
     Q_OBJECT
@@ -50,10 +65,16 @@ protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void openImage();
     void exportImage();
+    void exportImageReport();
+    void exportDiagnosticReport();
+    void showReportTemplateDesigner();
+    void loadReportTemplate();
+    void clearReportTemplate();
     void saveProject();
     void openProject();
     void refreshDevices();
@@ -66,7 +87,9 @@ private slots:
     void clearFluorescenceChannels();
     void toggleFusion(bool enabled);
     void addStitchTile();
+    void importStitchFiles(QStringList files);
     void buildStitch();
+    void retryStitch();
     void addEdfFrame();
     void buildEdf();
     void showEdfFocusMap();
@@ -78,6 +101,7 @@ private slots:
     void runSmartTargetCounting();
     void clearSmartTargetCounting();
     void show3DView();
+    void showPointCloudWorkspace();
     void startProfileMeasurement();
     void applySelectedImageFilter();
     void undoImageFilter();
@@ -85,10 +109,18 @@ private slots:
     void updateImageFilterControls();
     void updateImagePresentation();
     void updateMeasurementList();
+    void onCameraCapabilities(
+        CameraCapabilities capabilities,
+        CameraConfiguration configuration,
+        CameraOpenInfo openInfo);
 
 private:
     void setupUi();
     void setupMenusAndToolbar();
+    void updateToolbarPresentation();
+    void updateToolbarActionStates();
+    void updateToolbarToolState(CanvasTool tool);
+    void bindMeasurementPanelActions();
     QWidget* buildCameraPage();
     QWidget* buildImagePage();
     QWidget* buildFluorescencePage();
@@ -96,31 +128,111 @@ private:
     QWidget* buildMeasurementPage();
     QWidget* buildProjectPage();
     void setCurrentFrame(ImageFrame frame, const QString& source, const QString& sourceIdentity = {});
+    void presentLiveCameraImage();
+    bool hasNeutralPresentation() const;
+    ImageFrame sourceFrame() const;
+    ImageFrame latestCameraFrame() const;
+    void updateLiveHistogram();
     bool loadImageFile(const QString& fileName);
     ImageFrame currentVisibleFrame() const;
     QVector<CanvasOverlay> measurementOverlays() const;
     QVector<CanvasOverlay> smartTargetOverlays() const;
     QRectF measurementBounds(MeasurementReference reference) const;
     void focusSelectedMeasurement();
+    void enterMeasurementSelectionMode();
+    void renameSelectedMeasurement();
+    void chooseSelectedMeasurementColor();
+    void resetSelectedMeasurementColor();
+    void updateMeasurementStyleUi();
+    void applyGlobalMeasurementColor();
+    void loadMeasurementPreferences();
+    void saveMeasurementPreferences() const;
     void updateSmartTargetUi();
     void updateImageFilterPipelineUi();
+    void refreshFluorescenceChannelList(int selectedRow = -1);
+    void updateFluorescenceChannelUi();
+    void autoLevelSelectedFluorescenceChannel();
+    void removeSelectedFluorescenceChannel();
+    void isolateSelectedFluorescenceChannel();
+    void showAllFluorescenceChannels();
+    void refreshFluorescencePresetList(int selectedRow = -1);
+    void updateFluorescencePresetEditor();
+    void saveFluorescenceCapturePresets() const;
+    void startFluorescenceCaptureSequence();
+    void captureCurrentFluorescencePreset();
+    void cancelFluorescenceCaptureSequence();
+    void applyCurrentFluorescencePreset();
+    void updateFluorescenceCaptureUi();
     void rebuildOverlays();
+    void updateCalibrationUi();
+    void selectObjective(int index, bool rememberSelection = true);
+    void refreshObjectiveControls();
+    void loadObjectiveCalibrationMemory();
+    void saveObjectiveCalibrationMemory() const;
+    QString currentObjectiveLabel() const;
     void setMeasurementTool(CanvasTool tool, const QString& hint);
     void setBusy(bool busy, const QString& message);
     void updateProcessingLabels();
     void refreshStitchTileList(int selectedRow = -1);
     void deleteSelectedStitchTile();
     StitchProcessingOptions stitchOptionsFromUi() const;
+    void startStitchJob(
+        std::vector<StitchTile> tiles,
+        StitchProcessingOptions options,
+        bool rememberForRetry);
     void startLiveStitch();
     void stopLiveStitch(bool showStatus = true);
     void evaluateLiveStitch();
     void refreshLiveStitchPreview();
+    void clearLiveStitchPreviewCache();
+    void ensureLiveStitchPreviewCache();
+    void rebuildLiveStitchPreviewCache(int scale);
+    static quint64 stitchTileFingerprint(const StitchTile& tile);
     void importStitchFiles(const QStringList& files, const QString& sourceDescription);
     void saveStitchResult();
     void invalidateStitchResult();
     static ImageFrame imageFrameFromQImage(const QImage& image, quint64 sequence = 0, quint32 timestamp = 0);
     static QImage qImageFromFrame(const ImageFrame& frame);
     static ImagePoint imagePoint(const QPointF& point);
+    DiagnosticReportActionInput buildDiagnosticReportInput() const;
+    void loadReportTemplateSettings();
+    void saveReportTemplateSettings() const;
+    enum class CameraPanelState {
+        Initializing,
+        NoDevice,
+        Ready,
+        Connecting,
+        Previewing,
+        Reconfiguring,
+        WaitingTrigger,
+        Disconnected,
+        Error
+    };
+    void setCameraPanelState(CameraPanelState state, const QString& message);
+    void updateCameraControlAvailability();
+    void scheduleCameraParameterApply();
+    void applyPendingCameraParameters();
+    void applyCameraConfigurationFromUi(bool includeRoi = true);
+    void updateCameraConfigurationUi(const CameraConfiguration& configuration);
+    void loadCameraProfile();
+    void saveCameraProfile() const;
+    QString currentCameraDeviceKey() const;
+    void startCameraRoiSelection();
+    void restoreToolAfterCameraRoi(const QString& message);
+    void applyCameraRoiInputs();
+    void resetCameraRoi();
+
+    enum class ToolbarDisplayPreference {
+        Automatic,
+        IconsAndText,
+        IconsOnly
+    };
+
+    enum class ToolbarPresentationMode {
+        Expanded,
+        Standard,
+        Compact
+    };
 
     ImageCanvas* canvas_ = nullptr;
     QDockWidget* function_dock_ = nullptr;
@@ -130,15 +242,40 @@ private:
     QLabel* source_label_ = nullptr;
     QLabel* coordinate_label_ = nullptr;
     QLabel* zoom_label_ = nullptr;
+    QLabel* preview_fps_label_ = nullptr;
     QLabel* camera_state_label_ = nullptr;
+    QLabel* camera_state_badge_ = nullptr;
+    QLabel* camera_device_summary_label_ = nullptr;
+    QLabel* camera_telemetry_label_ = nullptr;
+    QLabel* camera_feedback_label_ = nullptr;
     QComboBox* device_combo_ = nullptr;
+    QPushButton* camera_refresh_button_ = nullptr;
+    QPushButton* camera_connection_button_ = nullptr;
+    QPushButton* camera_auto_exposure_button_ = nullptr;
+    QPushButton* camera_white_balance_button_ = nullptr;
+    QPushButton* camera_single_frame_button_ = nullptr;
     QDoubleSpinBox* exposure_spin_ = nullptr;
     QDoubleSpinBox* gain_spin_ = nullptr;
+    QSlider* camera_exposure_slider_ = nullptr;
+    QSlider* camera_gain_slider_ = nullptr;
+    QGroupBox* camera_color_group_ = nullptr;
+    QCheckBox* camera_link_channels_check_ = nullptr;
+    std::array<QDoubleSpinBox*, 3> camera_rgb_gain_spins_{};
+    std::array<QSpinBox*, 3> camera_rgb_offset_spins_{};
+    QComboBox* camera_resolution_combo_ = nullptr;
+    QComboBox* camera_trigger_combo_ = nullptr;
+    QCheckBox* camera_flip_check_ = nullptr;
+    QCheckBox* camera_mirror_check_ = nullptr;
+    std::array<QSpinBox*, 4> camera_roi_spins_{};
+    QPushButton* camera_roi_select_button_ = nullptr;
+    QPushButton* camera_roi_apply_button_ = nullptr;
+    QPushButton* camera_roi_reset_button_ = nullptr;
+    QTimer* camera_parameter_timer_ = nullptr;
     QComboBox* palette_combo_ = nullptr;
     QComboBox* histogram_channel_combo_ = nullptr;
     QComboBox* image_filter_combo_ = nullptr;
     QLabel* image_filter_parameter_label_ = nullptr;
-    QSpinBox* image_filter_parameter_spin_ = nullptr;
+    NumericSlider* image_filter_parameter_slider_ = nullptr;
     QLabel* image_filter_pipeline_label_ = nullptr;
     QSlider* brightness_slider_ = nullptr;
     QSlider* contrast_slider_ = nullptr;
@@ -146,26 +283,37 @@ private:
     QSlider* level_slider_ = nullptr;
     QSlider* width_slider_ = nullptr;
     QComboBox* dye_combo_ = nullptr;
+    QGroupBox* fluorescence_preset_group_ = nullptr;
+    QListWidget* fluorescence_preset_list_ = nullptr;
+    QDoubleSpinBox* fluorescence_preset_exposure_spin_ = nullptr;
+    QPushButton* fluorescence_preset_color_button_ = nullptr;
+    QPushButton* fluorescence_capture_start_button_ = nullptr;
+    QPushButton* fluorescence_capture_button_ = nullptr;
+    QPushButton* fluorescence_capture_cancel_button_ = nullptr;
+    QLabel* fluorescence_capture_status_label_ = nullptr;
     QListWidget* channel_list_ = nullptr;
     QCheckBox* fusion_check_ = nullptr;
+    QComboBox* fluorescence_blend_combo_ = nullptr;
     QCheckBox* channel_visible_check_ = nullptr;
-    QSpinBox* channel_black_spin_ = nullptr;
-    QSpinBox* channel_white_spin_ = nullptr;
+    NumericSlider* channel_black_slider_ = nullptr;
+    NumericSlider* channel_white_slider_ = nullptr;
+    QLabel* fluorescence_statistics_label_ = nullptr;
     QLabel* stitch_count_label_ = nullptr;
     QLabel* stitch_backend_label_ = nullptr;
     QListWidget* stitch_tile_list_ = nullptr;
     QComboBox* stitch_layout_combo_ = nullptr;
     QSpinBox* stitch_rows_spin_ = nullptr;
     QSpinBox* stitch_cols_spin_ = nullptr;
-    QSpinBox* stitch_overlap_spin_ = nullptr;
+    NumericSlider* stitch_overlap_slider_ = nullptr;
     QComboBox* stitch_registration_combo_ = nullptr;
     QComboBox* stitch_transform_combo_ = nullptr;
     QComboBox* stitch_blend_combo_ = nullptr;
     QProgressBar* stitch_progress_ = nullptr;
     QPushButton* stitch_start_button_ = nullptr;
     QPushButton* stitch_cancel_button_ = nullptr;
+    QPushButton* stitch_retry_button_ = nullptr;
     QPushButton* stitch_save_button_ = nullptr;
-    QSpinBox* live_stitch_interval_spin_ = nullptr;
+    NumericSlider* live_stitch_interval_slider_ = nullptr;
     QPushButton* live_stitch_start_button_ = nullptr;
     QPushButton* live_stitch_stop_button_ = nullptr;
     QLabel* live_stitch_status_label_ = nullptr;
@@ -173,34 +321,80 @@ private:
     QLabel* edf_count_label_ = nullptr;
     QPushButton* focus_map_button_ = nullptr;
     QDoubleSpinBox* calibration_length_spin_ = nullptr;
+    QComboBox* objective_combo_ = nullptr;
     QComboBox* calibration_unit_combo_ = nullptr;
     QComboBox* display_unit_combo_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
     QLabel* measurement_count_label_ = nullptr;
+    QToolButton* measurement_color_button_ = nullptr;
+    QToolButton* measurement_reset_color_button_ = nullptr;
     QCheckBox* edge_snap_check_ = nullptr;
-    QSpinBox* edge_snap_radius_spin_ = nullptr;
+    NumericSlider* edge_snap_radius_slider_ = nullptr;
     QLabel* calibration_label_ = nullptr;
     QLabel* smart_sample_label_ = nullptr;
     QLabel* smart_result_label_ = nullptr;
-    QDoubleSpinBox* smart_similarity_spin_ = nullptr;
-    QSpinBox* smart_scale_tolerance_spin_ = nullptr;
+    NumericSlider* smart_similarity_slider_ = nullptr;
+    NumericSlider* smart_scale_tolerance_slider_ = nullptr;
     QPushButton* smart_select_button_ = nullptr;
     QPushButton* smart_count_button_ = nullptr;
     QProgressBar* smart_count_progress_ = nullptr;
     QListWidget* smart_result_list_ = nullptr;
+    QAction* open_action_ = nullptr;
     QAction* export_action_ = nullptr;
-    QToolBar* measurement_toolbar_ = nullptr;
+    QAction* point_cloud_action_ = nullptr;
+    QAction* fit_action_ = nullptr;
+    QAction* surface_action_ = nullptr;
+    QAction* calibration_action_ = nullptr;
+    QAction* selection_action_ = nullptr;
+    QAction* rename_measurement_action_ = nullptr;
+    QAction* measurement_color_action_ = nullptr;
+    QAction* reset_measurement_color_action_ = nullptr;
+    QAction* delete_measurement_action_ = nullptr;
+    QAction* clear_measurements_action_ = nullptr;
+    QAction* export_measurements_action_ = nullptr;
+    QAction* smart_sample_action_ = nullptr;
+    QAction* smart_run_action_ = nullptr;
+    QAction* edge_snap_action_ = nullptr;
+    QAction* toolbar_more_action_ = nullptr;
+    QHash<int, QAction*> measurement_tool_actions_;
+    QToolBar* main_toolbar_ = nullptr;
+    QMenu* toolbar_more_menu_ = nullptr;
+    ToolbarDisplayPreference toolbar_display_preference_ =
+        ToolbarDisplayPreference::Automatic;
+    ToolbarPresentationMode toolbar_presentation_mode_ =
+        ToolbarPresentationMode::Standard;
+    QIcon toolbar_more_default_icon_;
 
     QThread camera_thread_;
     CameraWorker* camera_worker_ = nullptr;
     QVector<int> camera_indices_;
     bool camera_open_ = false;
+    CameraPanelState camera_panel_state_ = CameraPanelState::Initializing;
+    CameraCapabilities camera_capabilities_;
+    CameraConfiguration camera_configuration_;
+    CameraConfiguration camera_profile_configuration_;
+    CameraOpenInfo camera_open_info_;
+    bool camera_ui_updating_ = false;
+    bool camera_profile_loaded_ = false;
+    bool camera_profile_reconfigure_pending_ = false;
+    bool camera_roi_selection_pending_ = false;
+    bool startup_auto_connect_attempted_ = false;
+    CanvasTool camera_roi_previous_tool_ = CanvasTool::None;
+    bool camera_roi_previous_edge_snapping_ = false;
+    double last_sent_exposure_ = -1.0;
+    std::array<double, 3> last_sent_rgb_gain_{{-1.0, -1.0, -1.0}};
+    std::array<int, 3> last_sent_rgb_offset_{{-1000000, -1000000, -1000000}};
+    QElapsedTimer preview_fps_timer_;
+    QElapsedTimer live_histogram_timer_;
+    int preview_frames_since_sample_ = 0;
     bool busy_ = false;
     bool ai_annotation_active_ = false;
 
     ImageFrame current_frame_;
-    ImageFrame latest_camera_frame_;
     ImageFrame display_frame_;
+    QImage latest_camera_image_;
+    quint64 latest_camera_sequence_ = 0;
+    quint32 latest_camera_timestamp_ = 0;
     std::vector<ImageFilterStep> image_filter_pipeline_;
     QString current_source_;
     QString current_source_identity_;
@@ -208,8 +402,12 @@ private:
     HistogramChannel histogram_channel_ = HistogramChannel::Luminance;
     ImageAdjustParams adjustments_;
     CalibrationProfile calibration_ = CalibrationProfile::Uncalibrated();
+    std::vector<std::wstring> objective_labels_;
+    std::vector<CalibrationProfile> objective_calibrations_;
+    int selected_objective_index_ = 0;
     MeasurementUnit display_unit_ = MeasurementUnit::Micrometers;
     MeasurementCollection measurements_;
+    MeasurementOverlayStyle global_measurement_style_{76, 201, 240};
     QVector<CanvasOverlay> ai_overlays_;
     QVector<QPointF> profile_line_points_;
     std::vector<SmartTargetRegion> smart_target_samples_;
@@ -219,17 +417,36 @@ private:
     bool smart_count_session_active_ = false;
     quint64 image_generation_ = 0;
     std::vector<DyeProfile> dyes_;
+    std::vector<FluorescenceCapturePreset> fluorescence_capture_presets_;
+    RgbColor fluorescence_preset_editor_color_{255, 255, 255};
+    FluorescenceCaptureSequenceState fluorescence_capture_state_;
     std::vector<FluorescenceChannel> channels_;
+    FluorescenceBlendMode fluorescence_blend_mode_ = FluorescenceBlendMode::Screen;
     std::vector<StitchTile> stitch_tiles_;
     QStringList stitch_tile_sources_;
     std::shared_ptr<std::atomic_bool> stitch_cancel_token_;
     ImageFrame stitch_result_;
+    StitchResultMetadata stitch_result_metadata_;
+    std::vector<StitchTile> stitch_retry_tiles_;
+    QStringList stitch_retry_sources_;
+    StitchProcessingOptions stitch_retry_options_;
+    bool stitch_retry_available_ = false;
     bool live_stitch_active_ = false;
     bool live_stitch_evaluating_ = false;
     bool live_stitch_preview_running_ = false;
     bool live_stitch_preview_pending_ = false;
     quint64 live_stitch_generation_ = 0;
+    std::vector<LiveStitchPreviewTile> live_stitch_preview_cache_;
+    std::vector<quint64> live_stitch_preview_cache_keys_;
+    int live_stitch_preview_cache_scale_ = 0;
+    int live_stitch_out_of_range_candidate_count_ = 0;
+    int live_stitch_missing_match_count_ = 0;
+    bool live_stitch_out_of_range_warning_ = false;
+    QElapsedTimer live_stitch_warning_timer_;
     std::vector<ImageFrame> edf_stack_;
     EdfResult edf_result_;
     bool fusion_enabled_ = false;
+    std::wstring report_template_text_;
+    QString report_template_path_;
+    ImageReportTemplateOptions report_template_options_;
 };

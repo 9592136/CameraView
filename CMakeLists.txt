@@ -59,6 +59,9 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/EdfStackListActions.cpp
     src/imaging/EdfStackListActions.h
     src/imaging/Fluorescence.h
+    src/imaging/FluorescenceCaptureSequence.h
+    src/imaging/FluorescenceChannelAnalysis.cpp
+    src/imaging/FluorescenceChannelAnalysis.h
     src/imaging/FluorescenceChannelFactory.cpp
     src/imaging/FluorescenceChannelFactory.h
     src/imaging/FluorescenceChannelListActions.cpp
@@ -134,6 +137,22 @@ set(CAMERAVIEW_DOMAIN_SOURCES
     src/imaging/ViewportInteractionActions.h
     src/platform/TextInputParser.cpp
     src/platform/TextInputParser.h
+    src/pointcloud/PointCloud.cpp
+    src/pointcloud/PointCloud.h
+    src/pointcloud/PointCloudIO.cpp
+    src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudDeviationDistribution.cpp
+    src/pointcloud/PointCloudDeviationDistribution.h
+    src/pointcloud/PointCloudGeometricModel.cpp
+    src/pointcloud/PointCloudGeometricModel.h
+    src/pointcloud/PointCloudMeasurement.cpp
+    src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudMetrology.cpp
+    src/pointcloud/PointCloudMetrology.h
+    src/pointcloud/PointCloudProcessor.cpp
+    src/pointcloud/PointCloudProcessor.h
+    src/pointcloud/PointCloudSection.cpp
+    src/pointcloud/PointCloudSection.h
     src/storage/DiagnosticReportBuilder.cpp
     src/storage/DiagnosticReportBuilder.h
     src/storage/ImageExporter.cpp
@@ -197,6 +216,20 @@ set(CAMERAVIEW_DOMAIN_SOURCES
 # Platform-neutral application services used by the Qt front end.  The legacy
 # Win32 view/layout sources intentionally stay out of the default executable.
 set(CAMERAVIEW_QT_CORE_SOURCES
+    src/app/DiagnosticReportActions.cpp
+    src/app/DiagnosticReportActions.h
+    src/app/ExportActions.cpp
+    src/app/ExportActions.h
+    src/imaging/ImageViewport.cpp
+    src/imaging/ImageViewport.h
+    src/imaging/OverlayRenderer.cpp
+    src/imaging/OverlayRenderer.h
+    src/imaging/ViewTransform.cpp
+    src/imaging/ViewTransform.h
+    src/storage/ImageExporter.cpp
+    src/storage/ImageExporter.h
+    src/storage/DiagnosticReportBuilder.cpp
+    src/storage/DiagnosticReportBuilder.h
     src/domain/CalibrationProfile.cpp
     src/domain/CalibrationProfile.h
     src/domain/Geometry.h
@@ -218,12 +251,16 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/EdfStackListActions.cpp
     src/imaging/EdfStackListActions.h
     src/imaging/Fluorescence.h
+    src/imaging/FluorescenceChannelAnalysis.cpp
+    src/imaging/FluorescenceChannelAnalysis.h
     src/imaging/FluorescenceChannelFactory.cpp
     src/imaging/FluorescenceChannelFactory.h
     src/imaging/FluorescenceChannelListActions.cpp
     src/imaging/FluorescenceChannelListActions.h
     src/imaging/FluorescenceChannelSettings.cpp
     src/imaging/FluorescenceChannelSettings.h
+    src/imaging/FluorescenceChannelUpdater.cpp
+    src/imaging/FluorescenceChannelUpdater.h
     src/imaging/FluorescenceFormatter.cpp
     src/imaging/FluorescenceFormatter.h
     src/imaging/HistogramCalculator.cpp
@@ -256,6 +293,22 @@ set(CAMERAVIEW_QT_CORE_SOURCES
     src/imaging/StitchTileListActions.h
     src/imaging/StitchTilePlacementPlanner.cpp
     src/imaging/StitchTilePlacementPlanner.h
+    src/pointcloud/PointCloud.cpp
+    src/pointcloud/PointCloud.h
+    src/pointcloud/PointCloudIO.cpp
+    src/pointcloud/PointCloudIO.h
+    src/pointcloud/PointCloudDeviationDistribution.cpp
+    src/pointcloud/PointCloudDeviationDistribution.h
+    src/pointcloud/PointCloudGeometricModel.cpp
+    src/pointcloud/PointCloudGeometricModel.h
+    src/pointcloud/PointCloudMeasurement.cpp
+    src/pointcloud/PointCloudMeasurement.h
+    src/pointcloud/PointCloudMetrology.cpp
+    src/pointcloud/PointCloudMetrology.h
+    src/pointcloud/PointCloudProcessor.cpp
+    src/pointcloud/PointCloudSection.cpp
+    src/pointcloud/PointCloudSection.h
+    src/pointcloud/PointCloudProcessor.h
     src/storage/MeasurementCsvExporter.cpp
     src/storage/MeasurementCsvExporter.h
     src/storage/ProjectDocument.h
@@ -268,18 +321,26 @@ set(CAMERAVIEW_QT_CORE_SOURCES
 # ── CameraView executable (Qt 6 application) ──
 qt_add_executable(CameraView WIN32
     src/qt/main_qt.cpp
+    src/qt/CalibrationDialog.cpp
+    src/qt/CalibrationDialog.h
     src/qt/CameraMainWindow.cpp
     src/qt/CameraMainWindow.h
     src/qt/CameraViewTheme.cpp
     src/qt/CameraViewTheme.h
     src/qt/CameraWorker.cpp
     src/qt/CameraWorker.h
+    src/qt/FluorescenceCaptureSettings.cpp
+    src/qt/FluorescenceCaptureSettings.h
     src/qt/HistogramWidget.cpp
     src/qt/HistogramWidget.h
     src/qt/ImageCanvas.cpp
     src/qt/ImageCanvas.h
     src/qt/MeasurementToolButton.cpp
     src/qt/MeasurementToolButton.h
+    src/qt/NumericSlider.cpp
+    src/qt/NumericSlider.h
+    src/qt/ObjectiveCalibrationSettings.cpp
+    src/qt/ObjectiveCalibrationSettings.h
     src/qt/ImageSurface3DDialog.cpp
     src/qt/ImageSurface3DDialog.h
     src/qt/ImageSurface3DWidget.cpp
@@ -288,6 +349,16 @@ qt_add_executable(CameraView WIN32
     src/qt/ProfileAnalysisDialog.h
     src/qt/ProfilePlotWidget.cpp
     src/qt/ProfilePlotWidget.h
+    src/qt/ReportTemplateDialog.cpp
+    src/qt/ReportTemplateDialog.h
+    src/qt/PointCloudDialog.cpp
+    src/qt/PointCloudDialog.h
+    src/qt/PointCloudDeviationDialog.cpp
+    src/qt/PointCloudDeviationDialog.h
+    src/qt/PointCloudSectionDialog.cpp
+    src/qt/PointCloudSectionDialog.h
+    src/qt/PointCloudWidget.cpp
+    src/qt/PointCloudWidget.h
     src/qt/ai/YoloModelRegistry.cpp
     src/qt/ai/YoloModelRegistry.h
     src/qt/ai/YoloDatasetProject.cpp
@@ -498,11 +569,73 @@ if(CAMERAVIEW_BUILD_TESTS)
     endif()
     add_test(NAME CameraViewImageFilterTests COMMAND CameraViewImageFilterTests)
 
+    add_executable(CameraViewCameraWorkerTests
+        tests/camera_worker_tests.cpp
+        src/qt/CameraWorker.cpp
+        src/qt/CameraWorker.h
+        src/qt/CameraQtTypes.h
+        src/camera/MUCamCameraDriver.cpp
+        src/camera/MUCamCameraDriver.h
+        src/MUCamApi.cpp
+        src/MUCamApi.h
+    )
+    target_include_directories(CameraViewCameraWorkerTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewCameraWorkerTests PRIVATE cxx_std_17)
+    target_compile_definitions(CameraViewCameraWorkerTests PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(CameraViewCameraWorkerTests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME CameraViewCameraWorkerTests COMMAND CameraViewCameraWorkerTests)
+
     add_test(NAME CameraViewQtStartup COMMAND CameraView --smoke-test)
     set_tests_properties(CameraViewQtStartup PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewMeasurementToolbarCoverage
         COMMAND CameraView --verify-measurement-toolbar)
     set_tests_properties(CameraViewMeasurementToolbarCoverage PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewMeasurementOverlayEditor
+        COMMAND CameraView --verify-measurement-overlay-editor)
+    set_tests_properties(CameraViewMeasurementOverlayEditor PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewPreviewPipelinePerformance
+        COMMAND CameraView --verify-preview-pipeline)
+    set_tests_properties(CameraViewPreviewPipelinePerformance PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtFluorescenceWorkflow
+        COMMAND CameraView --verify-fluorescence-workflow)
+    add_test(NAME CameraViewQtPointCloudWorkflow
+        COMMAND CameraView --verify-point-cloud-workflow)
+    set_tests_properties(CameraViewQtFluorescenceWorkflow PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtNumericSliderControls
+        COMMAND CameraView --verify-numeric-sliders)
+    set_tests_properties(CameraViewQtNumericSliderControls PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtStitchWorkflowCoverage
+        COMMAND CameraView --verify-stitch-workflow)
+    set_tests_properties(CameraViewQtStitchWorkflowCoverage PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtStitchExecution
+        COMMAND CameraView --verify-stitch-execution)
+    set_tests_properties(CameraViewQtStitchExecution PROPERTIES TIMEOUT 30)
+    add_test(NAME CameraViewQtReportWorkflow
+        COMMAND CameraView --verify-report-workflow)
+    set_tests_properties(CameraViewQtReportWorkflow PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtCameraPanel
+        COMMAND CameraView --verify-camera-panel)
+    set_tests_properties(CameraViewQtCameraPanel PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtCameraPanelSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-ui.png"
+            --workspace-tab 0
+            --ui-size 1280x800)
+    set_tests_properties(CameraViewQtCameraPanelSnapshot PROPERTIES TIMEOUT 20)
+    add_test(NAME CameraViewQtCameraPanelCompactSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-960x640.png"
+            --workspace-tab 0
+            --ui-size 960x640)
+    set_tests_properties(CameraViewQtCameraPanelCompactSnapshot PROPERTIES
+        TIMEOUT 20 ENVIRONMENT "QT_SCALE_FACTOR=1.25")
+    add_test(NAME CameraViewQtCameraPanelFullHdSnapshot
+        COMMAND CameraView
+            --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-1920x1080.png"
+            --workspace-tab 0
+            --ui-size 1920x1080)
+    set_tests_properties(CameraViewQtCameraPanelFullHdSnapshot PROPERTIES TIMEOUT 20)
     add_test(NAME CameraViewQtUiSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-processing-ui.png"
@@ -538,8 +671,16 @@ if(CAMERAVIEW_BUILD_TESTS)
 
     add_executable(CameraViewQtInteractionTests
         tests/qt_interaction_tests.cpp
+        src/qt/CalibrationDialog.cpp
+        src/qt/CalibrationDialog.h
+        src/qt/ObjectiveCalibrationSettings.cpp
+        src/qt/ObjectiveCalibrationSettings.h
+        src/qt/FluorescenceCaptureSettings.cpp
+        src/qt/FluorescenceCaptureSettings.h
         src/qt/ImageCanvas.cpp
         src/qt/ImageCanvas.h
+        src/qt/NumericSlider.cpp
+        src/qt/NumericSlider.h
         src/qt/ai/YoloModelRegistry.cpp
         src/qt/ai/YoloModelRegistry.h
         src/qt/ai/YoloDatasetProject.cpp
@@ -548,6 +689,9 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ai/YoloProcessController.h
         src/qt/ai/YoloWorkspaceWidget.cpp
         src/qt/ai/YoloWorkspaceWidget.h
+        src/domain/CalibrationProfile.cpp
+        src/domain/CalibrationProfile.h
+        src/domain/Geometry.h
     )
     target_include_directories(CameraViewQtInteractionTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewQtInteractionTests PRIVATE cxx_std_17)
@@ -575,6 +719,30 @@ if(CAMERAVIEW_BUILD_TESTS)
     target_compile_features(CameraViewImageProfileTests PRIVATE cxx_std_17)
     add_test(NAME CameraViewImageProfileTests COMMAND CameraViewImageProfileTests)
 
+    add_executable(CameraViewPointCloudTests
+        tests/pointcloud_tests.cpp
+        src/pointcloud/PointCloud.cpp
+        src/pointcloud/PointCloud.h
+        src/pointcloud/PointCloudIO.cpp
+        src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudDeviationDistribution.cpp
+        src/pointcloud/PointCloudDeviationDistribution.h
+        src/pointcloud/PointCloudGeometricModel.cpp
+        src/pointcloud/PointCloudGeometricModel.h
+        src/pointcloud/PointCloudMeasurement.cpp
+        src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudMetrology.cpp
+        src/pointcloud/PointCloudMetrology.h
+        src/pointcloud/PointCloudProcessor.cpp
+        src/pointcloud/PointCloudProcessor.h
+        src/pointcloud/PointCloudSection.cpp
+        src/pointcloud/PointCloudSection.h
+    )
+    target_include_directories(CameraViewPointCloudTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(CameraViewPointCloudTests PRIVATE cxx_std_17)
+    set_target_properties(CameraViewPointCloudTests PROPERTIES AUTOMOC OFF AUTOUIC OFF)
+    add_test(NAME CameraViewPointCloudTests COMMAND CameraViewPointCloudTests)
+
     add_executable(CameraViewVisualizationTests
         tests/visualization_tests.cpp
         src/domain/CalibrationProfile.cpp
@@ -591,6 +759,30 @@ if(CAMERAVIEW_BUILD_TESTS)
         src/qt/ProfileAnalysisDialog.h
         src/qt/ProfilePlotWidget.cpp
         src/qt/ProfilePlotWidget.h
+        src/pointcloud/PointCloud.cpp
+        src/pointcloud/PointCloud.h
+        src/pointcloud/PointCloudIO.cpp
+        src/pointcloud/PointCloudIO.h
+        src/pointcloud/PointCloudDeviationDistribution.cpp
+        src/pointcloud/PointCloudDeviationDistribution.h
+        src/pointcloud/PointCloudGeometricModel.cpp
+        src/pointcloud/PointCloudGeometricModel.h
+        src/pointcloud/PointCloudMeasurement.cpp
+        src/pointcloud/PointCloudMeasurement.h
+        src/pointcloud/PointCloudMetrology.cpp
+        src/pointcloud/PointCloudMetrology.h
+        src/pointcloud/PointCloudProcessor.cpp
+        src/pointcloud/PointCloudProcessor.h
+        src/pointcloud/PointCloudSection.cpp
+        src/pointcloud/PointCloudSection.h
+        src/qt/PointCloudDialog.cpp
+        src/qt/PointCloudDialog.h
+        src/qt/PointCloudDeviationDialog.cpp
+        src/qt/PointCloudDeviationDialog.h
+        src/qt/PointCloudSectionDialog.cpp
+        src/qt/PointCloudSectionDialog.h
+        src/qt/PointCloudWidget.cpp
+        src/qt/PointCloudWidget.h
     )
     target_include_directories(CameraViewVisualizationTests PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_compile_features(CameraViewVisualizationTests PRIVATE cxx_std_17)
