@@ -753,7 +753,12 @@ void PointCloudWidget::paintGL()
 
     PointCloudPoint plane_center;
     std::array<PointCloudPoint, 4> plane_corners{};
-    bool draw_plane = fitted_plane_visible_ && fitted_plane_.valid;
+    const bool active_geometric_plane = std::any_of(
+        geometric_models_.begin(), geometric_models_.end(), [this](const auto& model) {
+            return model.id == active_model_id_ && model.visible &&
+                model.type == PointCloudGeometricModelType::Plane && model.plane.valid;
+        });
+    bool draw_plane = fitted_plane_visible_ && fitted_plane_.valid && !active_geometric_plane;
     if (draw_plane) {
         const PointCloudCentroid centroid = cloud_.Centroid();
         const PointCloudPoint cloud_center{centroid.x, centroid.y, centroid.z};
@@ -899,35 +904,6 @@ void PointCloudWidget::paintGL()
         painter.drawText(badge_rect, Qt::AlignCenter, badge);
     }
 
-    if (!highlighted_indices_.isEmpty()) {
-        QPainterPath path;
-        bool first = true;
-        for (int index : highlighted_indices_) {
-            const QPointF position = projectPoint(index).position;
-            if (first) {
-                path.moveTo(position);
-                first = false;
-            } else {
-                path.lineTo(position);
-            }
-        }
-        painter.setPen(QPen(QColor(255, 223, 92), 2.0));
-        painter.setBrush(QColor(255, 223, 92));
-        painter.drawPath(path);
-        for (int index : highlighted_indices_) {
-            painter.drawEllipse(projectPoint(index).position, 5.0, 5.0);
-        }
-    }
-
-    if (hovered_point_index_ >= 0 &&
-        hovered_point_index_ < static_cast<int>(cloud_.points.size())) {
-        const QPointF position = projectPoint(hovered_point_index_).position;
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5));
-        painter.setBrush(QColor(62, 159, 255, 130));
-        painter.drawEllipse(position, point_size_ + 4.0, point_size_ + 4.0);
-    }
-
-
     if (!selection_preview_indices_.isEmpty()) {
         const int stride = std::max(1, static_cast<int>(std::ceil(
             selection_preview_indices_.size() /
@@ -975,6 +951,43 @@ void PointCloudWidget::paintGL()
         painter.drawPolygon(closed_path, Qt::OddEvenFill);
     }
 
+    if (!highlighted_indices_.isEmpty()) {
+        QPainterPath path;
+        bool first = true;
+        for (int index : highlighted_indices_) {
+            if (index < 0 || index >= static_cast<int>(cloud_.points.size())) continue;
+            const QPointF position = projectPoint(index).position;
+            if (first) {
+                path.moveTo(position);
+                first = false;
+            } else {
+                path.lineTo(position);
+            }
+        }
+        painter.setPen(QPen(QColor(5, 19, 31, 220), 5.0, Qt::SolidLine, Qt::RoundCap));
+        painter.drawPath(path);
+        painter.setPen(QPen(QColor(91, 207, 255), 2.4, Qt::SolidLine, Qt::RoundCap));
+        painter.drawPath(path);
+        int sequence = 1;
+        for (int index : highlighted_indices_) {
+            if (index < 0 || index >= static_cast<int>(cloud_.points.size())) continue;
+            const QPointF position = projectPoint(index).position;
+            painter.setPen(QPen(QColor(5, 19, 31), 2.0));
+            painter.setBrush(QColor(91, 207, 255));
+            painter.drawEllipse(position, 6.0, 6.0);
+            painter.setPen(QColor(225, 246, 255));
+            painter.drawText(position + QPointF(8.0, -7.0), QString::number(sequence++));
+        }
+    }
+
+    if (hovered_point_index_ >= 0 &&
+        hovered_point_index_ < static_cast<int>(cloud_.points.size())) {
+        const QPointF position = projectPoint(hovered_point_index_).position;
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5));
+        painter.setBrush(QColor(62, 159, 255, 130));
+        painter.drawEllipse(position, point_size_ + 4.0, point_size_ + 4.0);
+    }
+
     if (section_selection_enabled_ && section_start_ != section_end_) {
         const QLineF line(section_start_, section_end_);
         painter.setPen(QPen(QColor(255, 211, 74, 80), section_half_width_pixels_ * 2.0,
@@ -1002,12 +1015,67 @@ void PointCloudWidget::drawGeometricModels(QPainter& painter) const
 {
     constexpr int segments = 64;
     for (const PointCloudGeometricModel& model : geometric_models_) {
-        if (!model.visible || model.type == PointCloudGeometricModelType::Plane) continue;
+        if (!model.visible) continue;
         const bool active = model.id == active_model_id_;
         const QColor color = active ? QColor(255, 196, 72) : QColor(88, 203, 255);
         painter.setPen(QPen(color, active ? 2.5 : 1.6));
         painter.setBrush(QColor(color.red(), color.green(), color.blue(), active ? 26 : 16));
-        if (model.type == PointCloudGeometricModelType::Sphere && model.sphere.valid) {
+        QPointF label_position;
+        bool label_valid = false;
+        if (model.type == PointCloudGeometricModelType::Plane && model.plane.valid) {
+            const PointCloudCentroid centroid = cloud_.Centroid();
+            const PointCloudPoint cloud_center{centroid.x, centroid.y, centroid.z};
+            const double offset = model.plane.SignedDistance(cloud_center);
+            const PointCloudPoint center{
+                cloud_center.x - offset * model.plane.nx,
+                cloud_center.y - offset * model.plane.ny,
+                cloud_center.z - offset * model.plane.nz};
+            std::array<double, 3> normal{
+                model.plane.nx, model.plane.ny, model.plane.nz};
+            const std::array<double, 3> reference = std::abs(normal[2]) < 0.9
+                ? std::array<double, 3>{0.0, 0.0, 1.0}
+                : std::array<double, 3>{1.0, 0.0, 0.0};
+            std::array<double, 3> first{
+                normal[1] * reference[2] - normal[2] * reference[1],
+                normal[2] * reference[0] - normal[0] * reference[2],
+                normal[0] * reference[1] - normal[1] * reference[0]};
+            const double first_length = std::sqrt(
+                first[0] * first[0] + first[1] * first[1] + first[2] * first[2]);
+            if (first_length > 1e-12) {
+                for (double& component : first) component /= first_length;
+                const std::array<double, 3> second{
+                    normal[1] * first[2] - normal[2] * first[1],
+                    normal[2] * first[0] - normal[0] * first[2],
+                    normal[0] * first[1] - normal[1] * first[0]};
+                const double half_extent = std::max({cloud_.bounds.Width(),
+                    cloud_.bounds.Depth(), cloud_.bounds.Height(), 1e-9}) * 0.55;
+                const std::array<std::array<double, 2>, 4> signs{{
+                    {-1.0, -1.0}, {1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}}};
+                QPolygonF polygon;
+                for (const auto& sign : signs) {
+                    polygon << projectPointValue({
+                        center.x + sign[0] * half_extent * first[0] +
+                            sign[1] * half_extent * second[0],
+                        center.y + sign[0] * half_extent * first[1] +
+                            sign[1] * half_extent * second[1],
+                        center.z + sign[0] * half_extent * first[2] +
+                            sign[1] * half_extent * second[2]}).position;
+                }
+                painter.drawPolygon(polygon);
+                const double normal_length = half_extent * 0.42;
+                const QPointF center_screen = projectPointValue(center).position;
+                const QPointF normal_end = projectPointValue({
+                    center.x + normal_length * normal[0],
+                    center.y + normal_length * normal[1],
+                    center.z + normal_length * normal[2]}).position;
+                painter.setPen(QPen(color, active ? 2.4 : 1.5, Qt::DashLine));
+                painter.drawLine(center_screen, normal_end);
+                painter.setBrush(color);
+                painter.drawEllipse(normal_end, active ? 4.0 : 3.0, active ? 4.0 : 3.0);
+                label_position = normal_end;
+                label_valid = true;
+            }
+        } else if (model.type == PointCloudGeometricModelType::Sphere && model.sphere.valid) {
             for (int plane = 0; plane < 3; ++plane) {
                 QPainterPath path;
                 for (int segment = 0; segment <= segments; ++segment) {
@@ -1023,7 +1091,9 @@ void PointCloudWidget::drawGeometricModels(QPainter& painter) const
                 }
                 painter.drawPath(path);
             }
-            painter.drawEllipse(projectPointValue(model.sphere.center).position, 4.0, 4.0);
+            label_position = projectPointValue(model.sphere.center).position;
+            painter.drawEllipse(label_position, 4.0, 4.0);
+            label_valid = true;
         } else if (model.type == PointCloudGeometricModelType::Cylinder && model.cylinder.valid) {
             const auto axis = model.cylinder.axis_direction;
             std::array<double, 3> reference = std::abs(axis[2]) < 0.8
@@ -1066,7 +1136,16 @@ void PointCloudWidget::drawGeometricModels(QPainter& painter) const
                 model.cylinder.axis_point.y + model.cylinder.axial_maximum * axis[1],
                 model.cylinder.axis_point.z + model.cylinder.axial_maximum * axis[2]};
             painter.setPen(QPen(color, active ? 2.2 : 1.2, Qt::DashLine));
-            painter.drawLine(projectPointValue(start).position, projectPointValue(end).position);
+            const QPointF start_screen = projectPointValue(start).position;
+            const QPointF end_screen = projectPointValue(end).position;
+            painter.drawLine(start_screen, end_screen);
+            label_position = end_screen;
+            label_valid = true;
+        }
+        if (label_valid && active) {
+            painter.setPen(color);
+            painter.drawText(label_position + QPointF(7.0, -7.0),
+                QString::fromStdWString(model.name));
         }
     }
 }

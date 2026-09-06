@@ -65,6 +65,8 @@ public:
     double pointSize() const { return point_size_; }
     bool textureEnhancementEnabled() const { return texture_enhancement_enabled_; }
     std::uint64_t textureMeshRevision() const { return texture_mesh_revision_; }
+    const QVector<int>& highlightedIndices() const { return highlighted_indices_; }
+    const QVector<int>& selectionPreviewIndices() const { return selection_preview_indices_; }
     bool axesVisible() const { return axes_visible_; }
     const PointCloudPlane& fittedPlane() const { return fitted_plane_; }
     bool fittedPlaneVisible() const { return fitted_plane_visible_; }

@@ -79,14 +79,17 @@ private:
     void applyInteractiveCrop(bool keep_selected);
     void clearInteractiveCrop();
     void updateSelectionPresentation();
+    void updateActionStates();
     void clearFittedPlane();
     void clearGeometricModels();
     void fitGeometricModel(PointCloudGeometricModelType type);
+    void cancelActiveFit(const QString& message);
     void acceptFitResult(PointCloudFitResult result, std::uint64_t revision);
     void refreshModelList();
     void selectModelRow(int row);
     void deleteSelectedModel();
     void setSelectedModelVisible(bool visible);
+    void selectMeasurementRow(int row);
     std::vector<std::size_t> selectedSourceIndices() const;
     void fitPlane();
     void levelCloud();
@@ -121,6 +124,7 @@ private:
     QLabel* selection_status_ = nullptr;
     QPushButton* navigation_button_ = nullptr;
     QPushButton* free_selection_button_ = nullptr;
+    QPushButton* clear_selection_button_ = nullptr;
     QLabel* workspace_status_ = nullptr;
     QLabel* fit_status_ = nullptr;
     QLabel* model_details_ = nullptr;
@@ -150,6 +154,17 @@ private:
     QPushButton* begin_crop_button_ = nullptr;
     QPushButton* keep_crop_button_ = nullptr;
     QPushButton* remove_crop_button_ = nullptr;
+    QPushButton* fit_plane_model_button_ = nullptr;
+    QPushButton* fit_sphere_button_ = nullptr;
+    QPushButton* fit_cylinder_button_ = nullptr;
+    QPushButton* cancel_fit_button_ = nullptr;
+    QPushButton* show_model_button_ = nullptr;
+    QPushButton* hide_model_button_ = nullptr;
+    QPushButton* delete_model_button_ = nullptr;
+    QPushButton* clear_models_button_ = nullptr;
+    QPushButton* delete_measurement_button_ = nullptr;
+    QPushButton* clear_measurements_button_ = nullptr;
+    QPushButton* export_measurements_button_ = nullptr;
     QLabel* crop_selection_label_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
     QListWidget* model_list_ = nullptr;
@@ -177,11 +192,14 @@ private:
     QVector<int> crop_selection_;
     std::vector<PointCloudGeometricModel> geometric_models_;
     std::uint64_t active_model_id_ = 0;
+    std::uint64_t reference_plane_model_id_ = 0;
     std::uint64_t next_model_id_ = 1;
     std::uint64_t cloud_revision_ = 0;
     int plane_model_count_ = 0;
     int sphere_model_count_ = 0;
     int cylinder_model_count_ = 0;
+    bool fit_running_ = false;
+    std::uint64_t fit_request_id_ = 0;
 
 private slots:
     void acceptPickedPoint(int index);

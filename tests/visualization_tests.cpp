@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QLabel>
+#include <QListWidget>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QPixmap>
@@ -393,6 +394,7 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudVoxelApplyButton"),
         QStringLiteral("PointCloudOutlierApplyButton"),
         QStringLiteral("PointCloudBeginInteractiveCropButton"),
+        QStringLiteral("PointCloudClearSelectionButton"),
         QStringLiteral("PointCloudKeepSelectionButton"),
         QStringLiteral("PointCloudRemoveSelectionButton"),
         QStringLiteral("PointCloudSmartFilterApplyButton"),
@@ -401,7 +403,12 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudFitPlaneModelButton"),
         QStringLiteral("PointCloudFitSphereButton"),
         QStringLiteral("PointCloudFitCylinderButton"),
+        QStringLiteral("PointCloudCancelFitButton"),
         QStringLiteral("PointCloudModelList"),
+        QStringLiteral("PointCloudShowModelButton"),
+        QStringLiteral("PointCloudHideModelButton"),
+        QStringLiteral("PointCloudDeleteModelButton"),
+        QStringLiteral("PointCloudClearModelsButton"),
         QStringLiteral("PointCloudShowFittedPlaneCheck"),
         QStringLiteral("PointCloudLevelButton"),
         QStringLiteral("PointCloudUndoButton"),
@@ -414,11 +421,43 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudEvaluateTolerancesButton"),
         QStringLiteral("PointCloudDeviationDistributionButton"),
         QStringLiteral("PointCloudBeginSectionButton"),
-        QStringLiteral("PointCloudMeasurementList")};
+        QStringLiteral("PointCloudMeasurementList"),
+        QStringLiteral("PointCloudDeleteMeasurementButton"),
+        QStringLiteral("PointCloudClearMeasurementsButton"),
+        QStringLiteral("PointCloudExportMeasurementsButton")};
     for (const QString& name : point_cloud_controls) {
         if (!point_cloud_dialog.findChild<QWidget*>(name)) {
             return fail("3D point-cloud workbench is missing a required control.");
         }
+    }
+    auto* clear_selection_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudClearSelectionButton"));
+    auto* fit_scope = point_cloud_dialog.findChild<QComboBox*>(
+        QStringLiteral("PointCloudFitScopeCombo"));
+    auto* fit_plane_model_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudFitPlaneModelButton"));
+    auto* delete_measurement_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudDeleteMeasurementButton"));
+    auto* clear_measurements_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudClearMeasurementsButton"));
+    auto* export_measurements_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudExportMeasurementsButton"));
+    if (!clear_selection_action || clear_selection_action->isEnabled() || !fit_scope ||
+        !fit_plane_model_action || !delete_measurement_action ||
+        delete_measurement_action->isEnabled() || !clear_measurements_action ||
+        clear_measurements_action->isEnabled() || !export_measurements_action ||
+        export_measurements_action->isEnabled()) {
+        return fail("Point-cloud selection or measurement actions did not reflect the empty state.");
+    }
+    fit_scope->setCurrentIndex(fit_scope->findData(
+        static_cast<int>(PointCloudFitScope::Selection)));
+    if (fit_plane_model_action->isEnabled()) {
+        return fail("Selection-scoped fitting stayed enabled without a selection.");
+    }
+    fit_scope->setCurrentIndex(fit_scope->findData(
+        static_cast<int>(PointCloudFitScope::WholeCloud)));
+    if (!fit_plane_model_action->isEnabled()) {
+        return fail("Whole-cloud fitting was not enabled for valid point-cloud data.");
     }
     auto* texture_enhancement = point_cloud_dialog.findChild<QCheckBox*>(
         QStringLiteral("PointCloudTextureEnhancementCheck"));
@@ -521,6 +560,54 @@ int main(int argc, char* argv[])
         !keep_selection->isEnabled() || !remove_selection->isEnabled()) {
         return fail("3D point-cloud free selection did not stay available after selection.");
     }
+    const QVector<int> preserved_selection =
+        point_cloud_dialog.cloudWidget()->selectionPreviewIndices();
+    begin_selection->click();
+    if (point_cloud_dialog.cloudWidget()->selectionPreviewIndices() != preserved_selection ||
+        !keep_selection->isEnabled() || !clear_selection_action->isEnabled()) {
+        return fail("Re-entering free selection discarded the reusable point selection.");
+    }
+    fit_scope->setCurrentIndex(fit_scope->findData(
+        static_cast<int>(PointCloudFitScope::Selection)));
+    if (!fit_plane_model_action->isEnabled()) {
+        return fail("Selection-scoped plane fitting did not activate for a valid selection.");
+    }
+    auto* point_cloud_tabs_for_fit = point_cloud_dialog.findChild<QTabWidget*>(
+        QStringLiteral("PointCloudToolTabs"));
+    fit_plane_model_action->click();
+    if (!point_cloud_tabs_for_fit || !point_cloud_tabs_for_fit->isEnabled()) {
+        return fail("Background fitting blocked the entire point-cloud tool panel.");
+    }
+    QElapsedTimer fit_wait_timer;
+    fit_wait_timer.start();
+    while (point_cloud_dialog.cloudWidget()->geometricModels().empty() &&
+        fit_wait_timer.elapsed() < 5000) {
+        application.processEvents();
+        QThread::msleep(10);
+    }
+    if (point_cloud_dialog.cloudWidget()->geometricModels().empty() ||
+        point_cloud_dialog.cloudWidget()->geometricModels().front().type !=
+            PointCloudGeometricModelType::Plane ||
+        point_cloud_dialog.cloudWidget()->activeGeometricModel() == 0) {
+        return fail("Selection-scoped plane fitting did not create and activate a model.");
+    }
+    auto* hide_model_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudHideModelButton"));
+    auto* show_model_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudShowModelButton"));
+    if (!hide_model_action || !show_model_action || !hide_model_action->isEnabled() ||
+        show_model_action->isEnabled()) {
+        return fail("Point-cloud model visibility actions did not reflect the active model.");
+    }
+    hide_model_action->click();
+    if (point_cloud_dialog.cloudWidget()->geometricModels().front().visible ||
+        hide_model_action->isEnabled() || !show_model_action->isEnabled()) {
+        return fail("Point-cloud model hide action did not update the model and command state.");
+    }
+    show_model_action->click();
+    if (!point_cloud_dialog.cloudWidget()->geometricModels().front().visible) {
+        return fail("Point-cloud model show action did not restore the overlay.");
+    }
     point_cloud_dialog.setMeasurementMode(PointCloudMeasureMode::Distance);
     if (point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Distance ||
         !point_cloud_dialog.cloudWidget()->pickingEnabled()) {
@@ -537,6 +624,17 @@ int main(int argc, char* argv[])
         point_cloud_dialog.measurementMode() != PointCloudMeasureMode::Distance ||
         !point_cloud_dialog.cloudWidget()->pickingEnabled()) {
         return fail("3D point-cloud continuous distance measurement did not remain active.");
+    }
+    auto* measurement_results = point_cloud_dialog.findChild<QListWidget*>(
+        QStringLiteral("PointCloudMeasurementList"));
+    auto* measurement_hint = point_cloud_dialog.findChild<QLabel*>(
+        QStringLiteral("PointCloudMeasurementHint"));
+    if (!measurement_results || measurement_results->currentRow() != 0 ||
+        point_cloud_dialog.cloudWidget()->highlightedIndices().size() != 2 ||
+        !delete_measurement_action->isEnabled() || !clear_measurements_action->isEnabled() ||
+        !export_measurements_action->isEnabled() || !measurement_hint ||
+        !measurement_hint->text().contains(QStringLiteral("工具保持启用"))) {
+        return fail("Completed measurement was not selected, highlighted, or kept continuous.");
     }
     auto* section_button = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudBeginSectionButton"));
@@ -615,6 +713,18 @@ int main(int argc, char* argv[])
             QStringLiteral("CameraView-point-cloud-dialog-compact.png")))) {
         return fail("Compact point-cloud workspace layout is clipped or incomplete.");
     }
+    auto* delete_model_action = point_cloud_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudDeleteModelButton"));
+    if (!delete_model_action || !delete_model_action->isEnabled() ||
+        !point_cloud_dialog.cloudWidget()->fittedPlane().valid) {
+        return fail("Active plane model was not synchronized as the measurement reference.");
+    }
+    delete_model_action->click();
+    if (!point_cloud_dialog.cloudWidget()->geometricModels().empty() ||
+        point_cloud_dialog.cloudWidget()->fittedPlane().valid ||
+        delete_model_action->isEnabled()) {
+        return fail("Deleting the active plane model left a stale measurement reference.");
+    }
 
     auto waitForCloudSize = [&application](PointCloudDialog& dialog, std::size_t expected) {
         QElapsedTimer timer;
@@ -666,6 +776,12 @@ int main(int argc, char* argv[])
         std::cerr << "Keep crop expected " << keep_subset.size() << ", actual "
                   << keep_crop_dialog.cloud().Size() << '\n';
         return fail("Point-cloud keep-inside action did not apply the crop.");
+    }
+    auto* keep_clear_selection = keep_crop_dialog.findChild<QPushButton*>(
+        QStringLiteral("PointCloudClearSelectionButton"));
+    if (!keep_crop_dialog.cloudWidget()->selectionPreviewIndices().isEmpty() ||
+        !keep_clear_selection || keep_clear_selection->isEnabled()) {
+        return fail("Point-cloud data changes did not invalidate the old point selection.");
     }
     PointCloudDialog remove_crop_dialog(point_cloud);
     auto* remove_crop_action = remove_crop_dialog.findChild<QPushButton*>(

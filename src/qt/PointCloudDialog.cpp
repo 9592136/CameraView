@@ -12,6 +12,7 @@
 
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDoubleSpinBox>
@@ -82,6 +83,15 @@ QWidget* rowOf(std::initializer_list<QWidget*> widgets)
     return row;
 }
 
+void setInlineStatus(QLabel* label, const QString& text, const QString& status)
+{
+    if (!label) return;
+    label->setText(text);
+    label->setProperty("status", status);
+    label->style()->unpolish(label);
+    label->style()->polish(label);
+}
+
 } // namespace
 
 PointCloudDialog::PointCloudDialog(QWidget* parent) : QDialog(parent)
@@ -129,7 +139,9 @@ void PointCloudDialog::buildUi()
     workspace_mode_group->setExclusive(true);
     workspace_mode_group->addButton(navigation_button_);
     workspace_mode_group->addButton(free_selection_button_);
-    auto* clear_selection_button = new QPushButton(tr("清除选择"));
+    clear_selection_button_ = new QPushButton(tr("清除选择"));
+    clear_selection_button_->setObjectName(QStringLiteral("PointCloudClearSelectionButton"));
+    clear_selection_button_->setToolTip(tr("清除当前选区，不影响已有模型和测量结果"));
     undo_button_ = new QPushButton(tr("撤销"));
     undo_button_->setObjectName(QStringLiteral("PointCloudUndoButton"));
     redo_button_ = new QPushButton(tr("重做"));
@@ -145,7 +157,7 @@ void PointCloudDialog::buildUi()
     workspace_status_ = new QLabel(tr("未载入点云"));
     toolbar_layout->addWidget(navigation_button_);
     toolbar_layout->addWidget(free_selection_button_);
-    toolbar_layout->addWidget(clear_selection_button);
+    toolbar_layout->addWidget(clear_selection_button_);
     toolbar_layout->addWidget(undo_button_);
     toolbar_layout->addWidget(redo_button_);
     toolbar_layout->addSpacing(6);
@@ -400,14 +412,15 @@ void PointCloudDialog::buildUi()
     maximum_radius_spin_ = coordinateSpin(QStringLiteral("PointCloudMaximumRadius"));
     maximum_radius_spin_->setRange(0.0, 1e12);
     maximum_radius_spin_->setSpecialValueText(tr("不限"));
-    auto* fit_plane_model = new QPushButton(tr("拟合平面"));
-    auto* fit_sphere = new QPushButton(tr("拟合球"));
-    auto* fit_cylinder = new QPushButton(tr("拟合圆柱"));
-    fit_plane_model->setObjectName(QStringLiteral("PointCloudFitPlaneModelButton"));
-    fit_sphere->setObjectName(QStringLiteral("PointCloudFitSphereButton"));
-    fit_cylinder->setObjectName(QStringLiteral("PointCloudFitCylinderButton"));
-    fit_sphere->setProperty("role", QStringLiteral("primary"));
-    fit_cylinder->setProperty("role", QStringLiteral("primary"));
+    fit_plane_model_button_ = new QPushButton(tr("拟合平面"));
+    fit_sphere_button_ = new QPushButton(tr("拟合球"));
+    fit_cylinder_button_ = new QPushButton(tr("拟合圆柱"));
+    fit_plane_model_button_->setObjectName(QStringLiteral("PointCloudFitPlaneModelButton"));
+    fit_sphere_button_->setObjectName(QStringLiteral("PointCloudFitSphereButton"));
+    fit_cylinder_button_->setObjectName(QStringLiteral("PointCloudFitCylinderButton"));
+    cancel_fit_button_ = new QPushButton(tr("取消拟合"));
+    cancel_fit_button_->setObjectName(QStringLiteral("PointCloudCancelFitButton"));
+    cancel_fit_button_->setEnabled(false);
     fit_status_ = new QLabel(tr("选择拟合类型，结果将加入模型列表。"));
     fit_status_->setObjectName(QStringLiteral("PointCloudFitStatus"));
     fit_status_->setWordWrap(true);
@@ -416,7 +429,8 @@ void PointCloudDialog::buildUi()
     fit_form->addRow(tr("圆柱轴向"), cylinder_axis_combo_);
     fit_form->addRow(tr("最小半径"), minimum_radius_spin_);
     fit_form->addRow(tr("最大半径"), maximum_radius_spin_);
-    fit_form->addRow({}, rowOf({fit_plane_model, fit_sphere, fit_cylinder}));
+    fit_form->addRow({}, rowOf({fit_plane_model_button_, fit_sphere_button_, fit_cylinder_button_}));
+    fit_form->addRow({}, cancel_fit_button_);
     fit_form->addRow({}, fit_status_);
     fit_layout->addWidget(fit_group);
     auto* model_group = new QGroupBox(tr("模型管理"));
@@ -426,14 +440,20 @@ void PointCloudDialog::buildUi()
     model_details_ = new QLabel(tr("尚未创建模型"));
     model_details_->setWordWrap(true);
     residual_coloring_check_ = new QCheckBox(tr("按当前模型显示残差颜色"));
-    auto* show_model = new QPushButton(tr("显示"));
-    auto* hide_model = new QPushButton(tr("隐藏"));
-    auto* delete_model = new QPushButton(tr("删除"));
-    auto* clear_models_button = new QPushButton(tr("清空模型"));
+    show_model_button_ = new QPushButton(tr("显示"));
+    hide_model_button_ = new QPushButton(tr("隐藏"));
+    delete_model_button_ = new QPushButton(tr("删除"));
+    clear_models_button_ = new QPushButton(tr("清空模型"));
+    show_model_button_->setObjectName(QStringLiteral("PointCloudShowModelButton"));
+    hide_model_button_->setObjectName(QStringLiteral("PointCloudHideModelButton"));
+    delete_model_button_->setObjectName(QStringLiteral("PointCloudDeleteModelButton"));
+    clear_models_button_->setObjectName(QStringLiteral("PointCloudClearModelsButton"));
+    model_list_->setToolTip(tr("单击选择模型；双击可快速显示或隐藏模型"));
     model_layout->addWidget(model_list_);
     model_layout->addWidget(model_details_);
     model_layout->addWidget(residual_coloring_check_);
-    model_layout->addWidget(rowOf({show_model, hide_model, delete_model, clear_models_button}));
+    model_layout->addWidget(rowOf({show_model_button_, hide_model_button_,
+        delete_model_button_, clear_models_button_}));
     fit_layout->addWidget(model_group);
     fit_layout->addStretch();
     fit_page->setWidget(fit_content);
@@ -491,14 +511,15 @@ void PointCloudDialog::buildUi()
     measurement_list_ = new QListWidget;
     measurement_list_->setObjectName(QStringLiteral("PointCloudMeasurementList"));
     measure_layout->addWidget(measurement_list_, 1);
-    auto* delete_measurement = new QPushButton(tr("删除选中"));
-    delete_measurement->setObjectName(QStringLiteral("PointCloudDeleteMeasurementButton"));
-    auto* clear_measurements = new QPushButton(tr("清空测量"));
-    clear_measurements->setObjectName(QStringLiteral("PointCloudClearMeasurementsButton"));
-    auto* export_measurements = new QPushButton(tr("导出 CSV…"));
-    export_measurements->setObjectName(QStringLiteral("PointCloudExportMeasurementsButton"));
+    delete_measurement_button_ = new QPushButton(tr("删除选中"));
+    delete_measurement_button_->setObjectName(QStringLiteral("PointCloudDeleteMeasurementButton"));
+    clear_measurements_button_ = new QPushButton(tr("清空测量"));
+    clear_measurements_button_->setObjectName(QStringLiteral("PointCloudClearMeasurementsButton"));
+    export_measurements_button_ = new QPushButton(tr("导出 CSV…"));
+    export_measurements_button_->setObjectName(QStringLiteral("PointCloudExportMeasurementsButton"));
+    measurement_list_->setToolTip(tr("选择测量结果可在点云中回显对应取样点"));
     measure_layout->addWidget(rowOf({
-        delete_measurement, clear_measurements, export_measurements}));
+        delete_measurement_button_, clear_measurements_button_, export_measurements_button_}));
     tabs_->addTab(measure_page, tr("测量"));
 
     auto* inspect_page = new QScrollArea;
@@ -539,7 +560,8 @@ void PointCloudDialog::buildUi()
     auto* deviation_group = new QGroupBox(tr("偏差高斯分布"));
     auto* deviation_layout = new QVBoxLayout(deviation_group);
     auto* deviation_help = new QLabel(tr(
-        "统计全部点到最佳拟合平面的有符号垂直偏差，显示直方图、理论高斯曲线和 σ 覆盖率。"));
+        "统计当前选中平面、球或圆柱模型的有符号偏差；存在选区时仅分析选区，"
+        "并显示直方图、理论高斯曲线和 σ 覆盖率。"));
     deviation_help->setWordWrap(true);
     auto* deviation_button = new QPushButton(tr("分析偏差高斯分布…"));
     deviation_button->setObjectName(QStringLiteral("PointCloudDeviationDistributionButton"));
@@ -594,7 +616,7 @@ void PointCloudDialog::buildUi()
         workspace_status_->setText(
             tr("按住左键绘制自由选区；选择会保留供拟合、裁剪和分析复用"));
     });
-    connect(clear_selection_button, &QPushButton::clicked, this, [this] {
+    connect(clear_selection_button_, &QPushButton::clicked, this, [this] {
         clearInteractiveCrop();
         updateSelectionPresentation();
     });
@@ -670,42 +692,58 @@ void PointCloudDialog::buildUi()
     connect(restore_button, &QPushButton::clicked, this, &PointCloudDialog::restoreOriginal);
     connect(cloud_widget_, &PointCloudWidget::pointPicked,
         this, &PointCloudDialog::acceptPickedPoint);
-    connect(delete_measurement, &QPushButton::clicked, this, [this] {
+    connect(delete_measurement_button_, &QPushButton::clicked, this, [this] {
         const int row = measurement_list_->currentRow();
         if (row < 0 || row >= static_cast<int>(measurements_.size())) return;
         measurements_.erase(measurements_.begin() + row);
         refreshMeasurementList();
+        if (!measurements_.empty()) {
+            measurement_list_->setCurrentRow(std::min(row,
+                static_cast<int>(measurements_.size()) - 1));
+        }
     });
-    connect(clear_measurements, &QPushButton::clicked, this, [this] {
+    connect(clear_measurements_button_, &QPushButton::clicked, this, [this] {
         measurements_.clear();
         pending_points_.clear();
         cloud_widget_->setHighlightedIndices({});
         refreshMeasurementList();
     });
-    connect(export_measurements, &QPushButton::clicked,
+    connect(export_measurements_button_, &QPushButton::clicked,
         this, &PointCloudDialog::exportMeasurements);
+    connect(measurement_list_, &QListWidget::currentRowChanged,
+        this, &PointCloudDialog::selectMeasurementRow);
     connect(evaluate_tolerances, &QPushButton::clicked,
         this, &PointCloudDialog::evaluateTolerances);
     connect(deviation_button, &QPushButton::clicked,
         this, &PointCloudDialog::showDeviationDistribution);
     connect(begin_section, &QPushButton::clicked,
         this, &PointCloudDialog::beginSectionAnalysis);
-    connect(fit_plane_model, &QPushButton::clicked, this,
+    connect(fit_plane_model_button_, &QPushButton::clicked, this,
         [this] { fitGeometricModel(PointCloudGeometricModelType::Plane); });
-    connect(fit_sphere, &QPushButton::clicked, this,
+    connect(fit_sphere_button_, &QPushButton::clicked, this,
         [this] { fitGeometricModel(PointCloudGeometricModelType::Sphere); });
-    connect(fit_cylinder, &QPushButton::clicked, this,
+    connect(fit_cylinder_button_, &QPushButton::clicked, this,
         [this] { fitGeometricModel(PointCloudGeometricModelType::Cylinder); });
+    connect(cancel_fit_button_, &QPushButton::clicked, this, [this] {
+        cancelActiveFit(tr("已取消拟合；后台计算结果将被安全丢弃。"));
+    });
+    connect(fit_scope_combo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this] { updateActionStates(); });
     connect(model_list_, &QListWidget::currentRowChanged,
         this, &PointCloudDialog::selectModelRow);
-    connect(show_model, &QPushButton::clicked, this,
+    connect(show_model_button_, &QPushButton::clicked, this,
         [this] { setSelectedModelVisible(true); });
-    connect(hide_model, &QPushButton::clicked, this,
+    connect(hide_model_button_, &QPushButton::clicked, this,
         [this] { setSelectedModelVisible(false); });
-    connect(delete_model, &QPushButton::clicked, this,
+    connect(delete_model_button_, &QPushButton::clicked, this,
         &PointCloudDialog::deleteSelectedModel);
-    connect(clear_models_button, &QPushButton::clicked, this,
+    connect(clear_models_button_, &QPushButton::clicked, this,
         &PointCloudDialog::clearGeometricModels);
+    connect(model_list_, &QListWidget::itemDoubleClicked, this, [this] {
+        const int row = model_list_->currentRow();
+        if (row < 0 || row >= static_cast<int>(geometric_models_.size())) return;
+        setSelectedModelVisible(!geometric_models_[static_cast<std::size_t>(row)].visible);
+    });
     connect(residual_coloring_check_, &QCheckBox::toggled,
         cloud_widget_, &PointCloudWidget::setResidualColoringEnabled);
     connect(cloud_widget_, &PointCloudWidget::sectionSelectionFinished,
@@ -715,7 +753,8 @@ void PointCloudDialog::buildUi()
     for (QWidget* action : std::initializer_list<QWidget*>{export_button, reset_view,
              voxel_apply, outlier_apply, smart_filter_apply, hole_repair_apply,
              begin_crop_button_, fit_button, restore_button, evaluate_tolerances,
-             deviation_button, begin_section, fit_plane_model, fit_sphere, fit_cylinder}) {
+             deviation_button, begin_section, fit_plane_model_button_, fit_sphere_button_,
+             fit_cylinder_button_}) {
         action->setProperty("requiresCloud", true);
     }
     resetInspectionResults();
@@ -725,6 +764,7 @@ void PointCloudDialog::buildUi()
 
 void PointCloudDialog::setCloud(const PointCloud& cloud)
 {
+    cancelActiveFit(tr("点云已替换，原拟合任务已取消。"));
     setMeasureMode(PointCloudMeasureMode::Navigate);
     clearInteractiveCrop();
     original_cloud_ = current_cloud_ = cloud;
@@ -911,6 +951,7 @@ void PointCloudDialog::updateCloudPresentation(const QString& operation, bool re
               .arg(current_cloud_.Size()).arg(cloud_widget_->renderedPointCount()).arg(unitLabel())
         : tr("未载入点云"));
     updateSelectionPresentation();
+    updateActionStates();
 }
 
 void PointCloudDialog::resetInspectionResults()
@@ -946,7 +987,9 @@ void PointCloudDialog::pushProcessedCloud(PointCloud cloud, const QString& opera
         QMessageBox::information(this, tr("点云处理"), tr("该参数会移除所有点，请调整后重试。"));
         return;
     }
+    cancelActiveFit(tr("点云数据已改变，原拟合任务已取消。"));
     setMeasureMode(PointCloudMeasureMode::Navigate);
+    clearInteractiveCrop();
     undo_stack_.push_back(current_cloud_);
     redo_stack_.clear();
     current_cloud_ = std::move(cloud);
@@ -967,6 +1010,7 @@ void PointCloudDialog::runCloudTask(
     std::function<void()> completed)
 {
     if (current_cloud_.Empty()) return;
+    cancelActiveFit(tr("已开始点云处理，原拟合任务已取消。"));
     const std::uint64_t revision = cloud_revision_;
     auto cancelled = std::make_shared<std::atomic_bool>(false);
     auto* progress = new QProgressDialog(
@@ -1074,8 +1118,7 @@ void PointCloudDialog::beginInteractiveCrop()
         setMeasureMode(PointCloudMeasureMode::Navigate);
         begin_crop_button_->setChecked(true);
     }
-    crop_selection_.clear();
-    cloud_widget_->setSelectionPreviewIndices({});
+    cloud_widget_->setSelectionPreviewIndices(crop_selection_);
     cloud_widget_->setFreeSelectionEnabled(active);
     if (free_selection_button_) {
         const QSignalBlocker navigation_blocker(navigation_button_);
@@ -1083,11 +1126,12 @@ void PointCloudDialog::beginInteractiveCrop()
         navigation_button_->setChecked(!active);
         free_selection_button_->setChecked(active);
     }
-    keep_crop_button_->setEnabled(false);
-    remove_crop_button_->setEnabled(false);
-    crop_selection_label_->setText(active
-        ? tr("在点云视图中按住左键沿目标轮廓绘制自由选区。")
-        : tr("尚未选择点"));
+    if (active && crop_selection_.isEmpty()) {
+        crop_selection_label_->setText(
+            tr("在点云视图中按住左键沿目标轮廓绘制自由选区。"));
+    }
+    updateSelectionPresentation();
+    updateActionStates();
 }
 
 void PointCloudDialog::acceptBoxSelection(const QVector<int>& indices)
@@ -1133,7 +1177,6 @@ void PointCloudDialog::applyInteractiveCrop(bool keep_selected)
         if (index >= 0) indices.push_back(static_cast<std::size_t>(index));
     }
     const PointCloud cloud = current_cloud_;
-    clearInteractiveCrop();
     const QString operation = keep_selected ? tr("保留选区内点") : tr("保留选区外点");
     runCloudTask(operation, [cloud, indices, keep_selected] {
         return PointCloudProcessor::SelectIndices(cloud, indices, keep_selected);
@@ -1170,13 +1213,108 @@ void PointCloudDialog::updateSelectionPresentation()
     if (fit_scope_combo_) {
         fit_scope_combo_->setItemText(1, tr("当前选择（%1 点）").arg(crop_selection_.size()));
     }
+    if (crop_selection_label_) {
+        if (!crop_selection_.isEmpty()) {
+            crop_selection_label_->setText(
+                tr("已选择 %1 / %2 个点；Shift 添加，Ctrl 移除。")
+                    .arg(crop_selection_.size()).arg(current_cloud_.Size()));
+        } else if (cloud_widget_ && cloud_widget_->freeSelectionEnabled()) {
+            crop_selection_label_->setText(
+                tr("在点云视图中按住左键沿目标轮廓绘制自由选区。"));
+        } else {
+            crop_selection_label_->setText(tr("尚未选择点"));
+        }
+    }
+    updateActionStates();
+}
+
+void PointCloudDialog::updateActionStates()
+{
+    const bool has_cloud = !current_cloud_.Empty();
+    const int selection_count = crop_selection_.size();
+    if (clear_selection_button_) clear_selection_button_->setEnabled(selection_count > 0);
+    if (keep_crop_button_) keep_crop_button_->setEnabled(selection_count > 0 && has_cloud);
+    if (remove_crop_button_) {
+        remove_crop_button_->setEnabled(selection_count > 0 && has_cloud &&
+            selection_count < static_cast<int>(current_cloud_.Size()));
+    }
+
+    const bool selection_scope = fit_scope_combo_ &&
+        static_cast<PointCloudFitScope>(fit_scope_combo_->currentData().toInt()) ==
+            PointCloudFitScope::Selection;
+    const std::size_t fit_sample_count = selection_scope
+        ? static_cast<std::size_t>(selection_count) : current_cloud_.Size();
+    auto update_fit_button = [this, has_cloud, selection_scope, fit_sample_count](
+                                 QPushButton* button, std::size_t minimum_points,
+                                 const QString& model_name) {
+        if (!button) return;
+        const bool enough_points = fit_sample_count >= minimum_points;
+        button->setEnabled(has_cloud && enough_points && !fit_running_);
+        if (!has_cloud) {
+            button->setToolTip(tr("请先打开点云数据"));
+        } else if (!enough_points) {
+            button->setToolTip(selection_scope
+                ? tr("拟合%1至少需要选择 %2 个点").arg(model_name).arg(minimum_points)
+                : tr("拟合%1至少需要 %2 个有效点").arg(model_name).arg(minimum_points));
+        } else {
+            button->setToolTip(selection_scope
+                ? tr("使用当前选择的 %1 个点拟合%2").arg(fit_sample_count).arg(model_name)
+                : tr("使用整个点云拟合%1").arg(model_name));
+        }
+    };
+    update_fit_button(fit_plane_model_button_, 3, tr("平面"));
+    update_fit_button(fit_sphere_button_, 4, tr("球"));
+    update_fit_button(fit_cylinder_button_, 6, tr("圆柱"));
+    if (cancel_fit_button_) {
+        cancel_fit_button_->setVisible(fit_running_);
+        cancel_fit_button_->setEnabled(fit_running_);
+    }
+
+    const int model_row = model_list_ ? model_list_->currentRow() : -1;
+    const bool model_selected = model_row >= 0 &&
+        model_row < static_cast<int>(geometric_models_.size());
+    const bool model_visible = model_selected &&
+        geometric_models_[static_cast<std::size_t>(model_row)].visible;
+    if (show_model_button_) show_model_button_->setEnabled(model_selected && !model_visible);
+    if (hide_model_button_) hide_model_button_->setEnabled(model_selected && model_visible);
+    if (delete_model_button_) delete_model_button_->setEnabled(model_selected);
+    if (clear_models_button_) clear_models_button_->setEnabled(!geometric_models_.empty());
+    if (residual_coloring_check_) {
+        residual_coloring_check_->setEnabled(model_selected);
+        if (!model_selected && residual_coloring_check_->isChecked()) {
+            const QSignalBlocker blocker(residual_coloring_check_);
+            residual_coloring_check_->setChecked(false);
+            cloud_widget_->setResidualColoringEnabled(false);
+        }
+    }
+
+    const int measurement_row = measurement_list_ ? measurement_list_->currentRow() : -1;
+    const bool measurement_selected = measurement_row >= 0 &&
+        measurement_row < static_cast<int>(measurements_.size());
+    if (delete_measurement_button_) {
+        delete_measurement_button_->setEnabled(measurement_selected);
+    }
+    if (clear_measurements_button_) {
+        clear_measurements_button_->setEnabled(!measurements_.empty());
+    }
+    if (export_measurements_button_) {
+        export_measurements_button_->setEnabled(!measurements_.empty());
+    }
 }
 
 void PointCloudDialog::clearFittedPlane()
 {
     fitted_plane_ = {};
-    if (cloud_widget_) cloud_widget_->setFittedPlane({});
-    if (show_plane_check_) show_plane_check_->setEnabled(false);
+    reference_plane_model_id_ = 0;
+    if (cloud_widget_) {
+        cloud_widget_->setFittedPlane({});
+        cloud_widget_->setFittedPlaneVisible(false);
+    }
+    if (show_plane_check_) {
+        const QSignalBlocker blocker(show_plane_check_);
+        show_plane_check_->setChecked(false);
+        show_plane_check_->setEnabled(false);
+    }
     if (plane_label_) plane_label_->setText(tr("尚未拟合参考平面"));
     if (level_button_) level_button_->setEnabled(false);
 }
@@ -1195,6 +1333,7 @@ std::vector<std::size_t> PointCloudDialog::selectedSourceIndices() const
 
 void PointCloudDialog::clearGeometricModels()
 {
+    const bool clears_reference_plane = reference_plane_model_id_ != 0;
     geometric_models_.clear();
     active_model_id_ = 0;
     plane_model_count_ = sphere_model_count_ = cylinder_model_count_ = 0;
@@ -1202,12 +1341,14 @@ void PointCloudDialog::clearGeometricModels()
         cloud_widget_->setGeometricModels({});
         cloud_widget_->setActiveGeometricModel(0);
     }
+    if (clears_reference_plane) clearFittedPlane();
     refreshModelList();
+    updateActionStates();
 }
 
 void PointCloudDialog::fitGeometricModel(PointCloudGeometricModelType type)
 {
-    if (current_cloud_.Empty()) return;
+    if (current_cloud_.Empty() || fit_running_) return;
     PointCloudFitOptions options;
     options.scope = static_cast<PointCloudFitScope>(fit_scope_combo_->currentData().toInt());
     options.cylinder_axis = static_cast<PointCloudCylinderAxisConstraint>(
@@ -1220,28 +1361,33 @@ void PointCloudDialog::fitGeometricModel(PointCloudGeometricModelType type)
     const std::size_t minimum_points = type == PointCloudGeometricModelType::Sphere ? 4
         : type == PointCloudGeometricModelType::Cylinder ? 6 : 3;
     if (options.scope == PointCloudFitScope::Selection && indices.size() < minimum_points) {
-        fit_status_->setText(tr("当前选择不足：该模型至少需要 %1 个点。")
-            .arg(minimum_points));
-        fit_status_->setProperty("status", QStringLiteral("error"));
-        fit_status_->style()->unpolish(fit_status_);
-        fit_status_->style()->polish(fit_status_);
+        setInlineStatus(fit_status_,
+            tr("当前选择不足：该模型至少需要 %1 个点。").arg(minimum_points),
+            QStringLiteral("error"));
         return;
     }
     if (options.minimum_radius > 0.0 && options.maximum_radius > 0.0 &&
         options.minimum_radius > options.maximum_radius) {
-        fit_status_->setText(tr("半径约束冲突：最小半径不能大于最大半径。"));
+        setInlineStatus(fit_status_,
+            tr("半径约束冲突：最小半径不能大于最大半径。"),
+            QStringLiteral("error"));
         return;
     }
     const PointCloud cloud = current_cloud_;
     const std::uint64_t revision = cloud_revision_;
-    fit_status_->setText(tr("正在后台拟合，请稍候…"));
-    tabs_->setEnabled(false);
+    const std::uint64_t request_id = ++fit_request_id_;
+    fit_running_ = true;
+    setInlineStatus(fit_status_, tr("正在后台拟合；可继续浏览点云或取消任务…"),
+        QStringLiteral("working"));
+    updateActionStates();
     auto* watcher = new QFutureWatcher<PointCloudFitResult>(this);
     connect(watcher, &QFutureWatcher<PointCloudFitResult>::finished, this,
-        [this, watcher, revision] {
+        [this, watcher, revision, request_id] {
             PointCloudFitResult result = watcher->result();
             watcher->deleteLater();
-            tabs_->setEnabled(true);
+            if (request_id != fit_request_id_) return;
+            fit_running_ = false;
+            updateActionStates();
             acceptFitResult(std::move(result), revision);
         });
     watcher->setFuture(QtConcurrent::run([cloud, indices, options, type] {
@@ -1255,14 +1401,25 @@ void PointCloudDialog::fitGeometricModel(PointCloudGeometricModelType type)
     }));
 }
 
+void PointCloudDialog::cancelActiveFit(const QString& message)
+{
+    if (!fit_running_) return;
+    ++fit_request_id_;
+    fit_running_ = false;
+    setInlineStatus(fit_status_, message, QStringLiteral("warning"));
+    updateActionStates();
+}
+
 void PointCloudDialog::acceptFitResult(PointCloudFitResult result, std::uint64_t revision)
 {
     if (revision != cloud_revision_) {
-        fit_status_->setText(tr("点云已改变，本次拟合结果已丢弃。"));
+        setInlineStatus(fit_status_, tr("点云已改变，本次拟合结果已丢弃。"),
+            QStringLiteral("warning"));
         return;
     }
     if (!result.valid) {
-        fit_status_->setText(tr("拟合失败：%1").arg(errorText(result.error)));
+        setInlineStatus(fit_status_, tr("拟合失败：%1").arg(errorText(result.error)),
+            QStringLiteral("error"));
         return;
     }
     result.model.id = next_model_id_++;
@@ -1276,37 +1433,68 @@ void PointCloudDialog::acceptFitResult(PointCloudFitResult result, std::uint64_t
         number = ++cylinder_model_count_; type_name = tr("圆柱");
     }
     result.model.name = tr("%1 %2").arg(type_name).arg(number).toStdWString();
-    fitted_plane_ = result.model.type == PointCloudGeometricModelType::Plane
-        ? result.model.plane : fitted_plane_;
     geometric_models_.push_back(std::move(result.model));
     active_model_id_ = geometric_models_.back().id;
+    if (geometric_models_.back().type == PointCloudGeometricModelType::Plane) {
+        fitted_plane_ = geometric_models_.back().plane;
+        reference_plane_model_id_ = geometric_models_.back().id;
+        cloud_widget_->setFittedPlane(fitted_plane_);
+        cloud_widget_->setFittedPlaneVisible(false);
+        if (show_plane_check_) {
+            const QSignalBlocker blocker(show_plane_check_);
+            show_plane_check_->setChecked(false);
+            show_plane_check_->setEnabled(false);
+        }
+        if (plane_label_) {
+            plane_label_->setText(tr("当前参考：%1\nRMS：%2 %3")
+                .arg(QString::fromStdWString(geometric_models_.back().name))
+                .arg(fitted_plane_.rms, 0, 'g', 7).arg(unitLabel()));
+        }
+        if (level_button_) level_button_->setEnabled(true);
+    }
     cloud_widget_->setGeometricModels(geometric_models_);
     cloud_widget_->setActiveGeometricModel(active_model_id_);
     refreshModelList();
     model_list_->setCurrentRow(static_cast<int>(geometric_models_.size()) - 1);
-    fit_status_->setText(tr("拟合完成：内点 %1/%2，RMS %3 %4")
+    setInlineStatus(fit_status_, tr("拟合完成：内点 %1/%2，RMS %3 %4")
         .arg(geometric_models_.back().quality.inlier_count)
         .arg(geometric_models_.back().quality.sample_count)
-        .arg(geometric_models_.back().quality.rms, 0, 'g', 7).arg(unitLabel()));
+        .arg(geometric_models_.back().quality.rms, 0, 'g', 7).arg(unitLabel()),
+        QStringLiteral("ok"));
+    updateActionStates();
 }
 
 void PointCloudDialog::refreshModelList()
 {
     if (!model_list_) return;
     const int old_row = model_list_->currentRow();
+    const QSignalBlocker blocker(model_list_);
     model_list_->clear();
     for (const auto& model : geometric_models_) {
         const QString status = model.visible ? tr("显示") : tr("隐藏");
-        model_list_->addItem(tr("%1 · %2 · RMS %3")
-            .arg(QString::fromStdWString(model.name), status)
+        const QString quality_badge = !model.quality.valid ? QStringLiteral("●")
+            : model.quality.inlier_ratio >= 0.9 ? QStringLiteral("●")
+            : model.quality.inlier_ratio >= 0.65 ? QStringLiteral("▲")
+            : QStringLiteral("●");
+        auto* item = new QListWidgetItem(tr("%1 %2 · %3 · RMS %4")
+            .arg(quality_badge, QString::fromStdWString(model.name), status)
             .arg(model.quality.rms, 0, 'g', 5));
+        item->setForeground(!model.quality.valid || model.quality.inlier_ratio < 0.65
+            ? QColor(QStringLiteral("#ff7272"))
+            : model.quality.inlier_ratio < 0.9
+                ? QColor(QStringLiteral("#f6be5c"))
+                : QColor(QStringLiteral("#8ed8ff")));
+        model_list_->addItem(item);
     }
+    int selected_row = -1;
     if (!geometric_models_.empty()) {
-        model_list_->setCurrentRow(std::clamp(old_row, 0,
-            static_cast<int>(geometric_models_.size()) - 1));
+        selected_row = std::clamp(old_row, 0,
+            static_cast<int>(geometric_models_.size()) - 1);
+        model_list_->setCurrentRow(selected_row);
     } else if (model_details_) {
         model_details_->setText(tr("尚未创建模型"));
     }
+    selectModelRow(selected_row);
 }
 
 void PointCloudDialog::selectModelRow(int row)
@@ -1314,6 +1502,8 @@ void PointCloudDialog::selectModelRow(int row)
     if (row < 0 || row >= static_cast<int>(geometric_models_.size())) {
         active_model_id_ = 0;
         cloud_widget_->setActiveGeometricModel(0);
+        if (model_details_) model_details_->setText(tr("尚未选择模型"));
+        updateActionStates();
         return;
     }
     const PointCloudGeometricModel& model = geometric_models_[static_cast<std::size_t>(row)];
@@ -1321,6 +1511,21 @@ void PointCloudDialog::selectModelRow(int row)
     cloud_widget_->setActiveGeometricModel(active_model_id_);
     QString parameters;
     if (model.type == PointCloudGeometricModelType::Plane) {
+        fitted_plane_ = model.plane;
+        reference_plane_model_id_ = model.id;
+        cloud_widget_->setFittedPlane(fitted_plane_);
+        cloud_widget_->setFittedPlaneVisible(false);
+        if (show_plane_check_) {
+            const QSignalBlocker blocker(show_plane_check_);
+            show_plane_check_->setChecked(false);
+            show_plane_check_->setEnabled(false);
+        }
+        if (level_button_) level_button_->setEnabled(true);
+        if (plane_label_) {
+            plane_label_->setText(tr("当前参考：%1\nRMS：%2 %3")
+                .arg(QString::fromStdWString(model.name))
+                .arg(model.plane.rms, 0, 'g', 7).arg(unitLabel()));
+        }
         parameters = tr("平面：%1x + %2y + %3z + %4 = 0")
             .arg(model.plane.nx, 0, 'g', 7).arg(model.plane.ny, 0, 'g', 7)
             .arg(model.plane.nz, 0, 'g', 7).arg(model.plane.d, 0, 'g', 7);
@@ -1344,6 +1549,7 @@ void PointCloudDialog::selectModelRow(int row)
         .arg(model.quality.inlier_ratio * 100.0, 0, 'f', 1)
         .arg(model.quality.mean, 0, 'g', 6).arg(model.quality.standard_deviation, 0, 'g', 6)
         .arg(model.quality.rms, 0, 'g', 6).arg(unitLabel()));
+    updateActionStates();
 }
 
 void PointCloudDialog::setSelectedModelVisible(bool visible)
@@ -1354,16 +1560,21 @@ void PointCloudDialog::setSelectedModelVisible(bool visible)
     cloud_widget_->setGeometricModels(geometric_models_);
     refreshModelList();
     model_list_->setCurrentRow(row);
+    updateActionStates();
 }
 
 void PointCloudDialog::deleteSelectedModel()
 {
     const int row = model_list_ ? model_list_->currentRow() : -1;
     if (row < 0 || row >= static_cast<int>(geometric_models_.size())) return;
+    const bool deletes_reference_plane =
+        geometric_models_[static_cast<std::size_t>(row)].id == reference_plane_model_id_;
     geometric_models_.erase(geometric_models_.begin() + row);
+    if (deletes_reference_plane) clearFittedPlane();
     active_model_id_ = 0;
     cloud_widget_->setGeometricModels(geometric_models_);
     refreshModelList();
+    updateActionStates();
 }
 
 void PointCloudDialog::evaluateTolerances()
@@ -1480,6 +1691,7 @@ void PointCloudDialog::acceptSectionSelection(
 void PointCloudDialog::fitPlane()
 {
     fitted_plane_ = PointCloudProcessor::FitPlane(current_cloud_);
+    reference_plane_model_id_ = 0;
     if (!fitted_plane_.valid) {
         cloud_widget_->setFittedPlane({});
         show_plane_check_->setEnabled(false);
@@ -1511,7 +1723,9 @@ void PointCloudDialog::levelCloud()
 void PointCloudDialog::undoProcessing()
 {
     if (undo_stack_.empty()) return;
+    cancelActiveFit(tr("点云已撤销，原拟合任务已取消。"));
     setMeasureMode(PointCloudMeasureMode::Navigate);
+    clearInteractiveCrop();
     redo_stack_.push_back(current_cloud_);
     current_cloud_ = std::move(undo_stack_.back());
     undo_stack_.pop_back();
@@ -1529,7 +1743,9 @@ void PointCloudDialog::undoProcessing()
 void PointCloudDialog::redoProcessing()
 {
     if (redo_stack_.empty()) return;
+    cancelActiveFit(tr("点云已重做，原拟合任务已取消。"));
     setMeasureMode(PointCloudMeasureMode::Navigate);
+    clearInteractiveCrop();
     undo_stack_.push_back(current_cloud_);
     current_cloud_ = std::move(redo_stack_.back());
     redo_stack_.pop_back();
@@ -1547,7 +1763,9 @@ void PointCloudDialog::redoProcessing()
 void PointCloudDialog::restoreOriginal()
 {
     if (original_cloud_.Empty()) return;
+    cancelActiveFit(tr("已恢复原始点云，原拟合任务已取消。"));
     setMeasureMode(PointCloudMeasureMode::Navigate);
+    clearInteractiveCrop();
     undo_stack_.clear();
     redo_stack_.clear();
     current_cloud_ = original_cloud_;
@@ -1580,7 +1798,14 @@ void PointCloudDialog::setMeasureMode(PointCloudMeasureMode mode)
         }
     }
     pending_points_.clear();
-    cloud_widget_->setHighlightedIndices({});
+    const int selected_measurement = measurement_list_ ? measurement_list_->currentRow() : -1;
+    if (selected_measurement >= 0 &&
+        selected_measurement < static_cast<int>(measurements_.size())) {
+        cloud_widget_->setHighlightedIndices(
+            measurements_[static_cast<std::size_t>(selected_measurement)].point_indices);
+    } else {
+        cloud_widget_->setHighlightedIndices({});
+    }
     cloud_widget_->setPickingEnabled(mode != PointCloudMeasureMode::Navigate);
     QString hint;
     switch (mode) {
@@ -1590,7 +1815,7 @@ void PointCloudDialog::setMeasureMode(PointCloudMeasureMode mode)
     case PointCloudMeasureMode::Angle: hint = tr("依次点击端点、顶点、端点测量三维角度。"); break;
     case PointCloudMeasureMode::PointToPlane:
         hint = fitted_plane_.valid ? tr("点击一点测量到参考平面的垂直距离。")
-                                   : tr("请先在“处理”页拟合参考平面。");
+                                   : tr("请先在“拟合”页选择平面模型，或在“处理”页拟合参考平面。");
         break;
     case PointCloudMeasureMode::PlaneAngle:
         hint = tr("依次点选第一平面 3 点和第二平面 3 点。");
@@ -1609,7 +1834,8 @@ void PointCloudDialog::acceptPickedPoint(int index)
     if (index < 0 || index >= static_cast<int>(current_cloud_.points.size()) ||
         measure_mode_ == PointCloudMeasureMode::Navigate) return;
     if (measure_mode_ == PointCloudMeasureMode::PointToPlane && !fitted_plane_.valid) {
-        measurement_hint_->setText(tr("请先拟合参考平面。"));
+        measurement_hint_->setText(
+            tr("请先在“拟合”页选择平面模型，或在“处理”页拟合参考平面。"));
         return;
     }
     pending_points_.push_back(index);
@@ -1713,20 +1939,55 @@ void PointCloudDialog::finishMeasurement()
     }
     case PointCloudMeasureMode::Navigate: return;
     }
+    const PointCloudMeasureMode completed_mode = measure_mode_;
+    const QString completed_type = record.type;
     measurements_.push_back(std::move(record));
     pending_points_.clear();
-    cloud_widget_->setHighlightedIndices({});
+    setMeasureMode(completed_mode);
     refreshMeasurementList();
-    setMeasureMode(measure_mode_);
+    measurement_list_->setCurrentRow(static_cast<int>(measurements_.size()) - 1);
+    measurement_hint_->setText(tr("已添加“%1”；工具保持启用，可继续点击测量。")
+        .arg(completed_type));
 }
 
 void PointCloudDialog::refreshMeasurementList()
 {
-    measurement_list_->clear();
-    for (std::size_t index = 0; index < measurements_.size(); ++index) {
-        measurement_list_->addItem(tr("%1. %2：%3")
-            .arg(index + 1).arg(measurements_[index].type, measurements_[index].value));
+    const int old_row = measurement_list_->currentRow();
+    int selected_row = -1;
+    {
+        const QSignalBlocker blocker(measurement_list_);
+        measurement_list_->clear();
+        for (std::size_t index = 0; index < measurements_.size(); ++index) {
+            measurement_list_->addItem(tr("%1. %2：%3")
+                .arg(index + 1).arg(measurements_[index].type, measurements_[index].value));
+        }
+        if (old_row >= 0 && !measurements_.empty()) {
+            selected_row = std::min(old_row, static_cast<int>(measurements_.size()) - 1);
+            measurement_list_->setCurrentRow(selected_row);
+        }
     }
+    selectMeasurementRow(selected_row);
+    updateActionStates();
+}
+
+void PointCloudDialog::selectMeasurementRow(int row)
+{
+    if (!pending_points_.isEmpty()) {
+        updateActionStates();
+        return;
+    }
+    if (row < 0 || row >= static_cast<int>(measurements_.size())) {
+        cloud_widget_->setHighlightedIndices({});
+        updateActionStates();
+        return;
+    }
+    const PointCloudMeasurementRecord& record = measurements_[static_cast<std::size_t>(row)];
+    cloud_widget_->setHighlightedIndices(record.point_indices);
+    measurement_hint_->setText(record.point_indices.isEmpty()
+        ? tr("已选择“%1”结果。").arg(record.type)
+        : tr("已在点云中标出“%1”的 %2 个取样点；当前工具仍保持启用。")
+              .arg(record.type).arg(record.point_indices.size()));
+    updateActionStates();
 }
 
 void PointCloudDialog::exportMeasurements()
