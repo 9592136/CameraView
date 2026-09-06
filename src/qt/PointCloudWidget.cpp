@@ -229,6 +229,15 @@ void PointCloudWidget::setActiveGeometricModel(std::uint64_t id)
     setGeometricModels(geometric_models_);
 }
 
+void PointCloudWidget::setSectionDefinitions(
+    const std::vector<PointCloudSectionDefinition>& definitions,
+    std::uint64_t active_section_id)
+{
+    section_definitions_ = definitions;
+    active_section_id_ = active_section_id;
+    update();
+}
+
 void PointCloudWidget::setResidualColoringEnabled(bool enabled)
 {
     residual_coloring_enabled_ = enabled;
@@ -853,6 +862,7 @@ void PointCloudWidget::paintGL()
     }
 
     drawGeometricModels(painter);
+    drawSectionDefinitions(painter);
 
     if (draw_plane) {
         const double normal_length = std::max({cloud_.bounds.Width(),
@@ -1150,6 +1160,66 @@ void PointCloudWidget::drawGeometricModels(QPainter& painter) const
     }
 }
 
+void PointCloudWidget::drawSectionDefinitions(QPainter& painter) const
+{
+    constexpr double epsilon = 1e-12;
+    for (const auto& section : section_definitions_) {
+        if (!section.visible) continue;
+        double nx = 0.0, ny = 0.0, nz = 1.0;
+        if (section.reference == PointCloudSectionReference::ReferencePlane &&
+            section.reference_plane.valid) {
+            nx = section.reference_plane.nx;
+            ny = section.reference_plane.ny;
+            nz = section.reference_plane.nz;
+        }
+        const double normal_length = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (normal_length <= epsilon) continue;
+        nx /= normal_length; ny /= normal_length; nz /= normal_length;
+        double dx = section.end.x - section.start.x;
+        double dy = section.end.y - section.start.y;
+        double dz = section.end.z - section.start.z;
+        const double normal_component = dx * nx + dy * ny + dz * nz;
+        dx -= normal_component * nx;
+        dy -= normal_component * ny;
+        dz -= normal_component * nz;
+        const double direction_length = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (direction_length <= epsilon) continue;
+        dx /= direction_length; dy /= direction_length; dz /= direction_length;
+        double tx = ny * dz - nz * dy;
+        double ty = nz * dx - nx * dz;
+        double tz = nx * dy - ny * dx;
+        const double transverse_length = std::sqrt(tx * tx + ty * ty + tz * tz);
+        if (transverse_length <= epsilon) continue;
+        const double half_width = section.band_width * 0.5 / transverse_length;
+        tx *= half_width; ty *= half_width; tz *= half_width;
+        const PointCloudPoint first_left{section.start.x - tx, section.start.y - ty, section.start.z - tz};
+        const PointCloudPoint first_right{section.start.x + tx, section.start.y + ty, section.start.z + tz};
+        const PointCloudPoint second_right{section.end.x + tx, section.end.y + ty, section.end.z + tz};
+        const PointCloudPoint second_left{section.end.x - tx, section.end.y - ty, section.end.z - tz};
+        const bool active = section.id == active_section_id_;
+        const QColor base(static_cast<int>((section.color_rgb >> 16U) & 0xffU),
+            static_cast<int>((section.color_rgb >> 8U) & 0xffU),
+            static_cast<int>(section.color_rgb & 0xffU));
+        const QPolygonF band{projectPointValue(first_left).position,
+            projectPointValue(first_right).position, projectPointValue(second_right).position,
+            projectPointValue(second_left).position};
+        painter.setPen(QPen(base, active ? 2.2 : 1.2));
+        painter.setBrush(QColor(base.red(), base.green(), base.blue(), active ? 48 : 22));
+        painter.drawPolygon(band);
+        const QPointF start = projectPointValue(section.start).position;
+        const QPointF end = projectPointValue(section.end).position;
+        painter.setPen(QPen(active ? QColor(255, 221, 92) : base,
+            active ? 2.5 : 1.5, Qt::DashLine, Qt::RoundCap));
+        painter.drawLine(start, end);
+        painter.setBrush(active ? QColor(255, 221, 92) : base);
+        painter.drawEllipse(start, active ? 5.0 : 3.5, active ? 5.0 : 3.5);
+        painter.drawEllipse(end, active ? 5.0 : 3.5, active ? 5.0 : 3.5);
+        painter.setPen(active ? QColor(255, 235, 150) : QColor(190, 215, 235));
+        painter.drawText((start + end) * 0.5 + QPointF(6, -6),
+            QString::fromStdWString(section.name));
+    }
+}
+
 QVector<int> PointCloudWidget::indicesInScreenRect(const QRectF& rectangle) const
 {
     QVector<int> indices;
@@ -1305,6 +1375,38 @@ void PointCloudWidget::mousePressEvent(QMouseEvent* event)
         beginInteractiveRendering();
     }
     hovered_point_index_ = -1;
+    if (event->button() == Qt::LeftButton && !box_selection_enabled_ &&
+        !free_selection_enabled_ && !section_selection_enabled_ && !picking_enabled_ &&
+        active_section_id_ != 0) {
+        const auto section = std::find_if(section_definitions_.begin(), section_definitions_.end(),
+            [this](const auto& value) { return value.id == active_section_id_ && value.visible; });
+        if (section != section_definitions_.end()) {
+            const QPointF start = projectPointValue(section->start).position;
+            const QPointF end = projectPointValue(section->end).position;
+            const double start_distance = QLineF(event->position(), start).length();
+            const double end_distance = QLineF(event->position(), end).length();
+            const QPointF direction = end - start;
+            const double length_squared = direction.x() * direction.x() + direction.y() * direction.y();
+            double line_distance = std::numeric_limits<double>::infinity();
+            if (length_squared > 1e-9) {
+                const QPointF offset = event->position() - start;
+                const double parameter = std::clamp(
+                    (offset.x() * direction.x() + offset.y() * direction.y()) / length_squared,
+                    0.0, 1.0);
+                line_distance = QLineF(event->position(), start + direction * parameter).length();
+            }
+            if (std::min(start_distance, end_distance) <= 12.0 || line_distance <= 8.0) {
+                section_drag_id_ = section->id;
+                section_drag_part_ = std::min(start_distance, end_distance) <= 12.0
+                    ? (start_distance <= end_distance ? 1 : 2) : 3;
+                section_drag_original_ = *section;
+                section_drag_anchor_point_ = pickNearest(event->position(), 28.0);
+                setCursor(section_drag_part_ == 3 ? Qt::SizeAllCursor : Qt::CrossCursor);
+                update();
+                return;
+            }
+        }
+    }
     if (box_selection_enabled_ && event->button() == Qt::LeftButton) {
         selection_modifiers_ = event->modifiers();
         box_selection_start_ = event->position();
@@ -1342,6 +1444,33 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent* event)
     last_mouse_ = event->pos();
     moved_since_press_ = moved_since_press_ ||
         (event->pos() - press_position_).manhattanLength() > 4;
+    if (section_drag_part_ != 0 && section_drag_id_ != 0) {
+        const int point_index = pickNearest(event->position(), 32.0);
+        if (point_index >= 0) {
+            const auto section = std::find_if(section_definitions_.begin(), section_definitions_.end(),
+                [this](const auto& value) { return value.id == section_drag_id_; });
+            if (section != section_definitions_.end()) {
+                if (section_drag_part_ == 1) {
+                    section->start = cloud_.points[static_cast<std::size_t>(point_index)];
+                } else if (section_drag_part_ == 2) {
+                    section->end = cloud_.points[static_cast<std::size_t>(point_index)];
+                } else if (section_drag_anchor_point_ >= 0 &&
+                    section_drag_anchor_point_ < static_cast<int>(cloud_.points.size())) {
+                    const auto& anchor = cloud_.points[static_cast<std::size_t>(section_drag_anchor_point_)];
+                    const auto& current = cloud_.points[static_cast<std::size_t>(point_index)];
+                    const double dx = current.x - anchor.x;
+                    const double dy = current.y - anchor.y;
+                    const double dz = current.z - anchor.z;
+                    *section = section_drag_original_;
+                    section->start.x += dx; section->start.y += dy; section->start.z += dz;
+                    section->end.x += dx; section->end.y += dy; section->end.z += dz;
+                }
+                emit sectionDefinitionEdited(*section, false);
+                update();
+            }
+        }
+        return;
+    }
     if (box_selection_enabled_ && drag_button_ == Qt::LeftButton) {
         box_selection_rect_ = QRectF(box_selection_start_, event->position()).normalized();
         update();
@@ -1374,6 +1503,15 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent* event)
 void PointCloudWidget::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() != drag_button_) return;
+    if (section_drag_part_ != 0 && section_drag_id_ != 0) {
+        const auto section = std::find_if(section_definitions_.begin(), section_definitions_.end(),
+            [this](const auto& value) { return value.id == section_drag_id_; });
+        if (section != section_definitions_.end()) emit sectionDefinitionEdited(*section, true);
+        section_drag_id_ = 0; section_drag_part_ = 0; section_drag_anchor_point_ = -1;
+        drag_button_ = Qt::NoButton;
+        updateInteractionCursor(); finishInteractiveRendering(); update();
+        return;
+    }
     if (box_selection_enabled_ && event->button() == Qt::LeftButton) {
         box_selection_rect_ = QRectF(box_selection_start_, event->position()).normalized();
         const QVector<int> selected = indicesInScreenRect(box_selection_rect_);
@@ -1454,6 +1592,15 @@ void PointCloudWidget::wheelEvent(QWheelEvent* event)
 void PointCloudWidget::keyPressEvent(QKeyEvent* event)
 {
     if (event->key() == Qt::Key_Escape) {
+        if (section_drag_part_ != 0 && section_drag_id_ != 0) {
+            const auto section = std::find_if(section_definitions_.begin(), section_definitions_.end(),
+                [this](const auto& value) { return value.id == section_drag_id_; });
+            if (section != section_definitions_.end()) *section = section_drag_original_;
+            emit sectionDefinitionEdited(section_drag_original_, true);
+        }
+        section_drag_id_ = 0;
+        section_drag_part_ = 0;
+        section_drag_anchor_point_ = -1;
         box_selection_enabled_ = false;
         free_selection_enabled_ = false;
         section_selection_enabled_ = false;

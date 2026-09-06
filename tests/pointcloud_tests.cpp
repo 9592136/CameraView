@@ -518,6 +518,94 @@ int main(int argument_count, char** arguments)
         return fail("Arbitrary section width, step height, or groove depth is inaccurate.");
     }
 
+    PointCloud robust_section_cloud;
+    const double diagonal = 1.0 / std::sqrt(2.0);
+    for (int along = 0; along <= 100; ++along) {
+        const double distance = along * 0.1;
+        for (int across = -3; across <= 3; ++across) {
+            const double offset = across * 0.04;
+            double height = distance < 5.0 ? 1.0 : 3.0;
+            if (distance >= 7.0 && distance <= 8.0) height = 0.25;
+            robust_section_cloud.points.push_back({
+                distance * diagonal - offset * diagonal,
+                distance * diagonal + offset * diagonal,
+                height});
+        }
+        // One deterministic outlier per station must not move the median profile.
+        robust_section_cloud.points.push_back({distance * diagonal,
+            distance * diagonal, 40.0});
+    }
+    robust_section_cloud.RecalculateBounds();
+    PointCloudSectionDefinition robust_definition;
+    robust_definition.id = 7;
+    robust_definition.start = {0.0, 0.0, 1.0};
+    robust_definition.end = {10.0 * diagonal, 10.0 * diagonal, 3.0};
+    robust_definition.band_width = 0.35;
+    robust_definition.sample_spacing = 0.1;
+    PointCloudSectionAnalysisOptions robust_options;
+    robust_options.median_window = 3;
+    robust_options.smoothing_window = 5;
+    const PointCloudSectionProfile robust_section = PointCloudSectionAnalyzer::Analyze(
+        robust_section_cloud, robust_definition, robust_options);
+    if (!robust_section.valid || robust_section.definition.id != 7 ||
+        robust_section.raw_points.size() < 700 ||
+        !near(robust_section.width, 10.0, 0.02) ||
+        !near(robust_section.signed_step_height, 2.0, 0.08) ||
+        robust_section.maximum_height > 3.2 ||
+        robust_section.total_peak_to_valley < 2.7 ||
+        robust_section.features.empty()) {
+        return fail("3D robust section extraction, filtering, or feature detection is inaccurate.");
+    }
+    PointCloudSectionDefinition reverse_definition = robust_definition;
+    std::swap(reverse_definition.start, reverse_definition.end);
+    const PointCloudSectionProfile reverse_section = PointCloudSectionAnalyzer::Analyze(
+        robust_section_cloud, reverse_definition, robust_options);
+    if (!reverse_section.valid || !near(reverse_section.signed_step_height, -2.0, 0.08)) {
+        return fail("Reversing 3D section endpoints did not reverse the signed step metric.");
+    }
+    const PointCloudSectionCursorMeasurement cursors =
+        PointCloudSectionAnalyzer::MeasureCursors(robust_section, 2.0, 6.0);
+    if (!cursors.valid || !near(cursors.distance_difference, 4.0) ||
+        !near(cursors.height_difference, 2.0, 0.08) || cursors.slope_angle_degrees < 20.0) {
+        return fail("Section cursor delta or slope measurement is inaccurate.");
+    }
+
+    PointCloud tilted_section_cloud;
+    const std::array<double, 3> tilted_normal{-0.2 / std::sqrt(1.05),
+        -0.1 / std::sqrt(1.05), 1.0 / std::sqrt(1.05)};
+    const std::array<double, 3> tilted_axis{1.0 / std::sqrt(1.04),
+        0.0, 0.2 / std::sqrt(1.04)};
+    const std::array<double, 3> tilted_cross{
+        tilted_normal[1] * tilted_axis[2] - tilted_normal[2] * tilted_axis[1],
+        tilted_normal[2] * tilted_axis[0] - tilted_normal[0] * tilted_axis[2],
+        tilted_normal[0] * tilted_axis[1] - tilted_normal[1] * tilted_axis[0]};
+    for (int along = 0; along <= 80; ++along) {
+        const double distance = along * 0.1;
+        const double residual = distance < 4.0 ? -0.5 : 0.75;
+        for (int across = -2; across <= 2; ++across) {
+            const double offset = across * 0.04;
+            tilted_section_cloud.points.push_back({
+                distance * tilted_axis[0] + offset * tilted_cross[0] + residual * tilted_normal[0],
+                distance * tilted_axis[1] + offset * tilted_cross[1] + residual * tilted_normal[1],
+                distance * tilted_axis[2] + offset * tilted_cross[2] + residual * tilted_normal[2]});
+        }
+    }
+    tilted_section_cloud.RecalculateBounds();
+    PointCloudSectionDefinition tilted_definition;
+    tilted_definition.start = {0.0, 0.0, 0.0};
+    tilted_definition.end = {8.0 * tilted_axis[0], 8.0 * tilted_axis[1], 8.0 * tilted_axis[2]};
+    tilted_definition.band_width = 0.25;
+    tilted_definition.sample_spacing = 0.1;
+    tilted_definition.reference = PointCloudSectionReference::ReferencePlane;
+    tilted_definition.reference_plane = {tilted_normal[0], tilted_normal[1], tilted_normal[2], 0.0, 0.0, true};
+    const PointCloudSectionProfile tilted_section = PointCloudSectionAnalyzer::Analyze(
+        tilted_section_cloud, tilted_definition, robust_options);
+    if (!tilted_section.valid || !near(tilted_section.signed_step_height, 1.25, 0.08) ||
+        !near(tilted_section.minimum_height, -0.5, 0.08) ||
+        !near(tilted_section.maximum_height, 0.75, 0.08)) {
+        return fail("Reference-plane section height compensation is inaccurate.");
+    }
+
     const std::filesystem::path ply_path =
         std::filesystem::temp_directory_path() / "CameraViewPointCloudTests.ply";
     const std::filesystem::path xyz_path =

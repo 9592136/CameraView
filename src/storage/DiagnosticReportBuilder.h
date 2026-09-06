@@ -73,6 +73,7 @@ struct DiagnosticReportInput {
     ImageFrame latest_frame;
     DiagnosticMeasurementSummary measurement;
     DiagnosticImageProcessingSummary image_processing;
+    std::wstring point_cloud_section_html;
 };
 
 class DiagnosticReportBuilder {

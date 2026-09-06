@@ -2564,6 +2564,7 @@ DiagnosticReportActionInput CameraMainWindow::buildDiagnosticReportInput() const
     input.edf_focus_radius = 1;
     input.edf_composite_available = edf_result_.composite_frame.IsValid();
     input.edf_focus_map_available = edf_result_.focus_map.IsValid();
+    input.point_cloud_section_html = point_cloud_section_report_html_;
     if (stitch_result_.IsValid()) {
         input.processing_result_visible = true;
         input.processing_result_kind = L"Stitch";
@@ -4518,6 +4519,13 @@ void CameraMainWindow::startProfileMeasurement()
 void CameraMainWindow::showPointCloudWorkspace()
 {
     auto* dialog = new PointCloudDialog(this);
+    connect(dialog, &PointCloudDialog::sectionReportChanged, this,
+        [this](const QString& html) {
+            point_cloud_section_report_html_ = html.toStdWString();
+            if (!html.isEmpty()) {
+                statusBar()->showMessage(tr("点云剖线结果已同步到检测报告"), 3000);
+            }
+        });
     dialog->show();
     dialog->raise();
     dialog->activateWindow();

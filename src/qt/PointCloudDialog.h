@@ -3,24 +3,52 @@
 #include "pointcloud/PointCloud.h"
 #include "pointcloud/PointCloudGeometricModel.h"
 #include "pointcloud/PointCloudProcessor.h"
+#include "pointcloud/PointCloudSection.h"
 
 #include <QDialog>
+#include <QList>
 #include <QVector>
 
+#include <array>
+#include <atomic>
 #include <vector>
 #include <functional>
+#include <memory>
 
 class PointCloudWidget;
+class PointCloudSectionPlotWidget;
+class QAction;
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QFrame;
+class QGroupBox;
 class QLabel;
 class QListWidget;
+class QProgressBar;
 class QPushButton;
+class QResizeEvent;
 class QSplitter;
 class QSpinBox;
 class QTabWidget;
+class QToolButton;
+class QWidget;
+
+enum class PointCloudWorkspacePage {
+    DataDisplay,
+    Processing,
+    GeometryMeasurement,
+    AnalysisReport
+};
+
+enum class PointCloudInteractionMode {
+    Browse,
+    Select,
+    Measure,
+    SectionDraw,
+    SectionEdit
+};
 
 enum class PointCloudMeasureMode {
     Navigate,
@@ -54,8 +82,21 @@ public:
     void setCloud(const PointCloud& cloud);
     void setMeasurementMode(PointCloudMeasureMode mode) { setMeasureMode(mode); }
 
+signals:
+    void sectionReportChanged(const QString& html);
+
 private:
+    void resizeEvent(QResizeEvent* event) override;
     void buildUi();
+    void setWorkspacePage(PointCloudWorkspacePage page, bool reveal = true);
+    void setInteractionMode(PointCloudInteractionMode mode);
+    void updateToolbarPresentation();
+    void updateResponsiveLayout(bool force = false);
+    void setCompactDrawerOpen(bool open, bool showSection = false);
+    void moveSectionWorkspace(bool intoDrawer);
+    void beginInlineTask(const QString& operation, bool determinate = false);
+    void updateInlineTaskProgress(int value, int maximum = 1000);
+    void endInlineTask(const QString& message, const QString& status = QStringLiteral("ok"));
     void openCloud();
     void startCloudLoad(const QString& path);
     void exportCloud();
@@ -67,6 +108,25 @@ private:
         const QVector<int>& indices,
         const QPointF& first,
         const QPointF& second);
+    void runSectionAnalysis(PointCloudSectionDefinition definition, bool preview = false);
+    void acceptSectionProfile(PointCloudSectionProfile profile,
+        std::uint64_t revision, std::uint64_t requestId);
+    void refreshSectionList(int preferredRow = -1);
+    void selectSectionRow(int row);
+    void updateSectionEditors();
+    void scheduleSectionReanalysis();
+    void duplicateSection();
+    void offsetSection();
+    void deleteSection();
+    void clearSections();
+    void exportSectionCsv();
+    void exportSectionPng();
+    void exportSectionReport();
+    void refreshSectionFeatureList();
+    void applySectionFeatureEdit();
+    void updateSectionCursorMetrics(double firstDistance, double secondDistance);
+    void updateSectionPresentation();
+    QString buildSectionReportHtml(bool completeDocument) const;
     void updateCloudPresentation(const QString& operation = {}, bool reset_view = false);
     void resetInspectionResults();
     void updateProcessingDefaults();
@@ -111,7 +171,31 @@ private:
     PointCloudWidget* cloud_widget_ = nullptr;
     QButtonGroup* measurement_tool_group_ = nullptr;
     QSplitter* workspace_splitter_ = nullptr;
+    QSplitter* view_section_splitter_ = nullptr;
     QTabWidget* tabs_ = nullptr;
+    QTabWidget* compact_drawer_tabs_ = nullptr;
+    QWidget* side_panel_ = nullptr;
+    QWidget* tool_panel_host_ = nullptr;
+    QFrame* section_workspace_ = nullptr;
+    QFrame* data_summary_bar_ = nullptr;
+    QFrame* task_bar_ = nullptr;
+    QLabel* task_page_title_ = nullptr;
+    QLabel* task_label_ = nullptr;
+    QProgressBar* task_progress_ = nullptr;
+    QToolButton* task_cancel_button_ = nullptr;
+    QToolButton* drawer_toggle_button_ = nullptr;
+    QToolButton* toolbar_open_button_ = nullptr;
+    QToolButton* toolbar_fit_button_ = nullptr;
+    QToolButton* toolbar_measure_button_ = nullptr;
+    QToolButton* toolbar_section_button_ = nullptr;
+    QToolButton* toolbar_view_button_ = nullptr;
+    QAction* open_action_ = nullptr;
+    QAction* browse_action_ = nullptr;
+    QAction* select_action_ = nullptr;
+    QAction* clear_selection_action_ = nullptr;
+    QAction* undo_action_ = nullptr;
+    QAction* redo_action_ = nullptr;
+    QAction* section_action_ = nullptr;
     QLabel* source_label_ = nullptr;
     QLabel* statistics_label_ = nullptr;
     QLabel* texture_status_label_ = nullptr;
@@ -121,6 +205,7 @@ private:
     QLabel* measurement_hint_ = nullptr;
     QLabel* tolerance_summary_ = nullptr;
     QLabel* section_status_ = nullptr;
+    QLabel* section_cursor_status_ = nullptr;
     QLabel* selection_status_ = nullptr;
     QPushButton* navigation_button_ = nullptr;
     QPushButton* free_selection_button_ = nullptr;
@@ -168,12 +253,36 @@ private:
     QLabel* crop_selection_label_ = nullptr;
     QListWidget* measurement_list_ = nullptr;
     QListWidget* model_list_ = nullptr;
+    QListWidget* section_list_ = nullptr;
+    QListWidget* section_feature_list_ = nullptr;
     QDoubleSpinBox* flatness_tolerance_ = nullptr;
     QDoubleSpinBox* cylindricity_tolerance_ = nullptr;
     QDoubleSpinBox* circularity_tolerance_ = nullptr;
     QDoubleSpinBox* warpage_tolerance_ = nullptr;
     QDoubleSpinBox* profile_tolerance_ = nullptr;
     QDoubleSpinBox* section_width_spin_ = nullptr;
+    QDoubleSpinBox* section_spacing_spin_ = nullptr;
+    QComboBox* section_reference_combo_ = nullptr;
+    std::array<QDoubleSpinBox*, 6> section_endpoint_spins_{};
+    QSpinBox* section_median_window_spin_ = nullptr;
+    QSpinBox* section_smoothing_window_spin_ = nullptr;
+    QSpinBox* section_gap_spin_ = nullptr;
+    QDoubleSpinBox* section_sensitivity_spin_ = nullptr;
+    QSpinBox* section_plateau_spin_ = nullptr;
+    QCheckBox* section_visible_check_ = nullptr;
+    QCheckBox* section_report_check_ = nullptr;
+    QComboBox* section_feature_type_combo_ = nullptr;
+    QDoubleSpinBox* section_feature_start_spin_ = nullptr;
+    QDoubleSpinBox* section_feature_end_spin_ = nullptr;
+    PointCloudSectionPlotWidget* section_plot_ = nullptr;
+    QPushButton* begin_section_button_ = nullptr;
+    QPushButton* duplicate_section_button_ = nullptr;
+    QPushButton* offset_section_button_ = nullptr;
+    QPushButton* delete_section_button_ = nullptr;
+    QPushButton* clear_sections_button_ = nullptr;
+    QPushButton* export_section_csv_button_ = nullptr;
+    QPushButton* export_section_png_button_ = nullptr;
+    QPushButton* export_section_report_button_ = nullptr;
     QDoubleSpinBox* fit_threshold_spin_ = nullptr;
     QDoubleSpinBox* minimum_radius_spin_ = nullptr;
     QDoubleSpinBox* maximum_radius_spin_ = nullptr;
@@ -191,15 +300,30 @@ private:
     std::vector<PointCloudMeasurementRecord> measurements_;
     QVector<int> crop_selection_;
     std::vector<PointCloudGeometricModel> geometric_models_;
+    std::vector<PointCloudSectionProfile> section_profiles_;
     std::uint64_t active_model_id_ = 0;
     std::uint64_t reference_plane_model_id_ = 0;
     std::uint64_t next_model_id_ = 1;
     std::uint64_t cloud_revision_ = 0;
+    std::uint64_t active_section_id_ = 0;
+    std::uint64_t next_section_id_ = 1;
+    std::uint64_t section_request_id_ = 0;
     int plane_model_count_ = 0;
     int sphere_model_count_ = 0;
     int cylinder_model_count_ = 0;
     bool fit_running_ = false;
+    bool section_editor_updating_ = false;
+    std::shared_ptr<std::atomic_bool> section_cancel_token_;
     std::uint64_t fit_request_id_ = 0;
+    PointCloudWorkspacePage workspace_page_ = PointCloudWorkspacePage::DataDisplay;
+    PointCloudInteractionMode interaction_mode_ = PointCloudInteractionMode::Browse;
+    bool compact_layout_ = false;
+    bool compact_drawer_open_ = false;
+    bool task_running_ = false;
+    int last_rendered_point_count_ = 0;
+    QList<int> wide_workspace_sizes_{900, 380};
+    QList<int> wide_section_sizes_{650, 0};
+    std::shared_ptr<std::atomic_bool> active_task_cancel_token_;
 
 private slots:
     void acceptPickedPoint(int index);

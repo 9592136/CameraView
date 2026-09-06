@@ -976,6 +976,7 @@ DiagnosticReportInput BuildReportInput(
     report.image_processing.processing_result_height = input.processing_result_height;
     report.image_processing.edf_composite_available = input.edf_composite_available;
     report.image_processing.edf_focus_map_available = input.edf_focus_map_available;
+    report.point_cloud_section_html = std::move(input.point_cloud_section_html);
     return report;
 }
 
@@ -1098,6 +1099,18 @@ std::wstring ApplyImageReportTemplate(
     ReplaceAll(output, L"{{MeasurementLines}}",
         MeasurementLinesHtml(measurements, calibration, display_unit));
 
+    const bool has_point_cloud_token =
+        output.find(L"{{PointCloudSectionReport}}") != std::wstring::npos;
+    ReplaceAll(output, L"{{PointCloudSectionReport}}", report.point_cloud_section_html);
+    if (!has_point_cloud_token && !report.point_cloud_section_html.empty()) {
+        const std::size_t body_end = output.rfind(L"</body>");
+        if (body_end == std::wstring::npos) {
+            output += report.point_cloud_section_html;
+        } else {
+            output.insert(body_end, report.point_cloud_section_html);
+        }
+    }
+
     return output;
 }
 
@@ -1131,6 +1144,7 @@ h2 { )" << H2Css(options.page_layout) << LR"( }
 .subtitle { color: #3f5365; font-size: 14px; line-height: 1.45; margin: -2px 0 9px; }
 .meta { color: #607080; font-size: 13px; }
 .report-image { display: block; )" << ImageSizeCss(options.image_size) << LR"( height: auto; border: 1px solid #c8d0d9; background: #111820; }
+.section-plot { display: block; width: 100%; height: auto; margin: 14px 0; background: #0a1119; border: 1px solid #c8d0d9; }
 .caption { margin-top: 8px; color: #607080; font-size: 13px; }
 .notes { background: #f8fafc; border-left: 4px solid )" << AccentColor(options.accent) << LR"(; line-height: 1.55; margin: 0; padding: 12px 14px; }
 .summary-grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px 14px; margin: 0; }
@@ -1272,6 +1286,9 @@ footer { border-top: 1px solid #d8dee6; color: #607080; font-size: 12px; margin-
             break;
         }
     }
+
+    report << LR"({{PointCloudSectionReport}}
+)";
 
     if (options.show_footer) {
         report << LR"(<footer>)" << MultilineHtml(FooterTextTemplate(options)) << LR"(</footer>

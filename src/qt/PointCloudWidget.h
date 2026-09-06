@@ -3,6 +3,7 @@
 #include "pointcloud/PointCloud.h"
 #include "pointcloud/PointCloudGeometricModel.h"
 #include "pointcloud/PointCloudProcessor.h"
+#include "pointcloud/PointCloudSection.h"
 
 #include <QColor>
 #include <QHash>
@@ -56,6 +57,9 @@ public:
     void setBoxSelectionEnabled(bool enabled);
     void setFreeSelectionEnabled(bool enabled);
     void setSectionSelectionEnabled(bool enabled, double halfWidthPixels = 10.0);
+    void setSectionDefinitions(
+        const std::vector<PointCloudSectionDefinition>& definitions,
+        std::uint64_t activeSectionId);
     void setSelectionPreviewIndices(const QVector<int>& indices);
     void setHighlightedIndices(const QVector<int>& indices);
     void resetView();
@@ -102,6 +106,9 @@ signals:
         const QVector<int>& pointIndices,
         const QPointF& first,
         const QPointF& second);
+    void sectionDefinitionEdited(
+        const PointCloudSectionDefinition& definition,
+        bool finished);
     void renderBackendChanged(const QString& description, bool hardwareAccelerated);
     void renderStatisticsChanged(int renderedPointCount, bool interactive);
     void interactionCancelled();
@@ -139,6 +146,7 @@ private:
     bool drawTextureSurface(QPainter& painter);
     void releaseTextureRenderer();
     void drawGeometricModels(QPainter& painter) const;
+    void drawSectionDefinitions(QPainter& painter) const;
     void invalidateProjectionCache();
     void discardProjectionCaches();
     void invalidateRenderProjection();
@@ -178,6 +186,8 @@ private:
     std::uint64_t active_model_id_ = 0;
     bool residual_coloring_enabled_ = false;
     double active_residual_scale_ = 1.0;
+    std::vector<PointCloudSectionDefinition> section_definitions_;
+    std::uint64_t active_section_id_ = 0;
     bool picking_enabled_ = false;
     bool box_selection_enabled_ = false;
     bool free_selection_enabled_ = false;
@@ -192,6 +202,10 @@ private:
     QPointF section_start_;
     QPointF section_end_;
     double section_half_width_pixels_ = 10.0;
+    std::uint64_t section_drag_id_ = 0;
+    int section_drag_part_ = 0;
+    int section_drag_anchor_point_ = -1;
+    PointCloudSectionDefinition section_drag_original_;
     int rendered_point_count_ = 0;
     int reported_rendered_point_count_ = -1;
     bool reported_interactive_rendering_ = false;

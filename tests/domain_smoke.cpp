@@ -2864,7 +2864,7 @@ int main()
     action_diagnostic_input.processing_result_height = 8;
     action_diagnostic_input.edf_composite_available = true;
     action_diagnostic_input.edf_focus_map_available = true;
-    const DiagnosticReportActionInput image_report_input = action_diagnostic_input;
+    DiagnosticReportActionInput image_report_input = action_diagnostic_input;
     const std::wstring action_diagnostic_report =
         DiagnosticReportActions::BuildReport(action_diagnostic_input, diagnostic_measurements);
     const std::wstring templated_action_diagnostic_report =
@@ -3052,6 +3052,8 @@ int main()
         return Fail("DiagnosticReportActions did not restore visual report section ordering.");
     }
     const ImageFrame report_image = MakeSolidImage(10, 6, 4, 5, 6);
+    image_report_input.point_cloud_section_html =
+        L"<section id=\"point-cloud-section-test\">Section 1</section>";
     const std::wstring image_report =
         DiagnosticReportActions::BuildImageReport(
             image_report_input,
@@ -3092,7 +3094,8 @@ int main()
         image_report.find(L"Diagnostic Area") == std::wstring::npos ||
         image_report.find(L"63x Oil") == std::wstring::npos ||
         image_report.find(L"0.50000000") == std::wstring::npos ||
-        image_report.find(L"<table class=\"measurement-table\"") == std::wstring::npos) {
+        image_report.find(L"<table class=\"measurement-table\"") == std::wstring::npos ||
+        image_report.find(L"point-cloud-section-test") == std::wstring::npos) {
         return Fail("DiagnosticReportActions did not build an image report with image and measurements.");
     }
     if (table_without_raw_report.find(L"<table class=\"measurement-table\"") == std::wstring::npos ||
@@ -3102,6 +3105,7 @@ int main()
         return Fail("DiagnosticReportActions did not honor the report template measurement table settings.");
     }
     if (templated_image_report.find(L"custom_image.png") == std::wstring::npos ||
+        templated_image_report.find(L"point-cloud-section-test") == std::wstring::npos ||
         templated_image_report.find(L"10x6") == std::wstring::npos ||
         templated_image_report.find(L"1: 6x5 @ 0,0; 2: 6x5 @ 3,0 estimated") == std::wstring::npos ||
         templated_image_report.find(L"{{UnknownToken}}") == std::wstring::npos) {

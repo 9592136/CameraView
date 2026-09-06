@@ -447,6 +447,7 @@ private:
     EdfResult edf_result_;
     bool fusion_enabled_ = false;
     std::wstring report_template_text_;
+    std::wstring point_cloud_section_report_html_;
     QString report_template_path_;
     ImageReportTemplateOptions report_template_options_;
 };

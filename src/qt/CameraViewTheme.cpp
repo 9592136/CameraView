@@ -232,21 +232,133 @@ void applyCameraViewTheme(QApplication& application)
         #PointCloudWorkspaceToolbar > QLabel {
             color: #91a7bf;
         }
-        #PointCloudWorkspaceToolbar QPushButton {
-            min-height: 28px;
-            padding: 3px 11px;
+        #PointCloudWorkspaceToolbar QPushButton,
+        #PointCloudWorkspaceToolbar QToolButton {
+            min-width: 30px;
+            min-height: 30px;
+            max-height: 34px;
+            padding: 2px 8px;
+            border-radius: 6px;
+        }
+        #PointCloudWorkspaceToolbar QPushButton:checked,
+        #PointCloudWorkspaceToolbar QToolButton[activeTool="true"] {
+            color: #eef6ff;
+            background: #214f82;
+            border-color: #4d94ff;
+        }
+        #PointCloudDataSummary {
+            min-height: 30px;
+            max-height: 34px;
+            background: #101923;
+            border: 1px solid #29394b;
+            border-left: 3px solid #3d8cff;
+            border-radius: 7px;
+        }
+        #PointCloudDataSummary QLabel {
+            color: #95a8bc;
+        }
+        #PointCloudDataSummary #PointCloudSourceLabel {
+            color: #e1ecfa;
+            font-weight: 600;
+        }
+        #PointCloudTaskBar {
+            min-height: 32px;
+            max-height: 38px;
+            background: #152235;
+            border: 1px solid #315176;
+            border-radius: 7px;
+        }
+        #PointCloudTaskBar QProgressBar {
+            min-height: 5px;
+            max-height: 5px;
+            border: 0;
+            border-radius: 2px;
+            background: #27394e;
+        }
+        #PointCloudTaskBar QProgressBar::chunk {
+            border-radius: 2px;
+            background: #4d94ff;
+        }
+        #PointCloudInspector {
+            background: #111820;
+            border: 1px solid #2b3949;
+            border-radius: 8px;
+        }
+        #PointCloudInspectorHeader {
+            min-height: 32px;
+            max-height: 38px;
+            background: #162130;
+            border-bottom: 1px solid #2d4055;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+        }
+        #PointCloudTaskPageTitle {
+            color: #e1ecfa;
+            font-weight: 600;
+        }
+        #PointCloudToolTabs::pane,
+        #PointCloudCompactDrawerTabs::pane {
+            border: 0;
+            border-top: 1px solid #2a394a;
+            background: #111820;
+        }
+        #PointCloudToolTabs > QTabBar::tab,
+        #PointCloudCompactDrawerTabs > QTabBar::tab {
+            min-height: 30px;
+            padding: 4px 8px;
+            margin: 0;
+            background: #141d28;
+            border: 0;
+            border-bottom: 2px solid transparent;
+        }
+        #PointCloudToolTabs > QTabBar::tab:selected,
+        #PointCloudCompactDrawerTabs > QTabBar::tab:selected {
+            color: #f0f6ff;
+            background: #1b2a3b;
+            border-bottom-color: #4d94ff;
+        }
+        #PointCloudInspector QGroupBox {
+            margin-top: 12px;
+            padding: 10px 8px 8px 8px;
+        }
+        #PointCloudInspector QGroupBox[expanded="false"] {
+            color: #9bacbf;
+            background: #131c26;
+            border-color: #293746;
+            padding: 0;
+        }
+        #PointCloudInspector QGroupBox::indicator {
+            width: 12px;
+            height: 12px;
+        }
+        #PointCloudInspector QPushButton,
+        #PointCloudInspector QToolButton,
+        #PointCloudInspector QComboBox,
+        #PointCloudInspector QSpinBox,
+        #PointCloudInspector QDoubleSpinBox {
+            min-height: 20px;
+        }
+        #PointCloudInspector QPushButton[role="danger"] {
+            color: #d7e1ed;
+            border-color: #3a4859;
+            background: #222d3a;
+        }
+        #PointCloudInspector QPushButton[role="danger"]:hover,
+        #PointCloudInspector QPushButton[role="danger"]:pressed {
+            color: #ffd6d8;
+            border-color: #92535b;
+            background: #4a2b31;
+        }
+        #PointCloudSectionWorkspace {
+            background: #0d151e;
+            border: 1px solid #2b3b4d;
+            border-radius: 7px;
         }
         #PointCloudViewPresetCombo {
             min-width: 92px;
             max-width: 118px;
             padding-top: 4px;
             padding-bottom: 4px;
-        }
-        #PointCloudAssetCard {
-            background: #111b26;
-            border: 1px solid #2b4055;
-            border-left: 3px solid #3d8cff;
-            border-radius: 8px;
         }
         #PointCloudSourceLabel {
             color: #e6f0fc;
