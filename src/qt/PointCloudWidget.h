@@ -14,9 +14,17 @@
 #include <QVector>
 
 enum class PointCloudColorMode {
+    Texture,
     Original,
     Height,
     Solid
+};
+
+enum class PointCloudViewPreset {
+    Isometric,
+    Top,
+    Front,
+    Right
 };
 
 class PointCloudWidget final : public QOpenGLWidget {
@@ -43,6 +51,7 @@ public:
     void setSelectionPreviewIndices(const QVector<int>& indices);
     void setHighlightedIndices(const QVector<int>& indices);
     void resetView();
+    void setViewPreset(PointCloudViewPreset preset);
 
     PointCloudColorMode colorMode() const { return color_mode_; }
     double pointSize() const { return point_size_; }
@@ -64,6 +73,7 @@ public:
     double pitchDegrees() const { return pitch_degrees_; }
     QString renderBackend() const { return render_backend_; }
     bool hardwareAccelerated() const { return hardware_accelerated_; }
+    bool textureSurfaceAvailable() const { return cloud_.HasTextureSurface(); }
     int pickNearest(const QPointF& position, double radius = 12.0) const;
     QVector<int> indicesInScreenRect(const QRectF& rectangle) const;
     QVector<int> indicesInScreenPolygon(const QPolygonF& polygon) const;
@@ -102,9 +112,16 @@ private:
         int index = -1;
     };
 
+    struct SurfacePatch {
+        QPolygonF polygon;
+        QColor color;
+        double depth = 0.0;
+    };
+
     ProjectedPoint projectPoint(int index) const;
     ProjectedPoint projectPointValue(const PointCloudPoint& point, int index = -1) const;
     QColor pointColor(const PointCloudPoint& point, int index) const;
+    void rebuildRenderCache();
     void drawGeometricModels(QPainter& painter) const;
     void invalidateProjectionCache();
     void discardProjectionCaches();
@@ -120,6 +137,7 @@ private:
 
     PointCloud cloud_;
     mutable QVector<ProjectedPoint> projected_points_;
+    QVector<SurfacePatch> surface_patches_;
     mutable QVector<ProjectedPoint> interaction_projected_points_;
     mutable QHash<qint64, QVector<int>> screen_index_;
     mutable bool interaction_projection_valid_ = false;

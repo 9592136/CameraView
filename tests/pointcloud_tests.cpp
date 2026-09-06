@@ -8,8 +8,11 @@
 #include "pointcloud/PointCloudSection.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -25,6 +28,61 @@ int fail(const char* message)
 bool near(double left, double right, double tolerance = 1e-6)
 {
     return std::abs(left - right) <= tolerance;
+}
+
+void writeLittleUInt32(std::ofstream& output, std::uint32_t value)
+{
+    const std::array<char, 4> bytes{{
+        static_cast<char>(value & 0xffU),
+        static_cast<char>((value >> 8U) & 0xffU),
+        static_cast<char>((value >> 16U) & 0xffU),
+        static_cast<char>((value >> 24U) & 0xffU)}};
+    output.write(bytes.data(), bytes.size());
+}
+
+void writeLittleFloat(std::ofstream& output, float value)
+{
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(value));
+    writeLittleUInt32(output, bits);
+}
+
+bool writeMoticH3dFixture(const std::filesystem::path& path)
+{
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+    output.write("P3DD", 4);
+    writeLittleUInt32(output, 10);
+    const std::array<char, 20> reserved_header{};
+    output.write(reserved_header.data(), reserved_header.size());
+    writeLittleFloat(output, 20.0F);
+    writeLittleFloat(output, 0.0F);
+    writeLittleFloat(output, 10.0F);
+    writeLittleFloat(output, 100.0F);
+    writeLittleFloat(output, 200.0F);
+    const std::array<char, 4> unit{{'u', 'm', '\0', '\0'}};
+    output.write(unit.data(), unit.size());
+    const std::array<char, 12> reserved_grid{};
+    output.write(reserved_grid.data(), reserved_grid.size());
+    writeLittleUInt32(output, 3);
+    writeLittleUInt32(output, 2);
+    writeLittleUInt32(output, 4);
+    writeLittleUInt32(output, 24);
+    for (float value : {0.0F, 0.25F, 0.5F, 0.75F, 1.0F, 0.5F}) {
+        writeLittleFloat(output, value);
+    }
+    const std::array<char, 16> reserved_texture{};
+    output.write(reserved_texture.data(), reserved_texture.size());
+    writeLittleUInt32(output, 3);
+    writeLittleUInt32(output, 2);
+    writeLittleUInt32(output, 24);
+    writeLittleUInt32(output, 18);
+    const std::array<unsigned char, 18> bgr{{
+        30, 20, 10, 60, 50, 40, 90, 80, 70,
+        120, 110, 100, 150, 140, 130, 180, 170, 160}};
+    output.write(reinterpret_cast<const char*>(bgr.data()), bgr.size());
+    return output.good();
 }
 
 PointCloud makePlaneCloud()
@@ -51,8 +109,21 @@ PointCloud makePlaneCloud()
 
 } // namespace
 
-int main()
+int main(int argument_count, char** arguments)
 {
+    if (argument_count == 3 && std::string(arguments[1]) == "--verify-h3d") {
+        PointCloud sample;
+        std::wstring sample_error;
+        if (!PointCloudIO::Load(std::filesystem::path(arguments[2]), sample, sample_error) ||
+            !sample.IsOrganized() || !sample.HasTextureSurface()) {
+            std::wcerr << L"Real H3D verification failed: " << sample_error << L'\n';
+            return 1;
+        }
+        std::cout << "H3D " << sample.organized_width << 'x' << sample.organized_height
+                  << ", points " << sample.Size() << ", Z [" << sample.bounds.min_z
+                  << ", " << sample.bounds.max_z << "]\n";
+        return 0;
+    }
     PointCloud cloud = makePlaneCloud();
     if (cloud.Size() != 441 || !cloud.bounds.valid ||
         !near(cloud.bounds.Width(), 10.0) || !near(cloud.bounds.Depth(), 10.0) ||
@@ -495,6 +566,49 @@ int main()
         return fail("Point-cloud import cancellation was not honored.");
     }
     std::filesystem::remove(csv_path);
+    const std::filesystem::path h3d_path =
+        std::filesystem::temp_directory_path() / "CameraViewPointCloudTests.h3d";
+    if (!writeMoticH3dFixture(h3d_path)) {
+        return fail("Synthetic Motic H3D fixture could not be created.");
+    }
+    PointCloud h3d_cloud;
+    std::uint64_t h3d_progress = 0;
+    if (!PointCloudIO::Load(h3d_path, h3d_cloud, error, PointCloudUnit::Unknown,
+            [&h3d_progress](std::uint64_t bytes, std::uint64_t total) {
+                h3d_progress = total > 0 ? bytes * 1000 / total : 0;
+                return true;
+            }) ||
+        h3d_cloud.Size() != 6 || !h3d_cloud.IsOrganized() ||
+        !h3d_cloud.HasTextureSurface() || h3d_cloud.organized_width != 3 ||
+        h3d_cloud.organized_height != 2 ||
+        h3d_cloud.unit != PointCloudUnit::Micrometers ||
+        h3d_cloud.format_name != L"Motic H3D (P3DD)" ||
+        !near(h3d_cloud.points[5].x, 20.0) || !near(h3d_cloud.points[5].y, 10.0) ||
+        !near(h3d_cloud.points[5].z, 150.0) || h3d_cloud.points[0].r != 10 ||
+        h3d_cloud.points[0].g != 20 || h3d_cloud.points[0].b != 30 ||
+        h3d_cloud.points[5].r != 160 || h3d_progress != 1000) {
+        return fail("Motic P3DD H3D geometry, unit, progress, or texture import failed.");
+    }
+    const PointCloud cropped_h3d = PointCloudProcessor::SelectIndices(
+        h3d_cloud, {0, 1, 2}, true);
+    if (cropped_h3d.IsOrganized() || cropped_h3d.HasTextureSurface() ||
+        cropped_h3d.format_name != h3d_cloud.format_name) {
+        return fail("Point filtering did not invalidate H3D grid topology safely.");
+    }
+    PointCloud h3d_override_cloud;
+    if (!PointCloudIO::Load(h3d_path, h3d_override_cloud, error,
+            PointCloudUnit::Millimeters) ||
+        h3d_override_cloud.unit != PointCloudUnit::Millimeters) {
+        return fail("Explicit H3D unit override was not honored.");
+    }
+    const auto complete_h3d_size = std::filesystem::file_size(h3d_path);
+    std::filesystem::resize_file(h3d_path, complete_h3d_size - 1);
+    PointCloud truncated_h3d;
+    if (PointCloudIO::Load(h3d_path, truncated_h3d, error) ||
+        !truncated_h3d.Empty() || error.empty()) {
+        return fail("Truncated H3D texture payload was not rejected safely.");
+    }
+    std::filesystem::remove(h3d_path);
     const std::filesystem::path crlf_ply_path =
         std::filesystem::temp_directory_path() / "CameraViewPointCloudTestsCrlf.ply";
     {

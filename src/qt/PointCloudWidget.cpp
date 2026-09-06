@@ -29,7 +29,7 @@ double wrapDegrees(double degrees)
 PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent)
 {
     setObjectName(QStringLiteral("PointCloudView"));
-    setMinimumSize(640, 440);
+    setMinimumSize(480, 360);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setCursor(Qt::OpenHandCursor);
@@ -75,6 +75,7 @@ void PointCloudWidget::setCloud(const PointCloud& cloud, bool reset_view)
 void PointCloudWidget::setColorMode(PointCloudColorMode mode)
 {
     color_mode_ = mode;
+    invalidateRenderProjection();
     update();
 }
 
@@ -123,6 +124,7 @@ void PointCloudWidget::setGeometricModels(
         active_residual_scale_ = std::max(absolute[percentile], 1e-12);
         break;
     }
+    invalidateRenderProjection();
     update();
 }
 
@@ -135,6 +137,7 @@ void PointCloudWidget::setActiveGeometricModel(std::uint64_t id)
 void PointCloudWidget::setResidualColoringEnabled(bool enabled)
 {
     residual_coloring_enabled_ = enabled;
+    invalidateRenderProjection();
     update();
 }
 
@@ -213,6 +216,34 @@ void PointCloudWidget::resetView()
     interactive_rendering_ = false;
     yaw_degrees_ = -38.0;
     pitch_degrees_ = 26.0;
+    view_scale_ = 1.0;
+    pan_ = {};
+    invalidateProjectionCache();
+    update();
+}
+
+void PointCloudWidget::setViewPreset(PointCloudViewPreset preset)
+{
+    interaction_idle_timer_.stop();
+    interactive_rendering_ = false;
+    switch (preset) {
+    case PointCloudViewPreset::Top:
+        yaw_degrees_ = 0.0;
+        pitch_degrees_ = 90.0;
+        break;
+    case PointCloudViewPreset::Front:
+        yaw_degrees_ = 0.0;
+        pitch_degrees_ = 0.0;
+        break;
+    case PointCloudViewPreset::Right:
+        yaw_degrees_ = 90.0;
+        pitch_degrees_ = 0.0;
+        break;
+    case PointCloudViewPreset::Isometric:
+        yaw_degrees_ = -38.0;
+        pitch_degrees_ = 26.0;
+        break;
+    }
     view_scale_ = 1.0;
     pan_ = {};
     invalidateProjectionCache();
@@ -369,7 +400,8 @@ QColor PointCloudWidget::pointColor(const PointCloudPoint& point, int index) con
             }
         }
     }
-    if (color_mode_ == PointCloudColorMode::Original && point.has_color) {
+    if ((color_mode_ == PointCloudColorMode::Texture ||
+            color_mode_ == PointCloudColorMode::Original) && point.has_color) {
         return QColor(point.r, point.g, point.b);
     }
     if (color_mode_ == PointCloudColorMode::Solid) return QColor(98, 178, 255);
@@ -378,6 +410,77 @@ QColor PointCloudWidget::pointColor(const PointCloudPoint& point, int index) con
         ? std::clamp((point.z - cloud_.bounds.min_z) / range, 0.0, 1.0)
         : 0.5;
     return QColor::fromHsvF((1.0 - normalized) * 0.68, 0.86, 0.98);
+}
+
+void PointCloudWidget::rebuildRenderCache()
+{
+    projected_points_.clear();
+    surface_patches_.clear();
+    const int render_budget = currentRenderBudget();
+    const int stride = std::max(1, static_cast<int>(std::ceil(
+        cloud_.points.size() / static_cast<double>(render_budget))));
+    projected_points_.reserve(
+        static_cast<int>((cloud_.points.size() + stride - 1) / stride));
+    for (int index = 0; index < static_cast<int>(cloud_.points.size()); index += stride) {
+        projected_points_.push_back(projectPoint(index));
+    }
+
+    if (color_mode_ == PointCloudColorMode::Texture && cloud_.HasTextureSurface()) {
+        const std::size_t width = cloud_.organized_width;
+        const std::size_t height = cloud_.organized_height;
+        const int patch_budget = interactive_rendering_ ? 14000 : 56000;
+        const double cell_count = static_cast<double>((width - 1) * (height - 1));
+        const std::size_t grid_stride = std::max<std::size_t>(1,
+            static_cast<std::size_t>(std::ceil(std::sqrt(cell_count / patch_budget))));
+        surface_patches_.reserve(static_cast<int>(std::min<double>(
+            patch_budget * 1.15, std::numeric_limits<int>::max())));
+        for (std::size_t row = 0; row + 1 < height; row += grid_stride) {
+            const std::size_t next_row = std::min(height - 1, row + grid_stride);
+            for (std::size_t column = 0; column + 1 < width; column += grid_stride) {
+                const std::size_t next_column = std::min(width - 1, column + grid_stride);
+                const std::array<std::size_t, 4> indices{{
+                    row * width + column,
+                    row * width + next_column,
+                    next_row * width + next_column,
+                    next_row * width + column}};
+                SurfacePatch patch;
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+                bool valid = true;
+                for (std::size_t index : indices) {
+                    if (index >= cloud_.points.size()) {
+                        valid = false;
+                        break;
+                    }
+                    const ProjectedPoint projected = projectPoint(static_cast<int>(index));
+                    patch.polygon << projected.position;
+                    patch.depth += projected.depth;
+                    const QColor color = pointColor(cloud_.points[index], static_cast<int>(index));
+                    red += color.red();
+                    green += color.green();
+                    blue += color.blue();
+                }
+                if (!valid) continue;
+                patch.depth *= 0.25;
+                patch.color = QColor(red / 4, green / 4, blue / 4);
+                surface_patches_.push_back(std::move(patch));
+            }
+        }
+        if (!interactive_rendering_) {
+            std::sort(surface_patches_.begin(), surface_patches_.end(),
+                [](const SurfacePatch& left, const SurfacePatch& right) {
+                    return left.depth > right.depth;
+                });
+        }
+    }
+    if (!interactive_rendering_) {
+        std::sort(projected_points_.begin(), projected_points_.end(),
+            [](const ProjectedPoint& left, const ProjectedPoint& right) {
+                return left.depth > right.depth;
+            });
+    }
+    render_projection_valid_ = true;
 }
 
 void PointCloudWidget::paintGL()
@@ -392,7 +495,7 @@ void PointCloudWidget::paintGL()
     if (!hasCloud()) {
         painter.setPen(QColor(139, 154, 174));
         painter.drawText(rect(), Qt::AlignCenter,
-            tr("打开 PLY、PCD、XYZ、TXT 或 CSV 点云"));
+            tr("打开 H3D、PLY、PCD、XYZ、TXT 或 CSV 点云"));
         return;
     }
 
@@ -468,29 +571,19 @@ void PointCloudWidget::paintGL()
         }
     }
 
-    if (!render_projection_valid_) {
-        projected_points_.clear();
-        const int render_budget = currentRenderBudget();
-        const int stride = std::max(1, static_cast<int>(std::ceil(
-            cloud_.points.size() / static_cast<double>(render_budget))));
-        projected_points_.reserve(
-            static_cast<int>((cloud_.points.size() + stride - 1) / stride));
-        for (int index = 0; index < static_cast<int>(cloud_.points.size()); index += stride) {
-            projected_points_.push_back(projectPoint(index));
-        }
-        if (!interactive_rendering_) {
-            std::sort(projected_points_.begin(), projected_points_.end(),
-                [](const ProjectedPoint& left, const ProjectedPoint& right) {
-                    return left.depth > right.depth;
-                });
-        }
-        render_projection_valid_ = true;
-    }
+    if (!render_projection_valid_) rebuildRenderCache();
     painter.setPen(Qt::NoPen);
-    for (const ProjectedPoint& projected : projected_points_) {
-        painter.setBrush(pointColor(
-            cloud_.points[static_cast<std::size_t>(projected.index)], projected.index));
-        painter.drawEllipse(projected.position, point_size_, point_size_);
+    if (!surface_patches_.isEmpty()) {
+        for (const SurfacePatch& patch : surface_patches_) {
+            painter.setBrush(patch.color);
+            painter.drawPolygon(patch.polygon);
+        }
+    } else {
+        for (const ProjectedPoint& projected : projected_points_) {
+            painter.setBrush(pointColor(
+                cloud_.points[static_cast<std::size_t>(projected.index)], projected.index));
+            painter.drawEllipse(projected.position, point_size_, point_size_);
+        }
     }
     rendered_point_count_ = projected_points_.size();
     if (reported_rendered_point_count_ != rendered_point_count_ ||
@@ -539,6 +632,17 @@ void PointCloudWidget::paintGL()
             painter.drawLine(start, end);
             painter.drawText(end + QPointF(4.0, -4.0), labels[axis]);
         }
+    }
+
+    if (color_mode_ == PointCloudColorMode::Texture && cloud_.HasTextureSurface()) {
+        const QString badge = interactive_rendering_
+            ? tr("纹理表面 · 交互预览") : tr("纹理表面");
+        const QRectF badge_rect(width() - 152.0, 14.0, 138.0, 28.0);
+        painter.setPen(QPen(QColor(68, 145, 225, 150), 1.0));
+        painter.setBrush(QColor(18, 48, 77, 218));
+        painter.drawRoundedRect(badge_rect, 7.0, 7.0);
+        painter.setPen(QColor(188, 222, 255));
+        painter.drawText(badge_rect, Qt::AlignCenter, badge);
     }
 
     if (!highlighted_indices_.isEmpty()) {

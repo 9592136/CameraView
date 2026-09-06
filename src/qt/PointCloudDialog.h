@@ -111,6 +111,7 @@ private:
     QTabWidget* tabs_ = nullptr;
     QLabel* source_label_ = nullptr;
     QLabel* statistics_label_ = nullptr;
+    QLabel* texture_status_label_ = nullptr;
     QLabel* backend_label_ = nullptr;
     QLabel* plane_label_ = nullptr;
     QCheckBox* show_plane_check_ = nullptr;
@@ -125,6 +126,7 @@ private:
     QLabel* model_details_ = nullptr;
     QComboBox* unit_combo_ = nullptr;
     QComboBox* color_combo_ = nullptr;
+    QComboBox* view_preset_combo_ = nullptr;
     QComboBox* fit_scope_combo_ = nullptr;
     QComboBox* cylinder_axis_combo_ = nullptr;
     QDoubleSpinBox* point_size_spin_ = nullptr;

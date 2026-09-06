@@ -47,9 +47,27 @@ struct PointCloud {
     PointCloudUnit unit = PointCloudUnit::Unknown;
     std::wstring name;
     std::wstring source_path;
+    std::wstring format_name;
+    std::size_t organized_width = 0;
+    std::size_t organized_height = 0;
+    bool texture_available = false;
 
     bool Empty() const { return points.empty(); }
     std::size_t Size() const { return points.size(); }
+    bool IsOrganized() const
+    {
+        return organized_width > 1 && organized_height > 1 &&
+            organized_width <= points.size() &&
+            organized_height == points.size() / organized_width &&
+            points.size() % organized_width == 0;
+    }
+    bool HasTextureSurface() const { return texture_available && IsOrganized(); }
+    void ClearOrganization()
+    {
+        organized_width = 0;
+        organized_height = 0;
+        texture_available = false;
+    }
     void RecalculateBounds();
     PointCloudCentroid Centroid() const;
 };

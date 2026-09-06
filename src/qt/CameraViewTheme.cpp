@@ -229,9 +229,35 @@ void applyCameraViewTheme(QApplication& application)
             border: 1px solid #293b4f;
             border-radius: 8px;
         }
+        #PointCloudWorkspaceToolbar > QLabel {
+            color: #91a7bf;
+        }
         #PointCloudWorkspaceToolbar QPushButton {
             min-height: 28px;
             padding: 3px 11px;
+        }
+        #PointCloudViewPresetCombo {
+            min-width: 92px;
+            max-width: 118px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+        }
+        #PointCloudAssetCard {
+            background: #111b26;
+            border: 1px solid #2b4055;
+            border-left: 3px solid #3d8cff;
+            border-radius: 8px;
+        }
+        #PointCloudSourceLabel {
+            color: #e6f0fc;
+            font-weight: 600;
+        }
+        #PointCloudTextureStatus {
+            color: #8799ad;
+            font-size: 12px;
+        }
+        #PointCloudTextureStatus[status="ok"] {
+            color: #70dda1;
         }
         #PointCloudSelectionStatus, #PointCloudWorkspaceStatus {
             color: #a9c9ea;

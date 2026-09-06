@@ -115,6 +115,7 @@ PointCloud DerivedCloud(const PointCloud& source)
     result.unit = source.unit;
     result.name = source.name;
     result.source_path = source.source_path;
+    result.format_name = source.format_name;
     return result;
 }
 
@@ -419,6 +420,7 @@ PointCloud PointCloudProcessor::SmartDenoise(
         local_report.smoothed_points += ignored.smoothed_points;
     }
     result.RecalculateBounds();
+    if (result.points.size() != cloud.points.size()) result.ClearOrganization();
     if (report) *report = local_report;
     return result;
 }
@@ -650,6 +652,7 @@ PointCloud PointCloudProcessor::RepairHoles(
                 result.points[update.first].z * 0.5 + update.second * 0.5;
         }
     }
+    if (result.points.size() != cloud.points.size()) result.ClearOrganization();
     result.RecalculateBounds();
     if (report) *report = local_report;
     return result;
@@ -726,6 +729,9 @@ PointCloud PointCloudProcessor::LevelToPlane(
         point.z = center.z - unit_y * x * sine + unit_x * y * sine + z * cosine;
         result.points.push_back(point);
     }
+    result.organized_width = cloud.organized_width;
+    result.organized_height = cloud.organized_height;
+    result.texture_available = cloud.texture_available;
     result.RecalculateBounds();
     return result;
 }

@@ -18,6 +18,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
+#include <QFrame>
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QGroupBox>
@@ -34,6 +35,7 @@
 #include <QScrollArea>
 #include <QSplitter>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QTabWidget>
 #include <QTextStream>
 #include <QStringConverter>
@@ -132,6 +134,13 @@ void PointCloudDialog::buildUi()
     undo_button_->setObjectName(QStringLiteral("PointCloudUndoButton"));
     redo_button_ = new QPushButton(tr("重做"));
     redo_button_->setObjectName(QStringLiteral("PointCloudRedoButton"));
+    view_preset_combo_ = new QComboBox;
+    view_preset_combo_->setObjectName(QStringLiteral("PointCloudViewPresetCombo"));
+    view_preset_combo_->setToolTip(tr("切换工业检测常用标准视角"));
+    view_preset_combo_->addItem(tr("等轴测"), static_cast<int>(PointCloudViewPreset::Isometric));
+    view_preset_combo_->addItem(tr("俯视"), static_cast<int>(PointCloudViewPreset::Top));
+    view_preset_combo_->addItem(tr("前视"), static_cast<int>(PointCloudViewPreset::Front));
+    view_preset_combo_->addItem(tr("右视"), static_cast<int>(PointCloudViewPreset::Right));
     selection_status_ = new QLabel(tr("选择 0"));
     workspace_status_ = new QLabel(tr("未载入点云"));
     toolbar_layout->addWidget(navigation_button_);
@@ -139,6 +148,9 @@ void PointCloudDialog::buildUi()
     toolbar_layout->addWidget(clear_selection_button);
     toolbar_layout->addWidget(undo_button_);
     toolbar_layout->addWidget(redo_button_);
+    toolbar_layout->addSpacing(6);
+    toolbar_layout->addWidget(new QLabel(tr("视角")));
+    toolbar_layout->addWidget(view_preset_combo_);
     toolbar_layout->addStretch();
     toolbar_layout->addWidget(selection_status_);
     toolbar_layout->addWidget(workspace_status_);
@@ -150,14 +162,24 @@ void PointCloudDialog::buildUi()
     workspace_splitter_->addWidget(cloud_widget_);
 
     auto* side = new QWidget;
-    side->setMinimumWidth(320);
+    side->setMinimumWidth(300);
     auto* side_layout = new QVBoxLayout(side);
     side_layout->setContentsMargins(0, 0, 0, 0);
+    auto* asset_card = new QFrame;
+    asset_card->setObjectName(QStringLiteral("PointCloudAssetCard"));
+    auto* asset_layout = new QVBoxLayout(asset_card);
+    asset_layout->setContentsMargins(12, 9, 12, 9);
+    asset_layout->setSpacing(3);
     source_label_ = new QLabel(tr("尚未载入点云"));
     source_label_->setObjectName(QStringLiteral("PointCloudSourceLabel"));
     source_label_->setWordWrap(true);
     source_label_->setProperty("role", QStringLiteral("summary"));
-    side_layout->addWidget(source_label_);
+    texture_status_label_ = new QLabel(tr("等待载入数据"));
+    texture_status_label_->setObjectName(QStringLiteral("PointCloudTextureStatus"));
+    texture_status_label_->setProperty("status", QStringLiteral("neutral"));
+    asset_layout->addWidget(source_label_);
+    asset_layout->addWidget(texture_status_label_);
+    side_layout->addWidget(asset_card);
     tabs_ = new QTabWidget;
     tabs_->setObjectName(QStringLiteral("PointCloudToolTabs"));
     side_layout->addWidget(tabs_, 1);
@@ -187,6 +209,7 @@ void PointCloudDialog::buildUi()
     color_combo_->addItem(tr("高度伪彩"), static_cast<int>(PointCloudColorMode::Height));
     color_combo_->addItem(tr("原始颜色"), static_cast<int>(PointCloudColorMode::Original));
     color_combo_->addItem(tr("统一颜色"), static_cast<int>(PointCloudColorMode::Solid));
+    color_combo_->addItem(tr("H3D 纹理表面"), static_cast<int>(PointCloudColorMode::Texture));
     point_size_spin_ = new QDoubleSpinBox;
     point_size_spin_->setObjectName(QStringLiteral("PointCloudPointSize"));
     point_size_spin_->setRange(1.0, 12.0);
@@ -199,7 +222,7 @@ void PointCloudDialog::buildUi()
     backend_label_->setObjectName(QStringLiteral("PointCloudRenderBackend"));
     backend_label_->setWordWrap(true);
     display_form->addRow(tr("坐标单位"), unit_combo_);
-    display_form->addRow(tr("着色"), color_combo_);
+    display_form->addRow(tr("渲染"), color_combo_);
     display_form->addRow(tr("点大小"), point_size_spin_);
     display_form->addRow({}, axes_check_);
     display_form->addRow(tr("渲染后端"), backend_label_);
@@ -571,6 +594,10 @@ void PointCloudDialog::buildUi()
     });
     connect(export_button, &QPushButton::clicked, this, &PointCloudDialog::exportCloud);
     connect(reset_view, &QPushButton::clicked, cloud_widget_, &PointCloudWidget::resetView);
+    connect(view_preset_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        cloud_widget_->setViewPreset(static_cast<PointCloudViewPreset>(
+            view_preset_combo_->currentData().toInt()));
+    });
     connect(unit_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         setMeasureMode(PointCloudMeasureMode::Navigate);
         current_cloud_.unit = static_cast<PointCloudUnit>(unit_combo_->currentData().toInt());
@@ -704,6 +731,15 @@ void PointCloudDialog::setCloud(const PointCloud& cloud)
     clearGeometricModels();
     const int unit_index = unit_combo_->findData(static_cast<int>(current_cloud_.unit));
     if (unit_index >= 0) unit_combo_->setCurrentIndex(unit_index);
+    const int texture_index = color_combo_->findData(
+        static_cast<int>(PointCloudColorMode::Texture));
+    if (current_cloud_.HasTextureSurface() && texture_index >= 0) {
+        color_combo_->setCurrentIndex(texture_index);
+    } else if (color_combo_->currentData().toInt() ==
+        static_cast<int>(PointCloudColorMode::Texture)) {
+        color_combo_->setCurrentIndex(color_combo_->findData(
+            static_cast<int>(PointCloudColorMode::Height)));
+    }
     resetInspectionResults();
     updateCloudPresentation({}, true);
     updateProcessingDefaults();
@@ -714,7 +750,7 @@ void PointCloudDialog::openCloud()
 {
     const QString path = QFileDialog::getOpenFileName(
         this, tr("打开 3D 点云"), {},
-        tr("点云文件 (*.ply *.pcd *.xyz *.txt *.csv);;PLY (*.ply);;PCD (*.pcd);;XYZ/文本 (*.xyz *.txt *.csv);;所有文件 (*)"));
+        tr("点云文件 (*.h3d *.ply *.pcd *.xyz *.txt *.csv);;Motic H3D (*.h3d);;PLY (*.ply);;PCD (*.pcd);;XYZ/文本 (*.xyz *.txt *.csv);;所有文件 (*)"));
     if (path.isEmpty()) return;
     startCloudLoad(path);
 }
@@ -806,14 +842,41 @@ void PointCloudDialog::updateCloudPresentation(const QString& operation, bool re
     }
     source_label_->setText(current_cloud_.Empty()
         ? tr("尚未载入点云")
-        : tr("%1%2").arg(QString::fromStdWString(current_cloud_.name),
+        : tr("%1%2%3").arg(QString::fromStdWString(current_cloud_.name),
+            current_cloud_.format_name.empty() ? QString()
+                : tr(" · %1").arg(QString::fromStdWString(current_cloud_.format_name)),
             operation.isEmpty() ? QString() : tr(" · %1").arg(operation)));
+    const int texture_index = color_combo_->findData(
+        static_cast<int>(PointCloudColorMode::Texture));
+    if (auto* model = qobject_cast<QStandardItemModel*>(color_combo_->model());
+        model && texture_index >= 0 && model->item(texture_index)) {
+        model->item(texture_index)->setEnabled(current_cloud_.HasTextureSurface());
+    }
+    if (has_cloud && !current_cloud_.HasTextureSurface() &&
+        color_combo_->currentData().toInt() == static_cast<int>(PointCloudColorMode::Texture)) {
+        const int original_index = color_combo_->findData(
+            static_cast<int>(PointCloudColorMode::Original));
+        if (original_index >= 0) color_combo_->setCurrentIndex(original_index);
+    }
+    if (current_cloud_.HasTextureSurface()) {
+        texture_status_label_->setText(tr("● 结构化网格 %1 × %2 · 纹理就绪")
+            .arg(current_cloud_.organized_width).arg(current_cloud_.organized_height));
+        texture_status_label_->setProperty("status", QStringLiteral("ok"));
+    } else if (has_cloud) {
+        texture_status_label_->setText(tr("● 非结构化点云 · 点模式"));
+        texture_status_label_->setProperty("status", QStringLiteral("neutral"));
+    } else {
+        texture_status_label_->setText(tr("等待载入数据"));
+        texture_status_label_->setProperty("status", QStringLiteral("neutral"));
+    }
+    texture_status_label_->style()->unpolish(texture_status_label_);
+    texture_status_label_->style()->polish(texture_status_label_);
     if (current_cloud_.Empty()) {
         statistics_label_->setText(tr("点数：0"));
     } else {
         const auto center = current_cloud_.Centroid();
         statistics_label_->setText(
-            tr("点数：%1\n范围：X %2，Y %3，Z %4 %5\n质心：(%6, %7, %8)")
+            tr("点数：%1\n范围：X %2，Y %3，Z %4 %5\n质心：(%6, %7, %8)%9")
                 .arg(current_cloud_.Size())
                 .arg(current_cloud_.bounds.Width(), 0, 'g', 7)
                 .arg(current_cloud_.bounds.Depth(), 0, 'g', 7)
@@ -821,7 +884,12 @@ void PointCloudDialog::updateCloudPresentation(const QString& operation, bool re
                 .arg(unitLabel())
                 .arg(center.x, 0, 'g', 7)
                 .arg(center.y, 0, 'g', 7)
-                .arg(center.z, 0, 'g', 7));
+                .arg(center.z, 0, 'g', 7)
+                .arg(current_cloud_.HasTextureSurface()
+                    ? tr("\n纹理：%1 × %2，24 位真彩")
+                          .arg(current_cloud_.organized_width)
+                          .arg(current_cloud_.organized_height)
+                    : QString()));
     }
     undo_button_->setEnabled(!undo_stack_.empty());
     redo_button_->setEnabled(!redo_stack_.empty());
@@ -1696,8 +1764,24 @@ void PointCloudDialog::loadSettings()
     }
     if (tabs_ && !automated_test) tabs_->setCurrentIndex(settings.value(QStringLiteral("tab"), 0).toInt());
     if (point_size_spin_) point_size_spin_->setValue(settings.value(QStringLiteral("pointSize"), 2.5).toDouble());
-    if (color_combo_) color_combo_->setCurrentIndex(settings.value(QStringLiteral("colorMode"), 0).toInt());
+    if (color_combo_) {
+        int color_index = std::clamp(settings.value(QStringLiteral("colorMode"), 0).toInt(),
+            0, color_combo_->count() - 1);
+        const int texture_index = color_combo_->findData(
+            static_cast<int>(PointCloudColorMode::Texture));
+        if (current_cloud_.HasTextureSurface()) {
+            color_index = texture_index;
+        } else if (color_index == texture_index) {
+            color_index = color_combo_->findData(static_cast<int>(PointCloudColorMode::Height));
+        }
+        color_combo_->setCurrentIndex(color_index);
+    }
     if (axes_check_) axes_check_->setChecked(settings.value(QStringLiteral("axes"), true).toBool());
+    if (view_preset_combo_) {
+        view_preset_combo_->setCurrentIndex(std::clamp(
+            settings.value(QStringLiteral("viewPreset"), 0).toInt(),
+            0, view_preset_combo_->count() - 1));
+    }
     if (cylinder_axis_combo_) cylinder_axis_combo_->setCurrentIndex(settings.value(QStringLiteral("cylinderAxis"), 0).toInt());
     if (fit_threshold_spin_) fit_threshold_spin_->setValue(settings.value(QStringLiteral("fitThreshold"), 0.0).toDouble());
     settings.endGroup();
@@ -1712,6 +1796,7 @@ void PointCloudDialog::saveSettings() const
     if (point_size_spin_) settings.setValue(QStringLiteral("pointSize"), point_size_spin_->value());
     if (color_combo_) settings.setValue(QStringLiteral("colorMode"), color_combo_->currentIndex());
     if (axes_check_) settings.setValue(QStringLiteral("axes"), axes_check_->isChecked());
+    if (view_preset_combo_) settings.setValue(QStringLiteral("viewPreset"), view_preset_combo_->currentIndex());
     if (cylinder_axis_combo_) settings.setValue(QStringLiteral("cylinderAxis"), cylinder_axis_combo_->currentIndex());
     if (fit_threshold_spin_) settings.setValue(QStringLiteral("fitThreshold"), fit_threshold_spin_->value());
     settings.endGroup();

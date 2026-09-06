@@ -7,6 +7,7 @@
 #include "qt/PointCloudSectionDialog.h"
 #include "qt/PointCloudWidget.h"
 #include "qt/CameraViewTheme.h"
+#include "pointcloud/PointCloudIO.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -23,6 +24,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 
 namespace {
@@ -58,6 +60,26 @@ int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
     applyCameraViewTheme(application);
+    if (argc == 3 && std::string(argv[1]) == "--snapshot-h3d") {
+        PointCloud h3d;
+        std::wstring error;
+        if (!PointCloudIO::Load(std::filesystem::path(argv[2]), h3d, error)) {
+            std::wcerr << L"H3D snapshot import failed: " << error << L'\n';
+            return 1;
+        }
+        PointCloudDialog dialog(h3d);
+        dialog.resize(1280, 800);
+        dialog.show();
+        application.processEvents();
+        const int texture_index = dialog.findChild<QComboBox*>(
+            QStringLiteral("PointCloudColorCombo"))->findData(
+                static_cast<int>(PointCloudColorMode::Texture));
+        dialog.findChild<QComboBox*>(QStringLiteral("PointCloudColorCombo"))
+            ->setCurrentIndex(texture_index);
+        application.processEvents();
+        return dialog.grab().save(QDir::current().filePath(
+            QStringLiteral("CameraView-real-h3d-texture.png"))) ? 0 : 1;
+    }
     QImage image(180, 120, QImage::Format_RGB32);
     for (int y = 0; y < image.height(); ++y) {
         for (int x = 0; x < image.width(); ++x) {
@@ -207,22 +229,35 @@ int main(int argc, char* argv[])
             point_cloud.points.push_back(point);
         }
     }
+    point_cloud.organized_width = 33;
+    point_cloud.organized_height = 25;
+    point_cloud.texture_available = true;
+    point_cloud.format_name = L"Synthetic H3D";
     point_cloud.RecalculateBounds();
     PointCloudWidget point_cloud_view;
     point_cloud_view.resize(780, 520);
     point_cloud_view.setCloud(point_cloud);
+    point_cloud_view.setColorMode(PointCloudColorMode::Texture);
     point_cloud_view.show();
     application.processEvents();
     const QImage point_cloud_snapshot = point_cloud_view.grab().toImage();
     const int center_index = static_cast<int>(point_cloud.points.size() / 2);
     const QPointF center_screen = point_cloud_view.screenPosition(center_index);
-    if (!point_cloud_view.hasCloud() || point_cloud_view.renderedPointCount() < 700 ||
+    if (!point_cloud_view.hasCloud() || !point_cloud_view.textureSurfaceAvailable() ||
+        point_cloud_view.colorMode() != PointCloudColorMode::Texture ||
+        point_cloud_view.renderedPointCount() < 700 ||
         point_cloud_view.pickNearest(center_screen, 8.0) < 0 ||
         !point_cloud_view.renderBackend().startsWith(QStringLiteral("OpenGL")) ||
         point_cloud_snapshot.isNull() || !point_cloud_snapshot.save(
             QDir::current().filePath(QStringLiteral("CameraView-point-cloud.png")))) {
         return fail("3D point-cloud rendering or screen-space picking failed.");
     }
+    point_cloud_view.setViewPreset(PointCloudViewPreset::Top);
+    if (!near(point_cloud_view.yawDegrees(), 0.0) ||
+        !near(point_cloud_view.pitchDegrees(), 90.0)) {
+        return fail("Point-cloud standard view presets were not applied.");
+    }
+    point_cloud_view.setViewPreset(PointCloudViewPreset::Isometric);
 
     PointCloud large_point_cloud;
     large_point_cloud.unit = PointCloudUnit::Millimeters;
@@ -307,6 +342,8 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudExportButton"),
         QStringLiteral("PointCloudUnitCombo"),
         QStringLiteral("PointCloudColorCombo"),
+        QStringLiteral("PointCloudViewPresetCombo"),
+        QStringLiteral("PointCloudTextureStatus"),
         QStringLiteral("PointCloudVoxelApplyButton"),
         QStringLiteral("PointCloudOutlierApplyButton"),
         QStringLiteral("PointCloudBeginInteractiveCropButton"),
@@ -508,6 +545,19 @@ int main(int argc, char* argv[])
                 QDir::current().filePath(point_cloud_tab_snapshots[tab_index]))) {
             return fail("3D point-cloud workbench snapshot could not be rendered.");
         }
+    }
+    point_cloud_tabs->setCurrentIndex(0);
+    point_cloud_dialog.resize(960, 640);
+    application.processEvents();
+    auto* view_preset = point_cloud_dialog.findChild<QComboBox*>(
+        QStringLiteral("PointCloudViewPresetCombo"));
+    auto* texture_status = point_cloud_dialog.findChild<QLabel*>(
+        QStringLiteral("PointCloudTextureStatus"));
+    if (!view_preset || !view_preset->isVisible() || view_preset->width() < 80 ||
+        !texture_status || !texture_status->isVisible() ||
+        !point_cloud_dialog.grab().save(QDir::current().filePath(
+            QStringLiteral("CameraView-point-cloud-dialog-compact.png")))) {
+        return fail("Compact point-cloud workspace layout is clipped or incomplete.");
     }
 
     auto waitForCloudSize = [&application](PointCloudDialog& dialog, std::size_t expected) {
