@@ -21,6 +21,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QDoubleSpinBox>
+#include <QDockWidget>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
@@ -188,6 +189,9 @@ int main(int argc, char* argv[])
     const QCommandLineOption verify_camera_panel(
         QStringLiteral("verify-camera-panel"),
         QStringLiteral("Verify the capability-driven camera panel and ROI controls."));
+    const QCommandLineOption verify_main_workspace(
+        QStringLiteral("verify-main-workspace"),
+        QStringLiteral("Verify the four-stage main workspace navigation and responsive context bar."));
     const QCommandLineOption live_camera_report(
         QStringLiteral("live-camera-report"),
         QStringLiteral("Open the first camera, exercise the live Qt preview, and write a JSON report."),
@@ -208,6 +212,7 @@ int main(int argc, char* argv[])
     parser.addOption(verify_stitch_execution);
     parser.addOption(verify_report_workflow);
     parser.addOption(verify_camera_panel);
+    parser.addOption(verify_main_workspace);
     parser.addOption(live_camera_report);
     parser.process(application);
 
@@ -220,10 +225,92 @@ int main(int argc, char* argv[])
         parser.isSet(verify_preview_pipeline) || parser.isSet(verify_fluorescence_workflow) ||
         parser.isSet(verify_point_cloud_workflow) || parser.isSet(verify_numeric_sliders) ||
         parser.isSet(verify_stitch_workflow) || parser.isSet(verify_stitch_execution) ||
-        parser.isSet(verify_report_workflow) || parser.isSet(verify_camera_panel);
+        parser.isSet(verify_report_workflow) || parser.isSet(verify_camera_panel) ||
+        parser.isSet(verify_main_workspace);
     if (isolated_ui_run) QStandardPaths::setTestModeEnabled(true);
 
     CameraMainWindow window;
+    if (parser.isSet(verify_main_workspace)) {
+        auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("FunctionTabs"));
+        auto* dock = window.findChild<QDockWidget*>(QStringLiteral("FunctionDock"));
+        auto* context = window.findChild<QWidget*>(QStringLiteral("ViewportContextBar"));
+        auto* source = window.findChild<QLabel*>(QStringLiteral("SourceStatus"));
+        auto* stage_status = window.findChild<QLabel*>(QStringLiteral("ViewportStageStatus"));
+        auto* mode_status = window.findChild<QLabel*>(QStringLiteral("ViewportModeStatus"));
+        auto* toggle = window.findChild<QToolButton*>(QStringLiteral("WorkspaceToggleButton"));
+        if (!tabs || tabs->count() != 7 || !dock || !context || !source ||
+            !stage_status || !mode_status || !toggle) {
+            qCritical() << "The main workspace shell is incomplete.";
+            return 15;
+        }
+        for (int index = 0; index < 4; ++index) {
+            auto* button = window.findChild<QToolButton*>(
+                QStringLiteral("WorkspaceStageButton%1").arg(index));
+            if (!button || button->icon().isNull() || button->text().isEmpty()) {
+                qCritical() << "A main workspace stage button is incomplete:" << index;
+                return 15;
+            }
+        }
+        for (int index = 0; index < 7; ++index) {
+            if (!window.findChild<QToolButton*>(
+                    QStringLiteral("WorkspacePageButton%1").arg(index))) {
+                qCritical() << "A main workspace page button is missing:" << index;
+                return 15;
+            }
+        }
+
+        window.show();
+        window.resize(1280, 800);
+        QCoreApplication::processEvents();
+        auto* image_stage = window.findChild<QToolButton*>(QStringLiteral("WorkspaceStageButton1"));
+        auto* processing_page = window.findChild<QToolButton*>(QStringLiteral("WorkspacePageButton3"));
+        auto* measure_stage = window.findChild<QToolButton*>(QStringLiteral("WorkspaceStageButton2"));
+        auto* analysis_stage = window.findChild<QToolButton*>(QStringLiteral("WorkspaceStageButton3"));
+        auto* report_page = window.findChild<QToolButton*>(QStringLiteral("WorkspacePageButton6"));
+        image_stage->click();
+        QCoreApplication::processEvents();
+        if ((tabs->currentIndex() != 1 && tabs->currentIndex() != 3) ||
+            !processing_page->isVisible()) {
+            qCritical() << "Image-stage navigation did not expose its pages.";
+            return 15;
+        }
+        processing_page->click();
+        measure_stage->click();
+        image_stage->click();
+        QCoreApplication::processEvents();
+        if (tabs->currentIndex() != 3) {
+            qCritical() << "A workflow stage did not remember its last active page.";
+            return 15;
+        }
+        analysis_stage->click();
+        QCoreApplication::processEvents();
+        if (tabs->currentIndex() != 5 && tabs->currentIndex() != 6) {
+            qCritical() << "Stage navigation did not switch to the expected workflow.";
+            return 15;
+        }
+        report_page->click();
+        QCoreApplication::processEvents();
+        if (tabs->currentIndex() != 6 || !analysis_stage->isChecked() ||
+            !report_page->isChecked() || !stage_status->text().contains(QStringLiteral("分析"))) {
+            qCritical() << "Page navigation and viewport context are out of sync.";
+            return 15;
+        }
+        toggle->click();
+        QCoreApplication::processEvents();
+        if (dock->isVisible()) {
+            qCritical() << "Workspace visibility control did not hide the inspector.";
+            return 15;
+        }
+        toggle->click();
+        window.resize(960, 640);
+        QCoreApplication::processEvents();
+        if (!dock->isVisible() || stage_status->isVisible() ||
+            toggle->toolButtonStyle() != Qt::ToolButtonIconOnly) {
+            qCritical() << "Compact workspace presentation is incorrect.";
+            return 15;
+        }
+        return 0;
+    }
     if (parser.isSet(verify_camera_panel)) {
         const QStringList required_controls{
             QStringLiteral("CameraStatusCard"),

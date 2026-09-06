@@ -617,6 +617,9 @@ if(CAMERAVIEW_BUILD_TESTS)
     add_test(NAME CameraViewQtCameraPanel
         COMMAND CameraView --verify-camera-panel)
     set_tests_properties(CameraViewQtCameraPanel PROPERTIES TIMEOUT 15)
+    add_test(NAME CameraViewQtMainWorkspace
+        COMMAND CameraView --verify-main-workspace)
+    set_tests_properties(CameraViewQtMainWorkspace PROPERTIES TIMEOUT 15)
     add_test(NAME CameraViewQtCameraPanelSnapshot
         COMMAND CameraView
             --ui-snapshot "${CMAKE_CURRENT_BINARY_DIR}/CameraView-camera-panel-ui.png"

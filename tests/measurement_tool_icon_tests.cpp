@@ -56,7 +56,18 @@ int main(int argc, char* argv[])
         MeasurementToolGlyph::ResetMeasurementColor,
         MeasurementToolGlyph::DeleteMeasurement,
         MeasurementToolGlyph::ClearMeasurements,
-        MeasurementToolGlyph::ExportCsv};
+        MeasurementToolGlyph::ExportCsv,
+        MeasurementToolGlyph::OpenImage,
+        MeasurementToolGlyph::ExportImage,
+        MeasurementToolGlyph::PointCloud,
+        MeasurementToolGlyph::FitView,
+        MeasurementToolGlyph::Surface3D,
+        MeasurementToolGlyph::Refresh,
+        MeasurementToolGlyph::Connect,
+        MeasurementToolGlyph::Disconnect,
+        MeasurementToolGlyph::Reset,
+        MeasurementToolGlyph::Roi,
+        MeasurementToolGlyph::CaptureFrame};
 
     std::set<std::uint64_t> signatures;
     for (const MeasurementToolGlyph glyph : glyphs) {

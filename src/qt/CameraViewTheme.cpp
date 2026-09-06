@@ -128,7 +128,108 @@ void applyCameraViewTheme(QApplication& application)
         QDockWidget::title {
             background: #18212b;
             border-bottom: 1px solid #2a3543;
-            padding: 10px 12px;
+            padding: 8px 12px;
+            font-weight: 600;
+        }
+
+        #MainViewport { background: #0d141c; }
+        #ViewportContextBar {
+            min-height: 32px;
+            max-height: 38px;
+            background: #121b25;
+            border-bottom: 1px solid #293747;
+        }
+        #ViewportContextBar QLabel { padding: 3px 7px; }
+        #ViewportContextBar QLabel[contextRole="source"] {
+            color: #e4edf9;
+            font-weight: 600;
+        }
+        #ViewportContextBar QLabel[contextRole="stage"] {
+            color: #9fb1c5;
+            background: #182431;
+            border: 1px solid #2b3b4d;
+            border-radius: 7px;
+        }
+        #ViewportContextBar QLabel[contextRole="mode"] {
+            color: #acd2ff;
+            background: #172a43;
+            border: 1px solid #315f91;
+            border-radius: 7px;
+        }
+        #ViewportContextBar QLabel[contextRole="mode"][activeMode="true"] {
+            color: #eef6ff;
+            background: #214f82;
+            border-color: #4d94ff;
+        }
+        #WorkspaceToggleButton {
+            min-height: 24px;
+            padding: 3px 7px;
+            color: #c7d8ec;
+            background: #1a2633;
+            border: 1px solid #324458;
+        }
+        #WorkspaceToggleButton:hover,
+        #WorkspaceToggleButton:checked {
+            background: #223a58;
+            border-color: #4d83bf;
+            color: #ffffff;
+        }
+
+        #WorkspaceShell { background: #111820; }
+        #WorkspaceStageNavigation {
+            background: #141d28;
+            border-bottom: 1px solid #293747;
+        }
+        #WorkspaceStageNavigation QToolButton[workspaceStage="true"] {
+            min-height: 38px;
+            padding: 4px 7px;
+            color: #9eafc2;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 7px;
+            font-weight: 600;
+        }
+        #WorkspaceStageNavigation QToolButton[workspaceStage="true"]:hover {
+            color: #edf5ff;
+            background: #1d2b3a;
+            border-color: #30445a;
+        }
+        #WorkspaceStageNavigation QToolButton[workspaceStage="true"]:checked {
+            color: #ffffff;
+            background: #21466f;
+            border-color: #427fbe;
+        }
+        #WorkspacePageHeader {
+            background: #111a24;
+            border-bottom: 1px solid #253343;
+        }
+        #WorkspacePageTitle {
+            color: #e9f2fd;
+            font-size: 11pt;
+            font-weight: 700;
+        }
+        #WorkspacePageDescription { color: #879bb1; font-size: 9pt; }
+        #WorkspacePageNavigation {
+            background: #111a24;
+            border-bottom: 1px solid #2b3949;
+        }
+        #WorkspacePageNavigation QToolButton[workspacePage="true"] {
+            min-height: 28px;
+            padding: 3px 12px;
+            color: #9fb0c2;
+            background: #17212c;
+            border: 1px solid #2c3b4c;
+            border-radius: 6px;
+        }
+        #WorkspacePageNavigation QToolButton[workspacePage="true"]:hover {
+            color: #edf5ff;
+            background: #202e3d;
+            border-color: #435b75;
+        }
+        #WorkspacePageNavigation QToolButton[workspacePage="true"]:checked {
+            color: #ffffff;
+            background: #285b96;
+            border-color: #5a9dea;
             font-weight: 600;
         }
 
@@ -147,8 +248,8 @@ void applyCameraViewTheme(QApplication& application)
             border-bottom: 2px solid #4d94ff;
             font-weight: 600;
         }
-        QTabWidget#FunctionTabs::pane { border: 0; border-top: 1px solid #2d3948; }
-        QTabWidget#FunctionTabs > QTabBar::tab { padding: 9px 10px; }
+        QTabWidget#FunctionTabs::pane { border: 0; background: #111820; }
+        QTabWidget#FunctionTabs > QTabBar::tab { padding: 0; min-height: 0; max-height: 0; }
 
         QScrollArea, QScrollArea > QWidget > QWidget { background: #111820; border: 0; }
         QWidget[panelPage="true"] { background: #111820; }

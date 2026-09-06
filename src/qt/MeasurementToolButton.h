@@ -23,7 +23,18 @@ enum class MeasurementToolGlyph {
     ResetMeasurementColor,
     DeleteMeasurement,
     ClearMeasurements,
-    ExportCsv
+    ExportCsv,
+    OpenImage,
+    ExportImage,
+    PointCloud,
+    FitView,
+    Surface3D,
+    Refresh,
+    Connect,
+    Disconnect,
+    Reset,
+    Roi,
+    CaptureFrame
 };
 
 QIcon measurementToolIcon(MeasurementToolGlyph glyph);

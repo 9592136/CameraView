@@ -79,6 +79,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QStyle>
@@ -251,6 +252,64 @@ QIcon toolbarMoreIcon()
     return QIcon(pixmap);
 }
 
+QIcon workspaceStageIcon(int stage)
+{
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor(132, 190, 255), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    switch (stage) {
+    case 0: // Capture
+        painter.drawRoundedRect(QRectF(3.0, 7.0, 18.0, 12.0), 2.2, 2.2);
+        painter.drawEllipse(QPointF(12.0, 13.0), 3.5, 3.5);
+        painter.drawLine(QPointF(7.0, 7.0), QPointF(9.0, 4.5));
+        painter.drawLine(QPointF(9.0, 4.5), QPointF(15.0, 4.5));
+        painter.drawLine(QPointF(15.0, 4.5), QPointF(17.0, 7.0));
+        break;
+    case 1: // Image
+        painter.drawRoundedRect(QRectF(3.5, 3.5, 17.0, 17.0), 2.0, 2.0);
+        painter.drawEllipse(QPointF(16.0, 8.0), 1.4, 1.4);
+        painter.drawPolyline(QPolygonF{
+            QPointF(5.5, 17.5), QPointF(10.0, 12.5), QPointF(13.0, 15.0),
+            QPointF(16.0, 11.5), QPointF(19.0, 15.5)});
+        break;
+    case 2: // Measure
+        painter.drawLine(QPointF(4.0, 17.5), QPointF(19.0, 5.5));
+        painter.drawLine(QPointF(6.0, 20.0), QPointF(21.0, 8.0));
+        painter.drawLine(QPointF(6.0, 16.0), QPointF(9.0, 19.5));
+        painter.drawLine(QPointF(10.0, 13.0), QPointF(12.5, 16.0));
+        painter.drawLine(QPointF(14.0, 10.0), QPointF(16.0, 12.5));
+        break;
+    default: // Analyze
+        painter.drawLine(QPointF(4.0, 20.0), QPointF(4.0, 4.0));
+        painter.drawLine(QPointF(4.0, 20.0), QPointF(21.0, 20.0));
+        painter.drawPolyline(QPolygonF{
+            QPointF(6.5, 16.0), QPointF(10.0, 12.0), QPointF(13.0, 14.0),
+            QPointF(18.5, 7.0)});
+        painter.drawEllipse(QPointF(18.5, 7.0), 1.3, 1.3);
+        break;
+    }
+    return QIcon(pixmap);
+}
+
+QIcon workspacePanelIcon()
+{
+    QPixmap pixmap(22, 22);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(151, 198, 251), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(QRectF(3.0, 4.0, 16.0, 14.0), 2.0, 2.0);
+    painter.drawLine(QPointF(13.0, 4.0), QPointF(13.0, 18.0));
+    painter.drawLine(QPointF(15.5, 8.0), QPointF(17.2, 8.0));
+    painter.drawLine(QPointF(15.5, 11.0), QPointF(17.2, 11.0));
+    return QIcon(pixmap);
+}
+
 } // namespace
 
 CameraMainWindow::CameraMainWindow(QWidget* parent)
@@ -386,9 +445,49 @@ void CameraMainWindow::setupUi()
     resize(1360, 850);
     setMinimumSize(960, 640);
 
+    auto* viewport = new QWidget;
+    viewport->setObjectName(QStringLiteral("MainViewport"));
+    auto* viewport_layout = new QVBoxLayout(viewport);
+    viewport_layout->setContentsMargins(0, 0, 0, 0);
+    viewport_layout->setSpacing(0);
+
+    viewport_context_bar_ = new QFrame;
+    viewport_context_bar_->setObjectName(QStringLiteral("ViewportContextBar"));
+    auto* context_layout = new QHBoxLayout(viewport_context_bar_);
+    context_layout->setContentsMargins(12, 6, 8, 6);
+    context_layout->setSpacing(8);
+    source_label_ = new QLabel(tr("无图像"));
+    source_label_->setObjectName(QStringLiteral("SourceStatus"));
+    source_label_->setProperty("contextRole", QStringLiteral("source"));
+    source_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    source_label_->setMinimumWidth(90);
+    source_label_->setToolTip(tr("当前未加载图像"));
+    viewport_stage_label_ = new QLabel(tr("采集 · 相机"));
+    viewport_stage_label_->setObjectName(QStringLiteral("ViewportStageStatus"));
+    viewport_stage_label_->setProperty("contextRole", QStringLiteral("stage"));
+    viewport_mode_label_ = new QLabel(tr("浏览画面"));
+    viewport_mode_label_->setObjectName(QStringLiteral("ViewportModeStatus"));
+    viewport_mode_label_->setProperty("contextRole", QStringLiteral("mode"));
+    workspace_toggle_button_ = new QToolButton;
+    workspace_toggle_button_->setObjectName(QStringLiteral("WorkspaceToggleButton"));
+    workspace_toggle_button_->setIcon(workspacePanelIcon());
+    workspace_toggle_button_->setText(tr("工具面板"));
+    workspace_toggle_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    workspace_toggle_button_->setCheckable(true);
+    workspace_toggle_button_->setChecked(true);
+    workspace_toggle_button_->setToolTip(tr("显示或隐藏右侧工具面板"));
+    workspace_toggle_button_->setAccessibleName(tr("工具面板"));
+    context_layout->addWidget(source_label_);
+    context_layout->addStretch(1);
+    context_layout->addWidget(viewport_stage_label_);
+    context_layout->addWidget(viewport_mode_label_);
+    context_layout->addWidget(workspace_toggle_button_);
+    viewport_layout->addWidget(viewport_context_bar_);
+
     canvas_ = new ImageCanvas;
     canvas_->setObjectName(QStringLiteral("ImageCanvas"));
-    setCentralWidget(canvas_);
+    viewport_layout->addWidget(canvas_, 1);
+    setCentralWidget(viewport);
     connect(canvas_, &ImageCanvas::pointsCommitted, this, &CameraMainWindow::onCanvasPoints);
     connect(canvas_, &ImageCanvas::toolCancelled, this, [this](CanvasTool tool) {
         if (tool == CanvasTool::CameraRoi) {
@@ -438,7 +537,85 @@ void CameraMainWindow::setupUi()
     function_dock_->setObjectName(QStringLiteral("FunctionDock"));
     function_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     function_dock_->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-    function_dock_->setMinimumWidth(370);
+    function_dock_->setMinimumWidth(336);
+    function_dock_->setMaximumWidth(480);
+
+    auto* workspace_shell = new QWidget;
+    workspace_shell->setObjectName(QStringLiteral("WorkspaceShell"));
+    auto* workspace_layout = new QVBoxLayout(workspace_shell);
+    workspace_layout->setContentsMargins(0, 0, 0, 0);
+    workspace_layout->setSpacing(0);
+
+    auto* stage_navigation = new QFrame;
+    stage_navigation->setObjectName(QStringLiteral("WorkspaceStageNavigation"));
+    auto* stage_layout = new QHBoxLayout(stage_navigation);
+    stage_layout->setContentsMargins(8, 7, 8, 7);
+    stage_layout->setSpacing(5);
+    auto* stage_group = new QButtonGroup(stage_navigation);
+    stage_group->setExclusive(true);
+    const QStringList stage_names{tr("采集"), tr("图像"), tr("测量"), tr("分析")};
+    for (int stage = 0; stage < stage_names.size(); ++stage) {
+        auto* button = new QToolButton;
+        button->setObjectName(QStringLiteral("WorkspaceStageButton%1").arg(stage));
+        button->setText(stage_names[stage]);
+        button->setIcon(workspaceStageIcon(stage));
+        button->setIconSize(QSize(22, 22));
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        button->setCheckable(true);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setProperty("workspaceStage", true);
+        button->setAccessibleName(tr("切换到%1工作阶段").arg(stage_names[stage]));
+        stage_group->addButton(button, stage);
+        stage_layout->addWidget(button);
+        workspace_stage_buttons_[static_cast<std::size_t>(stage)] = button;
+        connect(button, &QToolButton::clicked, this, [this, stage] {
+            setWorkspacePage(workspace_last_pages_[static_cast<std::size_t>(stage)]);
+        });
+    }
+    workspace_layout->addWidget(stage_navigation);
+
+    auto* page_header = new QFrame;
+    page_header->setObjectName(QStringLiteral("WorkspacePageHeader"));
+    auto* page_header_layout = new QVBoxLayout(page_header);
+    page_header_layout->setContentsMargins(12, 8, 12, 8);
+    page_header_layout->setSpacing(2);
+    workspace_page_title_ = new QLabel(tr("相机控制"));
+    workspace_page_title_->setObjectName(QStringLiteral("WorkspacePageTitle"));
+    workspace_page_description_ = new QLabel(tr("设备连接、曝光、触发和 ROI"));
+    workspace_page_description_->setObjectName(QStringLiteral("WorkspacePageDescription"));
+    workspace_page_description_->setWordWrap(true);
+    page_header_layout->addWidget(workspace_page_title_);
+    page_header_layout->addWidget(workspace_page_description_);
+    workspace_layout->addWidget(page_header);
+
+    auto* page_navigation = new QFrame;
+    page_navigation->setObjectName(QStringLiteral("WorkspacePageNavigation"));
+    auto* page_navigation_layout = new QHBoxLayout(page_navigation);
+    page_navigation_layout->setContentsMargins(8, 0, 8, 7);
+    page_navigation_layout->setSpacing(5);
+    auto* page_group = new QButtonGroup(page_navigation);
+    page_group->setExclusive(true);
+    const QStringList page_names{
+        tr("相机"), tr("显示"), tr("荧光"), tr("处理"),
+        tr("测量"), tr("AI"), tr("项目与报告")};
+    for (int index = 0; index < page_names.size(); ++index) {
+        auto* button = new QToolButton;
+        button->setObjectName(QStringLiteral("WorkspacePageButton%1").arg(index));
+        button->setText(page_names[index]);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setCheckable(true);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setProperty("workspacePage", true);
+        button->setAccessibleName(tr("打开%1工具页").arg(page_names[index]));
+        page_group->addButton(button, index);
+        page_navigation_layout->addWidget(button);
+        workspace_page_buttons_.push_back(button);
+        connect(button, &QToolButton::clicked, this, [this, index] {
+            setWorkspacePage(index);
+        });
+    }
+    workspace_layout->addWidget(page_navigation);
+
     function_tabs_ = new QTabWidget;
     function_tabs_->setObjectName(QStringLiteral("FunctionTabs"));
     function_tabs_->setDocumentMode(true);
@@ -452,6 +629,9 @@ void CameraMainWindow::setupUi()
     yolo_workspace_ = new YoloWorkspaceWidget;
     function_tabs_->addTab(yolo_workspace_, tr("AI"));
     function_tabs_->addTab(scrollablePanel(buildProjectPage()), tr("项目"));
+    if (QTabBar* tab_bar = function_tabs_->findChild<QTabBar*>()) {
+        tab_bar->hide();
+    }
     connect(yolo_workspace_, &YoloWorkspaceWidget::overlaysChanged, this,
         [this](QVector<CanvasOverlay> overlays) {
             ai_overlays_ = std::move(overlays);
@@ -485,9 +665,38 @@ void CameraMainWindow::setupUi()
         });
     connect(yolo_workspace_, &YoloWorkspaceWidget::statusMessage, this,
         [this](const QString& message) { statusBar()->showMessage(message, 7000); });
-    function_dock_->setWidget(function_tabs_);
+    workspace_layout->addWidget(function_tabs_, 1);
+    function_dock_->setWidget(workspace_shell);
     addDockWidget(Qt::RightDockWidgetArea, function_dock_);
     resizeDocks({function_dock_}, {410}, Qt::Horizontal);
+
+    connect(function_tabs_, &QTabWidget::currentChanged,
+        this, &CameraMainWindow::updateWorkspaceNavigation);
+    connect(workspace_toggle_button_, &QToolButton::toggled,
+        function_dock_, &QDockWidget::setVisible);
+    connect(function_dock_, &QDockWidget::visibilityChanged,
+        workspace_toggle_button_, &QToolButton::setChecked);
+    {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("MainWindow"));
+        const int saved_page = std::clamp(
+            settings.value(QStringLiteral("workspacePage"), 0).toInt(), 0,
+            function_tabs_->count() - 1);
+        const int saved_capture_page = settings.value(
+            QStringLiteral("workspaceCapturePage"), 0).toInt();
+        const int saved_image_page = settings.value(
+            QStringLiteral("workspaceImagePage"), 1).toInt();
+        const int saved_analyze_page = settings.value(
+            QStringLiteral("workspaceAnalyzePage"), 5).toInt();
+        workspace_last_pages_[0] = saved_capture_page == 2 ? 2 : 0;
+        workspace_last_pages_[1] = saved_image_page == 3 ? 3 : 1;
+        workspace_last_pages_[2] = 4;
+        workspace_last_pages_[3] = saved_analyze_page == 6 ? 6 : 5;
+        settings.endGroup();
+        function_tabs_->setCurrentIndex(saved_page);
+        updateWorkspaceNavigation(saved_page);
+        function_tabs_->setProperty("rememberWorkspacePage", true);
+    }
 
     for (QFormLayout* form : findChildren<QFormLayout*>()) {
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -496,18 +705,16 @@ void CameraMainWindow::setupUi()
         form->setVerticalSpacing(9);
     }
 
-    source_label_ = new QLabel(tr("无图像"));
-    source_label_->setObjectName(QStringLiteral("SourceStatus"));
     coordinate_label_ = new QLabel(tr("X —  Y —"));
     zoom_label_ = new QLabel(tr("缩放 100%"));
     preview_fps_label_ = new QLabel(tr("FPS —"));
     preview_fps_label_->setObjectName(QStringLiteral("PreviewFpsStatus"));
-    statusBar()->addWidget(source_label_, 1);
     statusBar()->addPermanentWidget(preview_fps_label_);
     statusBar()->addPermanentWidget(coordinate_label_);
     statusBar()->addPermanentWidget(zoom_label_);
     statusBar()->showMessage(tr("就绪"));
-
+    updateViewportContext();
+    updateWorkspacePresentation();
 }
 
 void CameraMainWindow::setupMenusAndToolbar()
@@ -540,9 +747,24 @@ void CameraMainWindow::setupMenusAndToolbar()
     file_menu->addAction(tr("退出"), QKeySequence::Quit, this, &QWidget::close);
 
     QMenu* camera_menu = menuBar()->addMenu(tr("相机(&C)"));
-    camera_menu->addAction(tr("刷新设备"), this, &CameraMainWindow::refreshDevices);
-    camera_menu->addAction(tr("打开相机"), this, &CameraMainWindow::openSelectedCamera);
-    camera_menu->addAction(tr("停止相机"), this, &CameraMainWindow::stopCamera);
+    camera_menu->addAction(measurementToolIcon(MeasurementToolGlyph::Refresh),
+        tr("刷新设备"), this, [this] {
+            function_dock_->show();
+            setWorkspacePage(0);
+            refreshDevices();
+        });
+    camera_menu->addAction(measurementToolIcon(MeasurementToolGlyph::Connect),
+        tr("打开相机"), this, [this] {
+            function_dock_->show();
+            setWorkspacePage(0);
+            openSelectedCamera();
+        });
+    camera_menu->addAction(measurementToolIcon(MeasurementToolGlyph::Disconnect),
+        tr("停止相机"), this, [this] {
+            function_dock_->show();
+            setWorkspacePage(0);
+            stopCamera();
+        });
 
     QMenu* image_menu = menuBar()->addMenu(tr("图像(&I)"));
     auto transform_frame = [this](const QTransform& transform, const QString& label) {
@@ -582,16 +804,31 @@ void CameraMainWindow::setupMenusAndToolbar()
         tr("3D 点云工作台…"), this, &CameraMainWindow::showPointCloudWorkspace);
     point_cloud_action_->setObjectName(QStringLiteral("PointCloudWorkspaceAction"));
     point_cloud_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+3")));
-    point_cloud_action_->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
+    point_cloud_action_->setIcon(measurementToolIcon(MeasurementToolGlyph::PointCloud));
     three_d_menu->addAction(surface_action_);
 
     QMenu* view_menu = menuBar()->addMenu(tr("视图(&V)"));
     fit_action_ = view_menu->addAction(
-        style()->standardIcon(QStyle::SP_BrowserReload), tr("适合窗口"),
+        measurementToolIcon(MeasurementToolGlyph::FitView), tr("适合窗口"),
         QKeySequence(Qt::Key_F), canvas_, &ImageCanvas::fitToView);
     fit_action_->setObjectName(QStringLiteral("FitToViewAction"));
     view_menu->addSeparator();
-    view_menu->addAction(function_dock_->toggleViewAction());
+    QAction* workspace_visibility_action = function_dock_->toggleViewAction();
+    workspace_visibility_action->setText(tr("显示工具面板"));
+    workspace_visibility_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+`")));
+    view_menu->addAction(workspace_visibility_action);
+    QMenu* workspace_menu = view_menu->addMenu(tr("工作阶段"));
+    const QStringList workspace_stage_names{tr("采集"), tr("图像"), tr("测量"), tr("分析")};
+    for (int stage = 0; stage < workspace_stage_names.size(); ++stage) {
+        QAction* action = workspace_menu->addAction(
+            workspaceStageIcon(stage), workspace_stage_names[stage]);
+        action->setShortcut(QKeySequence(QStringLiteral("Alt+%1").arg(stage + 1)));
+        action->setToolTip(tr("切换到%1工作阶段").arg(workspace_stage_names[stage]));
+        connect(action, &QAction::triggered, this, [this, stage] {
+            function_dock_->show();
+            setWorkspacePage(workspace_last_pages_[static_cast<std::size_t>(stage)]);
+        });
+    }
     QMenu* toolbar_display_menu = view_menu->addMenu(tr("工具栏显示"));
     toolbar_display_menu->setObjectName(QStringLiteral("ToolbarDisplayMenu"));
     auto* toolbar_display_group = new QActionGroup(this);
@@ -646,12 +883,12 @@ void CameraMainWindow::setupMenusAndToolbar()
     main_toolbar_->setIconSize(QSize(30, 30));
     main_toolbar_->setMinimumHeight(66);
     main_toolbar_->setAllowedAreas(Qt::TopToolBarArea);
-    open_action_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    open_action_->setIcon(measurementToolIcon(MeasurementToolGlyph::OpenImage));
     open_action_->setObjectName(QStringLiteral("OpenImageAction"));
-    export_action_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    export_action_->setIcon(measurementToolIcon(MeasurementToolGlyph::ExportImage));
     export_action_->setObjectName(QStringLiteral("ExportImageAction"));
     export_action_->setEnabled(false);
-    surface_action_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    surface_action_->setIcon(measurementToolIcon(MeasurementToolGlyph::Surface3D));
     surface_action_->setObjectName(QStringLiteral("ImageSurface3DAction"));
 
     auto configure_action = [](QAction* action, const QString& description,
@@ -692,6 +929,7 @@ void CameraMainWindow::setupMenusAndToolbar()
         action->setChecked(canvas_->tool() == tool);
         measurement_tool_actions_.insert(static_cast<int>(tool), action);
         connect(action, &QAction::triggered, this, [this, tool, status] {
+            setWorkspacePage(4);
             if (tool == CanvasTool::None) {
                 enterMeasurementSelectionMode();
             } else {
@@ -802,8 +1040,10 @@ void CameraMainWindow::setupMenusAndToolbar()
     configure_action(smart_sample_action_, tr("连续框选典型目标作为自动计数样本"),
         QStringLiteral("measurementTool"));
     measurement_actions->addAction(smart_sample_action_);
-    connect(smart_sample_action_, &QAction::triggered,
-        this, &CameraMainWindow::startSmartTargetSampleSelection);
+    connect(smart_sample_action_, &QAction::triggered, this, [this] {
+        setWorkspacePage(4);
+        startSmartTargetSampleSelection();
+    });
 
     connect(canvas_, &ImageCanvas::toolChanged, this,
         [this, measurement_actions](CanvasTool tool) {
@@ -814,6 +1054,7 @@ void CameraMainWindow::setupMenusAndToolbar()
             measurement_actions->setExclusive(true);
             updateToolbarToolState(tool);
             updateToolbarActionStates();
+            updateViewportContext();
         });
 
     smart_run_action_ = new QAction(
@@ -1077,6 +1318,136 @@ void CameraMainWindow::updateToolbarActionStates()
     }
 }
 
+void CameraMainWindow::setWorkspacePage(int index, bool remember)
+{
+    if (!function_tabs_ || index < 0 || index >= function_tabs_->count()) return;
+    function_tabs_->setProperty("rememberWorkspacePage", remember);
+    if (function_tabs_->currentIndex() != index) {
+        function_tabs_->setCurrentIndex(index);
+    } else {
+        updateWorkspaceNavigation(index);
+    }
+    function_tabs_->setProperty("rememberWorkspacePage", true);
+}
+
+void CameraMainWindow::updateWorkspaceNavigation(int index)
+{
+    if (!function_tabs_ || index < 0 || index >= function_tabs_->count()) return;
+
+    static constexpr std::array<int, 7> kPageStages{{0, 1, 0, 1, 2, 3, 3}};
+    const QStringList page_titles{
+        tr("相机控制"), tr("图像显示"), tr("荧光成像"), tr("图像处理"),
+        tr("测量与标定"), tr("AI 识别"), tr("项目与报告")};
+    const QStringList page_descriptions{
+        tr("设备连接、曝光、触发和 ROI"),
+        tr("亮度、对比度、伪彩和滤镜处理链"),
+        tr("多通道采集、显示和融合"),
+        tr("拼接、景深合成与结果管理"),
+        tr("物镜标定、连续测量和智能计数"),
+        tr("模型管理、推理、标注和训练"),
+        tr("保存会话并生成可复用检测报告")};
+    const int stage = kPageStages[static_cast<std::size_t>(index)];
+    workspace_last_pages_[static_cast<std::size_t>(stage)] = index;
+
+    for (int button_index = 0; button_index < static_cast<int>(workspace_stage_buttons_.size());
+         ++button_index) {
+        if (QToolButton* button = workspace_stage_buttons_[static_cast<std::size_t>(button_index)]) {
+            const QSignalBlocker blocker(button);
+            button->setChecked(button_index == stage);
+        }
+    }
+    for (int button_index = 0; button_index < workspace_page_buttons_.size(); ++button_index) {
+        QToolButton* button = workspace_page_buttons_[button_index];
+        if (!button) continue;
+        const bool belongs_to_stage =
+            kPageStages[static_cast<std::size_t>(button_index)] == stage;
+        button->setVisible(belongs_to_stage);
+        const QSignalBlocker blocker(button);
+        button->setChecked(button_index == index);
+    }
+    if (workspace_page_title_) workspace_page_title_->setText(page_titles[index]);
+    if (workspace_page_description_) {
+        workspace_page_description_->setText(page_descriptions[index]);
+    }
+
+    if (function_tabs_->property("rememberWorkspacePage").toBool()) {
+        QSettings settings;
+        settings.beginGroup(QStringLiteral("MainWindow"));
+        settings.setValue(QStringLiteral("workspacePage"), index);
+        settings.setValue(QStringLiteral("workspaceCapturePage"), workspace_last_pages_[0]);
+        settings.setValue(QStringLiteral("workspaceImagePage"), workspace_last_pages_[1]);
+        settings.setValue(QStringLiteral("workspaceAnalyzePage"), workspace_last_pages_[3]);
+        settings.endGroup();
+    }
+
+    if (index == 5 && yolo_workspace_) {
+        const ImageFrame frame = currentVisibleFrame();
+        if (frame.IsValid()) {
+            yolo_workspace_->setCurrentImage(
+                qImageFromFrame(frame), current_source_, current_source_identity_);
+        }
+    }
+    updateViewportContext();
+}
+
+void CameraMainWindow::updateViewportContext()
+{
+    if (viewport_stage_label_ && workspace_page_title_) {
+        const QStringList stage_names{tr("采集"), tr("图像"), tr("测量"), tr("分析")};
+        static constexpr std::array<int, 7> kPageStages{{0, 1, 0, 1, 2, 3, 3}};
+        const int page = function_tabs_ ? function_tabs_->currentIndex() : 0;
+        const int safe_page = std::clamp(page, 0, static_cast<int>(kPageStages.size()) - 1);
+        viewport_stage_label_->setText(tr("%1 · %2")
+            .arg(stage_names[kPageStages[static_cast<std::size_t>(safe_page)]],
+                 workspace_page_title_->text()));
+    }
+    if (!viewport_mode_label_ || !canvas_) return;
+
+    QString mode = tr("浏览画面");
+    switch (canvas_->tool()) {
+    case CanvasTool::Calibration: mode = tr("标定中"); break;
+    case CanvasTool::Point: mode = tr("点测量"); break;
+    case CanvasTool::Length: mode = tr("长度测量"); break;
+    case CanvasTool::Polyline: mode = tr("折线测量"); break;
+    case CanvasTool::Angle: mode = tr("角度测量"); break;
+    case CanvasTool::Rectangle: mode = tr("矩形测量"); break;
+    case CanvasTool::Polygon: mode = tr("多边形测量"); break;
+    case CanvasTool::Circle: mode = tr("圆测量"); break;
+    case CanvasTool::Ellipse: mode = tr("椭圆测量"); break;
+    case CanvasTool::ProfileLine: mode = tr("剖线测量"); break;
+    case CanvasTool::SmartCountSample: mode = tr("智能框选"); break;
+    case CanvasTool::SmartCountResult: mode = tr("计数结果"); break;
+    case CanvasTool::CameraRoi: mode = tr("框选 ROI"); break;
+    case CanvasTool::None:
+        if (selection_action_ && selection_action_->isEnabled() && selection_action_->isChecked()) {
+            mode = tr("选择测量");
+        }
+        break;
+    }
+    if (smart_count_running_) mode = tr("AI 计数中");
+    viewport_mode_label_->setText(mode);
+    viewport_mode_label_->setProperty("activeMode", canvas_->tool() != CanvasTool::None);
+    viewport_mode_label_->style()->unpolish(viewport_mode_label_);
+    viewport_mode_label_->style()->polish(viewport_mode_label_);
+}
+
+void CameraMainWindow::updateWorkspacePresentation()
+{
+    const bool compact = width() < 1180;
+    if (viewport_stage_label_) viewport_stage_label_->setVisible(!compact);
+    if (workspace_page_description_) {
+        workspace_page_description_->setVisible(height() >= 720);
+    }
+    if (workspace_toggle_button_) {
+        workspace_toggle_button_->setToolButtonStyle(
+            compact ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
+    }
+    if (function_dock_) {
+        function_dock_->setMinimumWidth(compact ? 320 : 336);
+        function_dock_->setMaximumWidth(compact ? 380 : 480);
+    }
+}
+
 QString cameraFrameFormatName(int format)
 {
     switch (format) {
@@ -1165,8 +1536,8 @@ QWidget* CameraMainWindow::buildCameraPage()
     camera_connection_button_ = new QPushButton(tr("连接相机"));
     camera_refresh_button_->setObjectName(QStringLiteral("CameraRefreshButton"));
     camera_connection_button_->setObjectName(QStringLiteral("CameraConnectionButton"));
-    camera_refresh_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-    camera_connection_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    camera_refresh_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Refresh));
+    camera_connection_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Connect));
     setButtonRole(camera_connection_button_, "primary");
     device_layout->addWidget(buttonRow({camera_refresh_button_, camera_connection_button_}));
 
@@ -1210,8 +1581,8 @@ QWidget* CameraMainWindow::buildCameraPage()
     camera_white_balance_button_ = new QPushButton(tr("白平衡一次"));
     camera_auto_exposure_button_->setObjectName(QStringLiteral("CameraAutoExposureButton"));
     camera_white_balance_button_->setObjectName(QStringLiteral("CameraWhiteBalanceButton"));
-    camera_auto_exposure_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
-    camera_white_balance_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    camera_auto_exposure_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Refresh));
+    camera_white_balance_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Reset));
     basic_layout->addWidget(buttonRow({camera_auto_exposure_button_, camera_white_balance_button_}));
 
     QWidget* color_body = addCollapsibleSection(layout, tr("颜色控制"), false);
@@ -1255,7 +1626,7 @@ QWidget* CameraMainWindow::buildCameraPage()
     camera_mirror_check_ = new QCheckBox(tr("水平镜像"));
     camera_single_frame_button_ = new QPushButton(tr("采集一帧"));
     camera_single_frame_button_->setObjectName(QStringLiteral("CameraSingleFrameButton"));
-    camera_single_frame_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    camera_single_frame_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::CaptureFrame));
     capture_form->addRow(tr("分辨率 / Binning"), camera_resolution_combo_);
     capture_form->addRow(tr("触发模式"), camera_trigger_combo_);
     capture_form->addRow(camera_flip_check_);
@@ -1282,9 +1653,9 @@ QWidget* CameraMainWindow::buildCameraPage()
     camera_roi_select_button_->setObjectName(QStringLiteral("CameraRoiSelectButton"));
     camera_roi_apply_button_->setObjectName(QStringLiteral("CameraRoiApplyButton"));
     camera_roi_reset_button_->setObjectName(QStringLiteral("CameraRoiResetButton"));
-    camera_roi_select_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogDetailedView));
-    camera_roi_apply_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
-    camera_roi_reset_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    camera_roi_select_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Roi));
+    camera_roi_apply_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Connect));
+    camera_roi_reset_button_->setIcon(measurementToolIcon(MeasurementToolGlyph::Reset));
     roi_layout->addWidget(camera_roi_select_button_);
     roi_layout->addWidget(buttonRow({camera_roi_apply_button_, camera_roi_reset_button_}));
 
@@ -2426,6 +2797,7 @@ bool CameraMainWindow::loadImageFile(const QString& fileName)
     }
     setCurrentFrame(
         imageFrameFromQImage(image), QFileInfo(fileName).fileName(), QFileInfo(fileName).absoluteFilePath());
+    setWorkspacePage(1);
     statusBar()->showMessage(tr("已打开 %1").arg(fileName), 5000);
     return true;
 }
@@ -3090,8 +3462,8 @@ void CameraMainWindow::updateCameraControlAvailability()
     camera_refresh_button_->setEnabled(!camera_open_ && !transitioning);
     camera_connection_button_->setEnabled(camera_open_ || (has_device && !transitioning));
     camera_connection_button_->setText(camera_open_ ? tr("断开相机") : tr("连接相机"));
-    camera_connection_button_->setIcon(style()->standardIcon(
-        camera_open_ ? QStyle::SP_DialogCloseButton : QStyle::SP_DialogApplyButton));
+    camera_connection_button_->setIcon(measurementToolIcon(
+        camera_open_ ? MeasurementToolGlyph::Disconnect : MeasurementToolGlyph::Connect));
     camera_connection_button_->setProperty(
         "role", camera_open_ ? QStringLiteral("danger") : QStringLiteral("primary"));
     camera_connection_button_->style()->unpolish(camera_connection_button_);
@@ -3425,10 +3797,13 @@ void CameraMainWindow::presentLiveCameraImage()
     }
     ++image_generation_;
     display_frame_ = {};
-    source_label_->setText(tr("%1 · %2 × %3")
+    const QString source_summary = tr("%1 · %2 × %3")
         .arg(current_source_)
         .arg(latest_camera_image_.width())
-        .arg(latest_camera_image_.height()));
+        .arg(latest_camera_image_.height());
+    source_label_->setText(source_summary);
+    source_label_->setToolTip(source_summary);
+    updateViewportContext();
     if (export_action_) export_action_->setEnabled(true);
     canvas_->setImage(latest_camera_image_);
     canvas_->setProperty("directCameraPreview", true);
@@ -3507,12 +3882,15 @@ void CameraMainWindow::setCurrentFrame(
     current_frame_ = std::move(frame);
     current_source_ = source;
     current_source_identity_ = new_identity;
-    source_label_->setText(tr("%1 · %2 × %3")
+    const QString source_summary = tr("%1 · %2 × %3")
         .arg(source)
         .arg(current_frame_.width)
-        .arg(current_frame_.height));
+        .arg(current_frame_.height);
+    source_label_->setText(source_summary);
+    source_label_->setToolTip(source_summary);
     updateImagePresentation();
     updateToolbarActionStates();
+    updateViewportContext();
 }
 
 void CameraMainWindow::updateImageFilterControls()
@@ -3870,6 +4248,7 @@ void CameraMainWindow::setMeasurementTool(CanvasTool tool, const QString& hint)
         return;
     }
     ai_annotation_active_ = false;
+    setWorkspacePage(4);
     canvas_->setEdgeSnappingEnabled(edge_snap_check_ && edge_snap_check_->isChecked());
     canvas_->setTool(tool);
     statusBar()->showMessage(hint);
@@ -3893,6 +4272,7 @@ void CameraMainWindow::updateMeasurementList()
     updateMeasurementStyleUi();
     rebuildOverlays();
     updateToolbarActionStates();
+    updateViewportContext();
 }
 
 void CameraMainWindow::updateCalibrationUi()
@@ -4146,8 +4526,10 @@ void CameraMainWindow::focusSelectedMeasurement()
 void CameraMainWindow::enterMeasurementSelectionMode()
 {
     ai_annotation_active_ = false;
+    setWorkspacePage(4);
     canvas_->setTool(CanvasTool::None);
     canvas_->setFocus(Qt::OtherFocusReason);
+    updateViewportContext();
     statusBar()->showMessage(
         tr("选择模式：单击选择测量，拖动控制点修改形状，拖动对象整体移动"), 5000);
 }
@@ -5576,6 +5958,12 @@ void CameraMainWindow::closeEvent(QCloseEvent* event)
     settings.setValue(QStringLiteral("toolbarDisplay"),
         static_cast<int>(toolbar_display_preference_));
     settings.setValue(QStringLiteral("toolbarLayoutVersion"), 2);
+    if (function_tabs_) {
+        settings.setValue(QStringLiteral("workspacePage"), function_tabs_->currentIndex());
+        settings.setValue(QStringLiteral("workspaceCapturePage"), workspace_last_pages_[0]);
+        settings.setValue(QStringLiteral("workspaceImagePage"), workspace_last_pages_[1]);
+        settings.setValue(QStringLiteral("workspaceAnalyzePage"), workspace_last_pages_[3]);
+    }
     settings.endGroup();
     if (camera_thread_.isRunning()) {
         QMetaObject::invokeMethod(camera_worker_, "stopCamera", Qt::BlockingQueuedConnection);
@@ -5587,6 +5975,7 @@ void CameraMainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
     updateToolbarPresentation();
+    updateWorkspacePresentation();
 }
 
 void CameraMainWindow::dragEnterEvent(QDragEnterEvent* event)

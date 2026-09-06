@@ -40,6 +40,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QDockWidget;
+class QFrame;
 class QGroupBox;
 class QMenu;
 class QToolButton;
@@ -120,6 +121,10 @@ private:
     void updateToolbarPresentation();
     void updateToolbarActionStates();
     void updateToolbarToolState(CanvasTool tool);
+    void setWorkspacePage(int index, bool remember = true);
+    void updateWorkspaceNavigation(int index);
+    void updateViewportContext();
+    void updateWorkspacePresentation();
     void bindMeasurementPanelActions();
     QWidget* buildCameraPage();
     QWidget* buildImagePage();
@@ -234,11 +239,30 @@ private:
         Compact
     };
 
+    enum class WorkspaceStage {
+        Capture,
+        Image,
+        Measure,
+        Analyze,
+        Count
+    };
+
     ImageCanvas* canvas_ = nullptr;
     QDockWidget* function_dock_ = nullptr;
     HistogramWidget* histogram_ = nullptr;
     QTabWidget* function_tabs_ = nullptr;
     YoloWorkspaceWidget* yolo_workspace_ = nullptr;
+    QFrame* viewport_context_bar_ = nullptr;
+    QLabel* viewport_stage_label_ = nullptr;
+    QLabel* viewport_mode_label_ = nullptr;
+    QLabel* workspace_page_title_ = nullptr;
+    QLabel* workspace_page_description_ = nullptr;
+    QToolButton* workspace_toggle_button_ = nullptr;
+    std::array<QToolButton*, static_cast<std::size_t>(WorkspaceStage::Count)>
+        workspace_stage_buttons_{};
+    QVector<QToolButton*> workspace_page_buttons_;
+    std::array<int, static_cast<std::size_t>(WorkspaceStage::Count)>
+        workspace_last_pages_{{0, 1, 4, 5}};
     QLabel* source_label_ = nullptr;
     QLabel* coordinate_label_ = nullptr;
     QLabel* zoom_label_ = nullptr;
