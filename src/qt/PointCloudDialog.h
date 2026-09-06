@@ -50,6 +50,43 @@ enum class PointCloudInteractionMode {
     SectionEdit
 };
 
+enum class PointCloudCommandId {
+    Open,
+    ExportCloud,
+    Browse,
+    Select,
+    ClearSelection,
+    Undo,
+    Redo,
+    FitPlane,
+    FitSphere,
+    FitCylinder,
+    MeasurePoint,
+    MeasureDistance,
+    MeasureHeight,
+    MeasureAngle,
+    MeasurePointToPlane,
+    MeasurePlaneAngle,
+    MeasureLineIntersection,
+    DrawSection,
+    ViewIsometric,
+    ViewTop,
+    ViewFront,
+    ViewRight,
+    ResetView,
+    DeleteModel,
+    ClearModels,
+    DeleteMeasurement,
+    ClearMeasurements,
+    ExportMeasurements,
+    DeleteSection,
+    ClearSections,
+    ExportSectionCsv,
+    ExportSectionPng,
+    ExportSectionReport,
+    Count
+};
+
 enum class PointCloudMeasureMode {
     Navigate,
     Point,
@@ -91,6 +128,7 @@ private:
     void setWorkspacePage(PointCloudWorkspacePage page, bool reveal = true);
     void setInteractionMode(PointCloudInteractionMode mode);
     void updateToolbarPresentation();
+    QString interactionStatusText() const;
     void updateResponsiveLayout(bool force = false);
     void setCompactDrawerOpen(bool open, bool showSection = false);
     void moveSectionWorkspace(bool intoDrawer);
@@ -134,14 +172,15 @@ private:
     void applyOutlierRemoval();
     void applySmartDenoise();
     void applyHoleRepair();
-    void beginInteractiveCrop();
     void acceptBoxSelection(const QVector<int>& indices);
     void applyInteractiveCrop(bool keep_selected);
     void clearInteractiveCrop();
     void updateSelectionPresentation();
     void updateActionStates();
+    QAction* commandAction(PointCloudCommandId id) const;
     void clearFittedPlane();
     void clearGeometricModels();
+    void requestClearGeometricModels();
     void fitGeometricModel(PointCloudGeometricModelType type);
     void cancelActiveFit(const QString& message);
     void acceptFitResult(PointCloudFitResult result, std::uint64_t revision);
@@ -159,8 +198,12 @@ private:
     void setMeasureMode(PointCloudMeasureMode mode);
     void finishMeasurement();
     void refreshMeasurementList();
+    void deleteSelectedMeasurement();
+    void clearMeasurements();
+    void requestClearMeasurements();
+    void requestClearSections();
     QString unitLabel() const;
-    void pushProcessedCloud(PointCloud cloud, const QString& operation);
+    bool pushProcessedCloud(PointCloud cloud, const QString& operation);
     void runCloudTask(
         const QString& operation,
         std::function<PointCloud()> task,
@@ -196,6 +239,8 @@ private:
     QAction* undo_action_ = nullptr;
     QAction* redo_action_ = nullptr;
     QAction* section_action_ = nullptr;
+    std::array<QAction*, static_cast<std::size_t>(PointCloudCommandId::Count)>
+        command_actions_{};
     QLabel* source_label_ = nullptr;
     QLabel* statistics_label_ = nullptr;
     QLabel* texture_status_label_ = nullptr;
@@ -320,6 +365,7 @@ private:
     bool compact_layout_ = false;
     bool compact_drawer_open_ = false;
     bool task_running_ = false;
+    std::uint64_t task_status_revision_ = 0;
     int last_rendered_point_count_ = 0;
     QList<int> wide_workspace_sizes_{900, 380};
     QList<int> wide_section_sizes_{650, 0};

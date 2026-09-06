@@ -10,6 +10,7 @@
 #include "pointcloud/PointCloudIO.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -18,12 +19,14 @@
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QPixmap>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QThread>
+#include <QTimer>
 #include <QToolButton>
 
 #include <cmath>
@@ -445,12 +448,26 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudClearMeasurementsButton"));
     auto* export_measurements_action = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudExportMeasurementsButton"));
+    auto* fit_plane_command = point_cloud_dialog.findChild<QAction*>(
+        QStringLiteral("PointCloudFitPlaneAction"));
+    auto* measure_distance_command = point_cloud_dialog.findChild<QAction*>(
+        QStringLiteral("PointCloudMeasureDistanceAction"));
+    auto* export_measurements_command = point_cloud_dialog.findChild<QAction*>(
+        QStringLiteral("PointCloudExportMeasurementsAction"));
     if (!clear_selection_action || clear_selection_action->isEnabled() || !fit_scope ||
         !fit_plane_model_action || !delete_measurement_action ||
         delete_measurement_action->isEnabled() || !clear_measurements_action ||
         clear_measurements_action->isEnabled() || !export_measurements_action ||
         export_measurements_action->isEnabled()) {
         return fail("Point-cloud selection or measurement actions did not reflect the empty state.");
+    }
+    if (!fit_plane_command || !measure_distance_command || !export_measurements_command ||
+        fit_plane_command->icon().isNull() || measure_distance_command->icon().isNull() ||
+        export_measurements_command->icon().isNull() ||
+        fit_plane_model_action->icon().cacheKey() != fit_plane_command->icon().cacheKey() ||
+        export_measurements_action->icon().cacheKey() !=
+            export_measurements_command->icon().cacheKey()) {
+        return fail("Point-cloud toolbar and inspector controls do not share the command registry.");
     }
     fit_scope->setCurrentIndex(fit_scope->findData(
         static_cast<int>(PointCloudFitScope::Selection)));
@@ -604,6 +621,18 @@ int main(int argc, char* argv[])
         point_cloud_dialog.cloudWidget()->activeGeometricModel() == 0) {
         return fail("Selection-scoped plane fitting did not create and activate a model.");
     }
+    auto* point_cloud_task_bar = point_cloud_dialog.findChild<QWidget*>(
+        QStringLiteral("PointCloudTaskBar"));
+    QElapsedTimer task_bar_timer;
+    task_bar_timer.start();
+    while (point_cloud_task_bar && point_cloud_task_bar->isVisible() &&
+        task_bar_timer.elapsed() < 2500) {
+        application.processEvents();
+        QThread::msleep(10);
+    }
+    if (!point_cloud_task_bar || point_cloud_task_bar->isVisible()) {
+        return fail("Successful point-cloud task feedback did not collapse automatically.");
+    }
     auto* hide_model_action = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudHideModelButton"));
     auto* show_model_action = point_cloud_dialog.findChild<QPushButton*>(
@@ -656,6 +685,18 @@ int main(int argc, char* argv[])
         !export_measurements_action->isEnabled() || !measurement_hint ||
         !measurement_hint->text().contains(QStringLiteral("工具保持启用"))) {
         return fail("Completed measurement was not selected, highlighted, or kept continuous.");
+    }
+    const int measurement_count_before_clear = point_cloud_dialog.measurementCount();
+    QTimer::singleShot(0, [] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* message_box = qobject_cast<QMessageBox*>(widget)) {
+                message_box->done(QMessageBox::Cancel);
+            }
+        }
+    });
+    clear_measurements_action->click();
+    if (point_cloud_dialog.measurementCount() != measurement_count_before_clear) {
+        return fail("Cancelling the clear-measurements confirmation removed committed results.");
     }
     auto* section_button = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudBeginSectionButton"));
@@ -736,6 +777,32 @@ int main(int argc, char* argv[])
             return fail("3D point-cloud workbench snapshot could not be rendered.");
         }
     }
+    point_cloud_dialog.resize(1280, 800);
+    application.processEvents();
+    if (!point_cloud_dialog.grab().save(QDir::current().filePath(
+            QStringLiteral("CameraView-point-cloud-dialog-1280.png")))) {
+        return fail("1280x800 point-cloud workspace snapshot could not be rendered.");
+    }
+    QPixmap high_dpi_snapshot(QSize(point_cloud_dialog.width() * 2,
+        point_cloud_dialog.height() * 2));
+    high_dpi_snapshot.setDevicePixelRatio(2.0);
+    high_dpi_snapshot.fill(Qt::transparent);
+    point_cloud_dialog.render(&high_dpi_snapshot);
+    if (!high_dpi_snapshot.save(QDir::current().filePath(
+            QStringLiteral("CameraView-point-cloud-dialog-high-dpi.png")))) {
+        return fail("High-DPI point-cloud workspace snapshot could not be rendered.");
+    }
+    point_cloud_dialog.resize(1920, 1080);
+    application.processEvents();
+    auto* wide_splitter = point_cloud_dialog.findChild<QSplitter*>(
+        QStringLiteral("PointCloudWorkspaceSplitter"));
+    const QList<int> wide_sizes = wide_splitter ? wide_splitter->sizes() : QList<int>{};
+    if (wide_sizes.size() != 2 || wide_sizes[0] < 700 ||
+        wide_sizes[1] < 336 || wide_sizes[1] > 480 ||
+        !point_cloud_dialog.grab().save(QDir::current().filePath(
+            QStringLiteral("CameraView-point-cloud-dialog-1920.png")))) {
+        return fail("Full-HD point-cloud inspector did not preserve the 3D workspace width.");
+    }
     point_cloud_tabs->setCurrentIndex(0);
     point_cloud_dialog.resize(960, 640);
     application.processEvents();
@@ -756,6 +823,17 @@ int main(int argc, char* argv[])
         !point_cloud_dialog.grab().save(QDir::current().filePath(
             QStringLiteral("CameraView-point-cloud-dialog-compact.png")))) {
         return fail("Compact point-cloud workspace did not start with an on-demand drawer.");
+    }
+    const qsizetype responsive_child_count = point_cloud_dialog.findChildren<QWidget*>().size();
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        point_cloud_dialog.resize(1280, 800);
+        application.processEvents();
+        point_cloud_dialog.resize(960, 640);
+        application.processEvents();
+    }
+    if (point_cloud_dialog.findChildren<QWidget*>().size() != responsive_child_count ||
+        workspace_splitter->orientation() != Qt::Vertical) {
+        return fail("Repeated responsive-layout changes recreated point-cloud controls.");
     }
     drawer_toggle->click();
     application.processEvents();

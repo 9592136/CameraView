@@ -241,6 +241,7 @@ void applyCameraViewTheme(QApplication& application)
             border-radius: 6px;
         }
         #PointCloudWorkspaceToolbar QPushButton:checked,
+        #PointCloudWorkspaceToolbar QToolButton:checked,
         #PointCloudWorkspaceToolbar QToolButton[activeTool="true"] {
             color: #eef6ff;
             background: #214f82;
@@ -268,6 +269,9 @@ void applyCameraViewTheme(QApplication& application)
             border: 1px solid #315176;
             border-radius: 7px;
         }
+        #PointCloudTaskBar[status="ok"] { background: #13291f; border-color: #2f7652; }
+        #PointCloudTaskBar[status="warning"] { background: #302616; border-color: #806128; }
+        #PointCloudTaskBar[status="error"] { background: #321c23; border-color: #86404c; }
         #PointCloudTaskBar QProgressBar {
             min-height: 5px;
             max-height: 5px;
@@ -375,9 +379,36 @@ void applyCameraViewTheme(QApplication& application)
             color: #a9c9ea;
             padding: 3px 7px;
         }
-        QLabel[status="ok"] { color: #55d98d; }
-        QLabel[status="warning"] { color: #ffc35c; }
-        QLabel[status="error"] { color: #ff7f7f; }
+        #PointCloudDialog QLabel[status] {
+            border: 1px solid transparent;
+            border-radius: 7px;
+            padding: 3px 7px;
+        }
+        #PointCloudDialog QLabel[status="neutral"] {
+            color: #9eafc1;
+            background: #18222d;
+            border-color: #2c3a49;
+        }
+        #PointCloudDialog QLabel[status="processing"] {
+            color: #b8d9ff;
+            background: #172a43;
+            border-color: #315f91;
+        }
+        #PointCloudDialog QLabel[status="ok"] {
+            color: #75dfa7;
+            background: #14271f;
+            border-color: #2b684b;
+        }
+        #PointCloudDialog QLabel[status="warning"] {
+            color: #ffd071;
+            background: #2c2417;
+            border-color: #745923;
+        }
+        #PointCloudDialog QLabel[status="error"] {
+            color: #ff9292;
+            background: #301c22;
+            border-color: #7a3d47;
+        }
 
         QLabel[exposureState="ok"] { color: #9ee6b0; }
         QLabel[exposureState="caution"] { color: #ffd98a; }
