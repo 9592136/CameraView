@@ -319,6 +319,39 @@ int main(int argc, char* argv[])
     std::cout << "Point-cloud adaptive render: full " << full_point_count
               << ", interactive " << interactive_point_count << " points\n";
 
+    large_point_cloud.organized_width = 400;
+    large_point_cloud.organized_height = 400;
+    large_point_cloud.texture_available = true;
+    for (int index = 0; index < static_cast<int>(large_point_cloud.points.size()); ++index) {
+        PointCloudPoint& point = large_point_cloud.points[static_cast<std::size_t>(index)];
+        point.r = static_cast<std::uint8_t>(40 + index % 180);
+        point.g = static_cast<std::uint8_t>(70 + (index / 400) % 150);
+        point.b = 205;
+        point.has_color = true;
+    }
+    point_cloud_view.setCloud(large_point_cloud);
+    point_cloud_view.setColorMode(PointCloudColorMode::Texture);
+    point_cloud_view.grab();
+    const int full_texture_vertices = point_cloud_view.renderedPointCount();
+    QMouseEvent texture_drag_press(
+        QEvent::MouseButtonPress, QPointF(280.0, 210.0), QPointF(280.0, 210.0),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent texture_drag_move(
+        QEvent::MouseMove, QPointF(330.0, 235.0), QPointF(330.0, 235.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &texture_drag_press);
+    QApplication::sendEvent(&point_cloud_view, &texture_drag_move);
+    point_cloud_view.grab();
+    const int interactive_texture_vertices = point_cloud_view.renderedPointCount();
+    QMouseEvent texture_drag_release(
+        QEvent::MouseButtonRelease, QPointF(330.0, 235.0), QPointF(330.0, 235.0),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &texture_drag_release);
+    if (full_texture_vertices < 150000 || interactive_texture_vertices >= full_texture_vertices ||
+        interactive_texture_vertices > 50000) {
+        return fail("GPU texture mesh did not preserve static detail or reduce interaction cost.");
+    }
+
     point_cloud_view.setCloud(point_cloud);
     point_cloud_view.grab();
 
@@ -344,6 +377,7 @@ int main(int argc, char* argv[])
         QStringLiteral("PointCloudColorCombo"),
         QStringLiteral("PointCloudViewPresetCombo"),
         QStringLiteral("PointCloudTextureStatus"),
+        QStringLiteral("PointCloudTextureEnhancementCheck"),
         QStringLiteral("PointCloudVoxelApplyButton"),
         QStringLiteral("PointCloudOutlierApplyButton"),
         QStringLiteral("PointCloudBeginInteractiveCropButton"),
@@ -374,6 +408,16 @@ int main(int argc, char* argv[])
             return fail("3D point-cloud workbench is missing a required control.");
         }
     }
+    auto* texture_enhancement = point_cloud_dialog.findChild<QCheckBox*>(
+        QStringLiteral("PointCloudTextureEnhancementCheck"));
+    if (!texture_enhancement || !texture_enhancement->isEnabled()) {
+        return fail("H3D texture enhancement control is not available for textured data.");
+    }
+    texture_enhancement->setChecked(false);
+    if (point_cloud_dialog.cloudWidget()->textureEnhancementEnabled()) {
+        return fail("H3D raw-texture mode did not disable texture enhancement.");
+    }
+    texture_enhancement->setChecked(true);
     auto* fit_plane_button = point_cloud_dialog.findChild<QPushButton*>(
         QStringLiteral("PointCloudFitPlaneButton"));
     auto* show_plane_check = point_cloud_dialog.findChild<QCheckBox*>(

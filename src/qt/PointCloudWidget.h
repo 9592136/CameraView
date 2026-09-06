@@ -13,6 +13,12 @@
 #include <QTimer>
 #include <QVector>
 
+#include <memory>
+
+class QOpenGLBuffer;
+class QOpenGLShaderProgram;
+class QOpenGLTexture;
+
 enum class PointCloudColorMode {
     Texture,
     Original,
@@ -32,12 +38,14 @@ class PointCloudWidget final : public QOpenGLWidget {
 
 public:
     explicit PointCloudWidget(QWidget* parent = nullptr);
+    ~PointCloudWidget() override;
 
     void setCloud(const PointCloud& cloud, bool resetView = true);
     const PointCloud& cloud() const { return cloud_; }
     bool hasCloud() const { return !cloud_.Empty(); }
     void setColorMode(PointCloudColorMode mode);
     void setPointSize(double size);
+    void setTextureEnhancementEnabled(bool enabled);
     void setAxesVisible(bool visible);
     void setFittedPlane(const PointCloudPlane& plane);
     void setFittedPlaneVisible(bool visible);
@@ -55,6 +63,7 @@ public:
 
     PointCloudColorMode colorMode() const { return color_mode_; }
     double pointSize() const { return point_size_; }
+    bool textureEnhancementEnabled() const { return texture_enhancement_enabled_; }
     bool axesVisible() const { return axes_visible_; }
     const PointCloudPlane& fittedPlane() const { return fitted_plane_; }
     bool fittedPlaneVisible() const { return fitted_plane_visible_; }
@@ -122,6 +131,10 @@ private:
     ProjectedPoint projectPointValue(const PointCloudPoint& point, int index = -1) const;
     QColor pointColor(const PointCloudPoint& point, int index) const;
     void rebuildRenderCache();
+    bool initializeTextureRenderer();
+    bool rebuildTextureSurface();
+    bool drawTextureSurface(QPainter& painter);
+    void releaseTextureRenderer();
     void drawGeometricModels(QPainter& painter) const;
     void invalidateProjectionCache();
     void discardProjectionCaches();
@@ -146,6 +159,7 @@ private:
     QVector<int> selection_preview_indices_;
     PointCloudColorMode color_mode_ = PointCloudColorMode::Height;
     double point_size_ = 2.5;
+    bool texture_enhancement_enabled_ = true;
     double yaw_degrees_ = -38.0;
     double pitch_degrees_ = 26.0;
     double view_scale_ = 1.0;
@@ -180,4 +194,13 @@ private:
     bool reported_interactive_rendering_ = false;
     QString render_backend_ = QStringLiteral("OpenGL 正在初始化…");
     bool hardware_accelerated_ = false;
+    std::unique_ptr<QOpenGLShaderProgram> texture_program_;
+    std::unique_ptr<QOpenGLBuffer> texture_vertex_buffer_;
+    std::unique_ptr<QOpenGLBuffer> texture_index_buffer_;
+    std::unique_ptr<QOpenGLTexture> texture_image_;
+    bool texture_renderer_ready_ = false;
+    bool texture_data_dirty_ = true;
+    bool texture_mesh_dirty_ = true;
+    int texture_vertex_count_ = 0;
+    int texture_index_count_ = 0;
 };

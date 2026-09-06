@@ -2,14 +2,19 @@
 
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QImage>
+#include <QOpenGLBuffer>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
+#include <QOpenGLShaderProgram>
+#include <QOpenGLTexture>
 #include <QPainter>
 #include <QPainterPath>
 #include <QWheelEvent>
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
 #include <limits>
 
@@ -18,6 +23,14 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kRenderPointBudget = 120000;
 constexpr int kInteractivePointBudget = 32000;
+
+struct TextureVertex {
+    float x = 0.0F;
+    float y = 0.0F;
+    float z = 0.0F;
+    float u = 0.0F;
+    float v = 0.0F;
+};
 
 double wrapDegrees(double degrees)
 {
@@ -42,6 +55,15 @@ PointCloudWidget::PointCloudWidget(QWidget* parent) : QOpenGLWidget(parent)
     });
 }
 
+PointCloudWidget::~PointCloudWidget()
+{
+    if (context()) {
+        makeCurrent();
+        releaseTextureRenderer();
+        doneCurrent();
+    }
+}
+
 void PointCloudWidget::initializeGL()
 {
     QOpenGLFunctions* functions = context() ? context()->functions() : nullptr;
@@ -57,7 +79,72 @@ void PointCloudWidget::initializeGL()
         !lowered.contains(QStringLiteral("swiftshader")) &&
         !lowered.contains(QStringLiteral("gdi generic")) &&
         !lowered.contains(QStringLiteral("microsoft basic render"));
+    texture_renderer_ready_ = initializeTextureRenderer();
     emit renderBackendChanged(render_backend_, hardware_accelerated_);
+}
+
+bool PointCloudWidget::initializeTextureRenderer()
+{
+    texture_program_ = std::make_unique<QOpenGLShaderProgram>();
+    static constexpr char vertex_shader[] = R"(
+        attribute highp vec3 aPosition;
+        attribute highp vec2 aTexCoord;
+        varying highp vec2 vTexCoord;
+        void main()
+        {
+            gl_Position = vec4(aPosition, 1.0);
+            vTexCoord = aTexCoord;
+        }
+    )";
+    static constexpr char fragment_shader[] = R"(
+        #ifdef GL_ES
+        precision mediump float;
+        #endif
+        uniform sampler2D uTexture;
+        uniform lowp float uTextureEnhancement;
+        varying highp vec2 vTexCoord;
+        void main()
+        {
+            lowp vec4 sampled = texture2D(uTexture, vTexCoord);
+            if (uTextureEnhancement > 0.5) {
+                sampled.rgb = pow(sampled.rgb, vec3(0.78));
+                sampled.rgb = clamp((sampled.rgb - vec3(0.5)) * 1.08 + vec3(0.5), 0.0, 1.0);
+            }
+            gl_FragColor = sampled;
+        }
+    )";
+    if (!texture_program_->addShaderFromSourceCode(QOpenGLShader::Vertex, vertex_shader) ||
+        !texture_program_->addShaderFromSourceCode(QOpenGLShader::Fragment, fragment_shader) ||
+        !texture_program_->link()) {
+        texture_program_.reset();
+        return false;
+    }
+    texture_vertex_buffer_ = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
+    texture_index_buffer_ = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::IndexBuffer);
+    if (!texture_vertex_buffer_->create() || !texture_index_buffer_->create()) {
+        releaseTextureRenderer();
+        return false;
+    }
+    texture_data_dirty_ = true;
+    texture_mesh_dirty_ = true;
+    return true;
+}
+
+void PointCloudWidget::releaseTextureRenderer()
+{
+    texture_image_.reset();
+    if (texture_vertex_buffer_ && texture_vertex_buffer_->isCreated()) {
+        texture_vertex_buffer_->destroy();
+    }
+    if (texture_index_buffer_ && texture_index_buffer_->isCreated()) {
+        texture_index_buffer_->destroy();
+    }
+    texture_vertex_buffer_.reset();
+    texture_index_buffer_.reset();
+    texture_program_.reset();
+    texture_renderer_ready_ = false;
+    texture_vertex_count_ = 0;
+    texture_index_count_ = 0;
 }
 
 void PointCloudWidget::setCloud(const PointCloud& cloud, bool reset_view)
@@ -68,6 +155,8 @@ void PointCloudWidget::setCloud(const PointCloud& cloud, bool reset_view)
     if (!cloud_.Empty() && !cloud_.bounds.valid) cloud_.RecalculateBounds();
     highlighted_indices_.clear();
     selection_preview_indices_.clear();
+    texture_data_dirty_ = true;
+    texture_mesh_dirty_ = true;
     discardProjectionCaches();
     if (reset_view) resetView(); else update();
 }
@@ -83,6 +172,12 @@ void PointCloudWidget::setPointSize(double size)
 {
     point_size_ = std::clamp(size, 1.0, 12.0);
     invalidateRenderProjection();
+    update();
+}
+
+void PointCloudWidget::setTextureEnhancementEnabled(bool enabled)
+{
+    texture_enhancement_enabled_ = enabled;
     update();
 }
 
@@ -273,6 +368,7 @@ void PointCloudWidget::discardProjectionCaches()
 void PointCloudWidget::invalidateRenderProjection()
 {
     render_projection_valid_ = false;
+    texture_mesh_dirty_ = true;
 }
 
 int PointCloudWidget::currentRenderBudget() const
@@ -412,6 +508,159 @@ QColor PointCloudWidget::pointColor(const PointCloudPoint& point, int index) con
     return QColor::fromHsvF((1.0 - normalized) * 0.68, 0.86, 0.98);
 }
 
+bool PointCloudWidget::rebuildTextureSurface()
+{
+    if (!texture_renderer_ready_ || !cloud_.HasTextureSurface() ||
+        !texture_program_ || !texture_vertex_buffer_ || !texture_index_buffer_) {
+        return false;
+    }
+    const std::size_t grid_width = cloud_.organized_width;
+    const std::size_t grid_height = cloud_.organized_height;
+    if (texture_data_dirty_) {
+        QImage image(static_cast<int>(grid_width), static_cast<int>(grid_height), QImage::Format_RGB888);
+        if (image.isNull()) return false;
+        for (std::size_t row = 0; row < grid_height; ++row) {
+            unsigned char* destination = image.scanLine(static_cast<int>(row));
+            for (std::size_t column = 0; column < grid_width; ++column) {
+                const PointCloudPoint& point = cloud_.points[row * grid_width + column];
+                destination[column * 3U] = point.r;
+                destination[column * 3U + 1U] = point.g;
+                destination[column * 3U + 2U] = point.b;
+            }
+        }
+        texture_image_.reset();
+        texture_image_ = std::make_unique<QOpenGLTexture>(
+            image, QOpenGLTexture::GenerateMipMaps);
+        if (!texture_image_->isCreated()) {
+            texture_image_.reset();
+            return false;
+        }
+        texture_image_->setMinificationFilter(QOpenGLTexture::LinearMipMapLinear);
+        texture_image_->setMagnificationFilter(QOpenGLTexture::Linear);
+        texture_image_->setMaximumAnisotropy(8.0F);
+        texture_image_->setWrapMode(QOpenGLTexture::ClampToEdge);
+        texture_data_dirty_ = false;
+    }
+    if (!texture_mesh_dirty_) return texture_index_count_ > 0;
+
+    const std::size_t vertex_budget = interactive_rendering_ ? 90000U : 720000U;
+    const double ratio = cloud_.points.size() / static_cast<double>(vertex_budget);
+    const std::size_t grid_stride = std::max<std::size_t>(1,
+        static_cast<std::size_t>(std::ceil(std::sqrt(ratio))));
+    std::vector<std::size_t> columns;
+    std::vector<std::size_t> rows;
+    for (std::size_t column = 0; column < grid_width; column += grid_stride) {
+        columns.push_back(column);
+    }
+    if (columns.empty() || columns.back() != grid_width - 1) columns.push_back(grid_width - 1);
+    for (std::size_t row = 0; row < grid_height; row += grid_stride) rows.push_back(row);
+    if (rows.empty() || rows.back() != grid_height - 1) rows.push_back(grid_height - 1);
+    if (columns.size() < 2 || rows.size() < 2) return false;
+
+    std::vector<TextureVertex> vertices;
+    vertices.reserve(columns.size() * rows.size());
+    double minimum_depth = std::numeric_limits<double>::max();
+    double maximum_depth = std::numeric_limits<double>::lowest();
+    for (std::size_t row : rows) {
+        for (std::size_t column : columns) {
+            const ProjectedPoint projected = projectPoint(
+                static_cast<int>(row * grid_width + column));
+            TextureVertex vertex;
+            vertex.x = static_cast<float>(projected.position.x() * 2.0 / width() - 1.0);
+            vertex.y = static_cast<float>(1.0 - projected.position.y() * 2.0 / height());
+            vertex.z = static_cast<float>(projected.depth);
+            vertex.u = static_cast<float>(column / static_cast<double>(grid_width - 1));
+            vertex.v = static_cast<float>(row / static_cast<double>(grid_height - 1));
+            vertices.push_back(vertex);
+            minimum_depth = std::min(minimum_depth, projected.depth);
+            maximum_depth = std::max(maximum_depth, projected.depth);
+        }
+    }
+    const double depth_range = std::max(maximum_depth - minimum_depth, 1e-9);
+    for (TextureVertex& vertex : vertices) {
+        vertex.z = static_cast<float>(-0.95 +
+            (static_cast<double>(vertex.z) - minimum_depth) / depth_range * 1.9);
+    }
+    std::vector<std::uint32_t> indices;
+    const std::size_t column_count = columns.size();
+    indices.reserve((rows.size() - 1) * (column_count - 1) * 6U);
+    for (std::size_t row = 0; row + 1 < rows.size(); ++row) {
+        for (std::size_t column = 0; column + 1 < column_count; ++column) {
+            const std::uint32_t top_left = static_cast<std::uint32_t>(
+                row * column_count + column);
+            const std::uint32_t top_right = top_left + 1U;
+            const std::uint32_t bottom_left = static_cast<std::uint32_t>(
+                (row + 1U) * column_count + column);
+            const std::uint32_t bottom_right = bottom_left + 1U;
+            indices.insert(indices.end(), {
+                top_left, bottom_left, top_right,
+                top_right, bottom_left, bottom_right});
+        }
+    }
+    if (vertices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        indices.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    texture_vertex_buffer_->bind();
+    texture_vertex_buffer_->allocate(vertices.data(),
+        static_cast<int>(vertices.size() * sizeof(TextureVertex)));
+    texture_vertex_buffer_->release();
+    texture_index_buffer_->bind();
+    texture_index_buffer_->allocate(indices.data(),
+        static_cast<int>(indices.size() * sizeof(std::uint32_t)));
+    texture_index_buffer_->release();
+    texture_vertex_count_ = static_cast<int>(vertices.size());
+    texture_index_count_ = static_cast<int>(indices.size());
+    texture_mesh_dirty_ = false;
+    return texture_index_count_ > 0;
+}
+
+bool PointCloudWidget::drawTextureSurface(QPainter& painter)
+{
+    if (color_mode_ != PointCloudColorMode::Texture || residual_coloring_enabled_ ||
+        !cloud_.HasTextureSurface() || !texture_renderer_ready_) {
+        return false;
+    }
+    painter.beginNativePainting();
+    if (!rebuildTextureSurface()) {
+        painter.endNativePainting();
+        return false;
+    }
+    QOpenGLFunctions* functions = context() ? context()->functions() : nullptr;
+    if (!functions || !texture_program_->bind() || !texture_vertex_buffer_->bind() ||
+        !texture_index_buffer_->bind()) {
+        painter.endNativePainting();
+        return false;
+    }
+    functions->glEnable(GL_DEPTH_TEST);
+    functions->glDepthMask(GL_TRUE);
+    functions->glDisable(GL_CULL_FACE);
+    functions->glClear(GL_DEPTH_BUFFER_BIT);
+    texture_image_->bind(0);
+    texture_program_->setUniformValue("uTexture", 0);
+    texture_program_->setUniformValue("uTextureEnhancement",
+        texture_enhancement_enabled_ ? 1.0F : 0.0F);
+    const int position = texture_program_->attributeLocation("aPosition");
+    const int texture_coordinate = texture_program_->attributeLocation("aTexCoord");
+    texture_program_->enableAttributeArray(position);
+    texture_program_->setAttributeBuffer(position, GL_FLOAT,
+        static_cast<int>(offsetof(TextureVertex, x)), 3, sizeof(TextureVertex));
+    texture_program_->enableAttributeArray(texture_coordinate);
+    texture_program_->setAttributeBuffer(texture_coordinate, GL_FLOAT,
+        static_cast<int>(offsetof(TextureVertex, u)), 2, sizeof(TextureVertex));
+    functions->glDrawElements(
+        GL_TRIANGLES, texture_index_count_, GL_UNSIGNED_INT, nullptr);
+    texture_program_->disableAttributeArray(position);
+    texture_program_->disableAttributeArray(texture_coordinate);
+    texture_image_->release();
+    texture_index_buffer_->release();
+    texture_vertex_buffer_->release();
+    texture_program_->release();
+    functions->glDisable(GL_DEPTH_TEST);
+    painter.endNativePainting();
+    return true;
+}
+
 void PointCloudWidget::rebuildRenderCache()
 {
     projected_points_.clear();
@@ -425,7 +674,8 @@ void PointCloudWidget::rebuildRenderCache()
         projected_points_.push_back(projectPoint(index));
     }
 
-    if (color_mode_ == PointCloudColorMode::Texture && cloud_.HasTextureSurface()) {
+    if (color_mode_ == PointCloudColorMode::Texture && cloud_.HasTextureSurface() &&
+        (!texture_renderer_ready_ || residual_coloring_enabled_)) {
         const std::size_t width = cloud_.organized_width;
         const std::size_t height = cloud_.organized_height;
         const int patch_budget = interactive_rendering_ ? 14000 : 56000;
@@ -572,20 +822,22 @@ void PointCloudWidget::paintGL()
     }
 
     if (!render_projection_valid_) rebuildRenderCache();
+    const bool gpu_texture_surface = drawTextureSurface(painter);
     painter.setPen(Qt::NoPen);
-    if (!surface_patches_.isEmpty()) {
+    if (!gpu_texture_surface && !surface_patches_.isEmpty()) {
         for (const SurfacePatch& patch : surface_patches_) {
             painter.setBrush(patch.color);
             painter.drawPolygon(patch.polygon);
         }
-    } else {
+    } else if (!gpu_texture_surface) {
         for (const ProjectedPoint& projected : projected_points_) {
             painter.setBrush(pointColor(
                 cloud_.points[static_cast<std::size_t>(projected.index)], projected.index));
             painter.drawEllipse(projected.position, point_size_, point_size_);
         }
     }
-    rendered_point_count_ = projected_points_.size();
+    rendered_point_count_ = gpu_texture_surface
+        ? texture_vertex_count_ : projected_points_.size();
     if (reported_rendered_point_count_ != rendered_point_count_ ||
         reported_interactive_rendering_ != interactive_rendering_) {
         reported_rendered_point_count_ = rendered_point_count_;

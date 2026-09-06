@@ -210,6 +210,11 @@ void PointCloudDialog::buildUi()
     color_combo_->addItem(tr("原始颜色"), static_cast<int>(PointCloudColorMode::Original));
     color_combo_->addItem(tr("统一颜色"), static_cast<int>(PointCloudColorMode::Solid));
     color_combo_->addItem(tr("H3D 纹理表面"), static_cast<int>(PointCloudColorMode::Texture));
+    texture_enhance_check_ = new QCheckBox(tr("增强纹理细节"));
+    texture_enhance_check_->setObjectName(QStringLiteral("PointCloudTextureEnhancementCheck"));
+    texture_enhance_check_->setChecked(true);
+    texture_enhance_check_->setToolTip(
+        tr("提升偏暗灰度纹理的中间调与局部对比度；关闭后显示文件原始纹理"));
     point_size_spin_ = new QDoubleSpinBox;
     point_size_spin_->setObjectName(QStringLiteral("PointCloudPointSize"));
     point_size_spin_->setRange(1.0, 12.0);
@@ -223,6 +228,7 @@ void PointCloudDialog::buildUi()
     backend_label_->setWordWrap(true);
     display_form->addRow(tr("坐标单位"), unit_combo_);
     display_form->addRow(tr("渲染"), color_combo_);
+    display_form->addRow({}, texture_enhance_check_);
     display_form->addRow(tr("点大小"), point_size_spin_);
     display_form->addRow({}, axes_check_);
     display_form->addRow(tr("渲染后端"), backend_label_);
@@ -612,9 +618,13 @@ void PointCloudDialog::buildUi()
         refreshMeasurementList();
     });
     connect(color_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
-        cloud_widget_->setColorMode(static_cast<PointCloudColorMode>(
-            color_combo_->currentData().toInt()));
+        const auto mode = static_cast<PointCloudColorMode>(color_combo_->currentData().toInt());
+        cloud_widget_->setColorMode(mode);
+        texture_enhance_check_->setEnabled(
+            current_cloud_.HasTextureSurface() && mode == PointCloudColorMode::Texture);
     });
+    connect(texture_enhance_check_, &QCheckBox::toggled,
+        cloud_widget_, &PointCloudWidget::setTextureEnhancementEnabled);
     connect(point_size_spin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
         cloud_widget_, &PointCloudWidget::setPointSize);
     connect(axes_check_, &QCheckBox::toggled, cloud_widget_, &PointCloudWidget::setAxesVisible);
@@ -869,6 +879,8 @@ void PointCloudDialog::updateCloudPresentation(const QString& operation, bool re
         texture_status_label_->setText(tr("等待载入数据"));
         texture_status_label_->setProperty("status", QStringLiteral("neutral"));
     }
+    texture_enhance_check_->setEnabled(current_cloud_.HasTextureSurface() &&
+        color_combo_->currentData().toInt() == static_cast<int>(PointCloudColorMode::Texture));
     texture_status_label_->style()->unpolish(texture_status_label_);
     texture_status_label_->style()->polish(texture_status_label_);
     if (current_cloud_.Empty()) {
@@ -1777,6 +1789,8 @@ void PointCloudDialog::loadSettings()
         color_combo_->setCurrentIndex(color_index);
     }
     if (axes_check_) axes_check_->setChecked(settings.value(QStringLiteral("axes"), true).toBool());
+    if (texture_enhance_check_) texture_enhance_check_->setChecked(
+        settings.value(QStringLiteral("textureEnhancement"), true).toBool());
     if (view_preset_combo_) {
         view_preset_combo_->setCurrentIndex(std::clamp(
             settings.value(QStringLiteral("viewPreset"), 0).toInt(),
@@ -1796,6 +1810,8 @@ void PointCloudDialog::saveSettings() const
     if (point_size_spin_) settings.setValue(QStringLiteral("pointSize"), point_size_spin_->value());
     if (color_combo_) settings.setValue(QStringLiteral("colorMode"), color_combo_->currentIndex());
     if (axes_check_) settings.setValue(QStringLiteral("axes"), axes_check_->isChecked());
+    if (texture_enhance_check_) settings.setValue(
+        QStringLiteral("textureEnhancement"), texture_enhance_check_->isChecked());
     if (view_preset_combo_) settings.setValue(QStringLiteral("viewPreset"), view_preset_combo_->currentIndex());
     if (cylinder_axis_combo_) settings.setValue(QStringLiteral("cylinderAxis"), cylinder_axis_combo_->currentIndex());
     if (fit_threshold_spin_) settings.setValue(QStringLiteral("fitThreshold"), fit_threshold_spin_->value());

@@ -164,6 +164,7 @@ private:
     QDoubleSpinBox* maximum_radius_spin_ = nullptr;
     QCheckBox* residual_coloring_check_ = nullptr;
     QCheckBox* axes_check_ = nullptr;
+    QCheckBox* texture_enhance_check_ = nullptr;
 
     PointCloud original_cloud_;
     PointCloud current_cloud_;
