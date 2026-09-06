@@ -1,4 +1,5 @@
 #include "YoloWorkspaceWidget.h"
+#include "../NumericSlider.h"
 
 #include <QCoreApplication>
 #include <QDesktopServices>
@@ -26,7 +27,6 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QComboBox>
-#include <QDoubleSpinBox>
 
 #include <algorithm>
 
@@ -153,14 +153,18 @@ void YoloWorkspaceWidget::buildUi()
 
     auto* options_group = new QGroupBox(tr("推理"));
     auto* options_layout = new QFormLayout(options_group);
-    confidence_spin_ = new QDoubleSpinBox;
-    confidence_spin_->setRange(0.01, 1.0);
-    confidence_spin_->setSingleStep(0.05);
-    confidence_spin_->setValue(0.25);
-    iou_spin_ = new QDoubleSpinBox;
-    iou_spin_->setRange(0.01, 1.0);
-    iou_spin_->setSingleStep(0.05);
-    iou_spin_->setValue(0.45);
+    confidence_slider_ = new NumericSlider;
+    confidence_slider_->setObjectName(QStringLiteral("YoloConfidenceSlider"));
+    confidence_slider_->setRange(0.01, 1.0);
+    confidence_slider_->setSingleStep(0.01);
+    confidence_slider_->setDecimals(2);
+    confidence_slider_->setValue(0.25);
+    iou_slider_ = new NumericSlider;
+    iou_slider_->setObjectName(QStringLiteral("YoloIouSlider"));
+    iou_slider_->setRange(0.01, 1.0);
+    iou_slider_->setSingleStep(0.01);
+    iou_slider_->setDecimals(2);
+    iou_slider_->setValue(0.45);
     image_size_spin_ = new QSpinBox;
     image_size_spin_->setRange(160, 2048);
     image_size_spin_->setSingleStep(32);
@@ -169,8 +173,8 @@ void YoloWorkspaceWidget::buildUi()
     max_detections_spin_->setRange(1, 3000);
     max_detections_spin_->setValue(300);
     device_edit_ = new QLineEdit(QStringLiteral("cpu"));
-    options_layout->addRow(tr("置信度"), confidence_spin_);
-    options_layout->addRow(tr("IOU"), iou_spin_);
+    options_layout->addRow(tr("置信度"), confidence_slider_);
+    options_layout->addRow(tr("IOU"), iou_slider_);
     options_layout->addRow(tr("输入尺寸"), image_size_spin_);
     options_layout->addRow(tr("最大结果数"), max_detections_spin_);
     options_layout->addRow(tr("设备"), device_edit_);
@@ -1050,8 +1054,8 @@ void YoloWorkspaceWidget::runInference()
     registry_.setActive(model->id);
     result_list_->clear();
     YoloInferenceOptions options;
-    options.confidence = confidence_spin_->value();
-    options.iou = iou_spin_->value();
+    options.confidence = confidence_slider_->value();
+    options.iou = iou_slider_->value();
     options.imageSize = image_size_spin_->value();
     options.maxDetections = max_detections_spin_->value();
     options.device = device_edit_->text().trimmed();

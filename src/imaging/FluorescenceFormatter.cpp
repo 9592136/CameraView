@@ -22,6 +22,9 @@ std::wstring FluorescenceFormatter::FormatChannelLine(const FluorescenceChannel&
     return (channel.visible ? L"[on] " : L"[off] ") +
            channel.name + L"  " +
            FormatFrameSize(channel.frame) +
+           (channel.exposure_ms > 0.0
+               ? L"  " + FormatDouble(channel.exposure_ms, 2) + L" ms"
+               : L"") +
            L"  " + std::to_wstring(channel.black_level) +
            L"-" + std::to_wstring(channel.white_level);
 }

@@ -69,10 +69,14 @@ ProjectDocument ProjectSessionMapper::ToDocument(
     document.polyline_measurements = measurements.Polylines();
     document.circle_measurements = measurements.Circles();
     document.ellipse_measurements = measurements.Ellipses();
+    document.measurement_styles = measurements.Styles();
     document.dye_profiles = dye_profiles;
     document.processing_settings.edf_focus_radius = edf_options.focus_radius;
     document.processing_settings.stitch_search_percent = stitch_search_percent;
     document.processing_settings.stitch_use_orb_registration = stitch_use_orb_registration;
+    document.processing_settings.stitch_overlap_percent =
+        ProcessingParameterRules::OverlapPercentFromSearch(stitch_search_percent);
+    document.processing_settings.stitch_registration_method = stitch_use_orb_registration ? 4 : 0;
 
     const bool has_objective_calibrations = !objective_calibrations.empty();
     document.objective_calibrations.reserve(objectives.size());
@@ -155,6 +159,7 @@ ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
         std::move(document.polyline_measurements),
         std::move(document.circle_measurements),
         std::move(document.ellipse_measurements));
+    state.measurements.SetStyles(std::move(document.measurement_styles));
     state.dye_profiles = document.dye_profiles.empty()
         ? DyeLibrary::DefaultDyes()
         : std::move(document.dye_profiles);
@@ -163,6 +168,18 @@ ProjectSessionState ProjectSessionMapper::FromDocument(ProjectDocument document)
     state.stitch_search_percent =
         ProcessingParameterRules::ClampStitchSearchPercent(document.processing_settings.stitch_search_percent);
     state.stitch_use_orb_registration = document.processing_settings.stitch_use_orb_registration;
+    state.stitch_overlap_percent =
+        ProcessingParameterRules::ClampStitchOverlapPercent(
+            document.processing_settings.stitch_overlap_percent);
+    state.stitch_layout_mode = std::clamp(document.processing_settings.stitch_layout_mode, 0, 1);
+    state.stitch_grid_rows = std::clamp(document.processing_settings.stitch_grid_rows, 1, 50);
+    state.stitch_grid_cols = std::clamp(document.processing_settings.stitch_grid_cols, 1, 50);
+    state.stitch_registration_method = std::clamp(document.processing_settings.stitch_registration_method, 0, 4);
+    state.stitch_transform_model = std::clamp(document.processing_settings.stitch_transform_model, 0, 2);
+    state.stitch_blend_mode = std::clamp(document.processing_settings.stitch_blend_mode, 0, 1);
+    state.live_stitch_interval_ms = std::clamp(document.processing_settings.live_stitch_interval_ms, 250, 10000);
+    state.fluorescence_blend_mode = std::clamp(
+        document.processing_settings.fluorescence_blend_mode, 0, 2);
     state.restored_channel_settings = !document.fluorescence_channels.empty();
 
     state.fluorescence_channels.reserve(document.fluorescence_channels.size());
@@ -178,6 +195,7 @@ FluorescenceChannelRecipe ProjectSessionMapper::ToRecipe(const FluorescenceChann
     FluorescenceChannelRecipe recipe;
     recipe.name = channel.name;
     recipe.color = channel.color;
+    recipe.exposure_ms = channel.exposure_ms;
     recipe.visible = channel.visible;
     recipe.black_level = channel.black_level;
     recipe.white_level = channel.white_level;
@@ -189,6 +207,7 @@ FluorescenceChannel ProjectSessionMapper::ToChannel(const FluorescenceChannelRec
     FluorescenceChannel channel;
     channel.name = recipe.name;
     channel.color = recipe.color;
+    channel.exposure_ms = recipe.exposure_ms;
     channel.visible = recipe.visible;
     channel.black_level = recipe.black_level;
     channel.white_level = recipe.white_level;

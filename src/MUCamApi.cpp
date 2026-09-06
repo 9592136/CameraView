@@ -101,12 +101,19 @@ void MUCamApi::Unload()
     get_binning_count_ = nullptr;
     get_binning_list_ = nullptr;
     set_binning_index_ = nullptr;
+    set_roi_ = nullptr;
+    set_flip_ = nullptr;
+    set_mirror_ = nullptr;
     set_trigger_type_ = nullptr;
     get_exposure_range_ = nullptr;
     set_exposure_ = nullptr;
     auto_exposure_once_ = nullptr;
     set_auto_exposure_ = nullptr;
     set_rgb_gain_value_ = nullptr;
+    get_gain_count_ = nullptr;
+    get_gain_list_ = nullptr;
+    get_offset_range_ = nullptr;
+    set_rgb_offset_ = nullptr;
     calc_white_balance_ = nullptr;
     set_white_balance_ = nullptr;
     get_bayer_format_ = nullptr;
@@ -163,6 +170,22 @@ bool MUCamApi::SetBinningIndex(Handle camera, int index) const
     return set_binning_index_ && camera && set_binning_index_(camera, index);
 }
 
+bool MUCamApi::SetRoi(Handle camera, int* top, int* left, int* bottom, int* right) const
+{
+    return set_roi_ && camera && top && left && bottom && right &&
+           set_roi_(camera, top, left, bottom, right);
+}
+
+bool MUCamApi::SetFlip(Handle camera, bool enabled) const
+{
+    return set_flip_ && camera && set_flip_(camera, enabled);
+}
+
+bool MUCamApi::SetMirror(Handle camera, bool enabled) const
+{
+    return set_mirror_ && camera && set_mirror_(camera, enabled);
+}
+
 bool MUCamApi::SetTriggerType(Handle camera, int trigger_type) const
 {
     return set_trigger_type_ && camera && set_trigger_type_(camera, trigger_type);
@@ -198,6 +221,27 @@ bool MUCamApi::ApplyAutoExposure(Handle camera) const
 bool MUCamApi::SetRgbGainValue(Handle camera, float r, float g, float b, int* ri, int* gi, int* bi) const
 {
     return set_rgb_gain_value_ && camera && set_rgb_gain_value_(camera, r, g, b, ri, gi, bi);
+}
+
+int MUCamApi::GetGainCount(Handle camera) const
+{
+    return get_gain_count_ && camera ? get_gain_count_(camera) : 0;
+}
+
+bool MUCamApi::GetGainList(Handle camera, float* values) const
+{
+    return get_gain_list_ && camera && values && get_gain_list_(camera, values);
+}
+
+bool MUCamApi::GetOffsetRange(Handle camera, int* minimum, int* maximum) const
+{
+    return get_offset_range_ && camera && minimum && maximum &&
+           get_offset_range_(camera, minimum, maximum);
+}
+
+bool MUCamApi::SetRgbOffset(Handle camera, int red, int green, int blue) const
+{
+    return set_rgb_offset_ && camera && set_rgb_offset_(camera, red, green, blue);
 }
 
 bool MUCamApi::ApplyWhiteBalance(Handle camera) const
@@ -241,6 +285,9 @@ bool MUCamApi::ResolveRequired()
     get_binning_count_ = reinterpret_cast<GetBinningCountFn>(ResolveAny("MUCamEx_getBinningCount", "MUCam_getBinningCount", true));
     get_binning_list_ = reinterpret_cast<GetBinningListFn>(ResolveAny("MUCamEx_getBinningList", "MUCam_getBinningList", true));
     set_binning_index_ = reinterpret_cast<SetBinningIndexFn>(ResolveAny("MUCamEx_setBinningIndex", "MUCam_setBinningIndex", true));
+    set_roi_ = reinterpret_cast<SetRoiFn>(ResolveAny("MUCamEx_setROI", "MUCam_setROI", false));
+    set_flip_ = reinterpret_cast<SetBooleanFn>(ResolveAny("MUCamEx_setFlip", "MUCam_setFlip", false));
+    set_mirror_ = reinterpret_cast<SetBooleanFn>(ResolveAny("MUCamEx_setMirror", "MUCam_setMirror", false));
 
     set_trigger_type_ = reinterpret_cast<SetTriggerTypeFn>(ResolveAny("MUCamEx_setTriggerType", "MUCam_setTriggerType", false));
     get_exposure_range_ = reinterpret_cast<GetExposureRangeFn>(ResolveAny("MUCamEx_getExposureRange", "MUCam_getExposureRange", false));
@@ -248,6 +295,10 @@ bool MUCamApi::ResolveRequired()
     auto_exposure_once_ = reinterpret_cast<AutoExposureOnceFn>(ResolveProc("MUCamEx_AutoExposureOnce", false));
     set_auto_exposure_ = reinterpret_cast<SetAutoExposureFn>(ResolveProc("MUCam_setAutoExposure", false));
     set_rgb_gain_value_ = reinterpret_cast<SetRgbGainValueFn>(ResolveAny("MUCamEx_setRGBGainValue", "MUCam_setRGBGainValue", false));
+    get_gain_count_ = reinterpret_cast<GetGainCountFn>(ResolveAny("MUCamEx_getGainCount", "MUCam_getGainCount", false));
+    get_gain_list_ = reinterpret_cast<GetGainListFn>(ResolveAny("MUCamEx_getGainList", "MUCam_getGainList", false));
+    get_offset_range_ = reinterpret_cast<GetOffsetRangeFn>(ResolveAny("MUCamEx_getOffsetRange", "MUCam_getOffsetRange", false));
+    set_rgb_offset_ = reinterpret_cast<SetRgbOffsetFn>(ResolveAny("MUCamEx_setRGBOffset", "MUCam_setRGBOffset", false));
     calc_white_balance_ = reinterpret_cast<CalcWhiteBalanceFn>(ResolveProc("MUCamEx_CalcWhiteBalance", false));
     set_white_balance_ = reinterpret_cast<SetWhiteBalanceFn>(ResolveProc("MUCam_setWhiteBalance", false));
     get_bayer_format_ = reinterpret_cast<GetBayerFormatFn>(ResolveAny("MUCamEx_getBayerFormat", "MUCam_getBayerFormat", false));

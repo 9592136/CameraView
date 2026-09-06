@@ -11,7 +11,6 @@
 
 class QCheckBox;
 class QComboBox;
-class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -20,6 +19,7 @@ class QProgressBar;
 class QPushButton;
 class QSpinBox;
 class QTabWidget;
+class NumericSlider;
 
 class YoloWorkspaceWidget final : public QWidget {
     Q_OBJECT
@@ -103,8 +103,8 @@ private:
     QComboBox* model_combo_ = nullptr;
     QComboBox* task_combo_ = nullptr;
     QLabel* model_info_ = nullptr;
-    QDoubleSpinBox* confidence_spin_ = nullptr;
-    QDoubleSpinBox* iou_spin_ = nullptr;
+    NumericSlider* confidence_slider_ = nullptr;
+    NumericSlider* iou_slider_ = nullptr;
     QSpinBox* image_size_spin_ = nullptr;
     QSpinBox* max_detections_spin_ = nullptr;
     QLineEdit* device_edit_ = nullptr;

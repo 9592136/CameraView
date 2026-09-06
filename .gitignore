@@ -14,6 +14,7 @@
 *.tlog
 *.lastbuildstate
 *.log
+/CameraView-*.png
 
 # CMake generated files
 CMakeFiles/
@@ -59,3 +60,8 @@ Desktop.ini
 /models/
 *.pt
 *.onnx
+
+# Curated PanNuke support models are intentionally versioned.
+!/support-data/yolo/pannuke/pannuke-detect-yolo11n-e5.pt
+!/support-data/yolo/pannuke/pannuke-segment-yolo11n-e5.pt
+!/support-data/yolo/pannuke/pannuke-classify-yolo11n-e10.pt

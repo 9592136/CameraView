@@ -162,6 +162,42 @@ public:
                 painter->drawLine(QPointF(18, 6), QPointF(18, 12));
             }
             break;
+        case MeasurementToolGlyph::SelectMeasurement: {
+            QPainterPath cursor;
+            cursor.moveTo(7, 4);
+            cursor.lineTo(7, 27);
+            cursor.lineTo(13, 21);
+            cursor.lineTo(18, 30);
+            cursor.lineTo(22, 28);
+            cursor.lineTo(17, 19);
+            cursor.lineTo(26, 19);
+            cursor.closeSubpath();
+            painter->drawPath(cursor);
+            break;
+        }
+        case MeasurementToolGlyph::RenameMeasurement:
+            painter->drawLine(QPointF(5, 8), QPointF(21, 8));
+            painter->drawLine(QPointF(5, 16), QPointF(17, 16));
+            painter->drawLine(QPointF(5, 24), QPointF(14, 24));
+            painter->drawLine(QPointF(17, 25), QPointF(26, 16));
+            painter->drawLine(QPointF(26, 16), QPointF(29, 19));
+            painter->drawLine(QPointF(29, 19), QPointF(20, 28));
+            painter->drawLine(QPointF(17, 25), QPointF(20, 28));
+            break;
+        case MeasurementToolGlyph::MeasurementColor:
+            painter->drawEllipse(QRectF(4, 5, 22, 22));
+            painter->drawEllipse(QPointF(10, 12), 2.0, 2.0);
+            painter->drawEllipse(QPointF(17, 9), 2.0, 2.0);
+            painter->drawEllipse(QPointF(22, 15), 2.0, 2.0);
+            painter->drawEllipse(QPointF(12, 21), 2.0, 2.0);
+            painter->drawArc(QRectF(17, 20, 11, 9), 30 * 16, 170 * 16);
+            break;
+        case MeasurementToolGlyph::ResetMeasurementColor:
+            painter->drawEllipse(QRectF(8, 8, 16, 16));
+            painter->drawArc(QRectF(4, 4, 24, 24), 35 * 16, 245 * 16);
+            arrow({6, 9}, -1.7);
+            painter->drawLine(QPointF(12, 20), QPointF(20, 12));
+            break;
         case MeasurementToolGlyph::DeleteMeasurement:
             painter->drawRect(QRectF(9, 9, 14, 18));
             painter->drawLine(QPointF(7, 7), QPointF(25, 7));
@@ -192,6 +228,100 @@ public:
             painter->drawLine(QPointF(22, 21), QPointF(26, 25));
             painter->drawLine(QPointF(30, 21), QPointF(26, 25));
             break;
+        case MeasurementToolGlyph::OpenImage: {
+            QPainterPath folder;
+            folder.moveTo(3, 9);
+            folder.lineTo(3, 26);
+            folder.lineTo(28, 26);
+            folder.lineTo(30, 11);
+            folder.lineTo(13, 11);
+            folder.lineTo(10, 7);
+            folder.lineTo(3, 7);
+            folder.closeSubpath();
+            painter->drawPath(folder);
+            painter->drawLine(QPointF(5, 13), QPointF(28, 13));
+            break;
+        }
+        case MeasurementToolGlyph::ExportImage:
+            painter->drawRoundedRect(QRectF(4, 4, 19, 23), 1.5, 1.5);
+            painter->drawEllipse(QPointF(17.5, 10), 2.0, 2.0);
+            painter->drawPolyline(QPolygonF{
+                QPointF(6, 23), QPointF(11, 16), QPointF(15, 20), QPointF(20, 14), QPointF(23, 18)});
+            painter->drawLine(QPointF(27, 5), QPointF(27, 24));
+            painter->drawLine(QPointF(23, 20), QPointF(27, 24));
+            painter->drawLine(QPointF(31, 20), QPointF(27, 24));
+            break;
+        case MeasurementToolGlyph::PointCloud:
+            for (const QPointF point : {QPointF(7, 9), QPointF(16, 5), QPointF(25, 10),
+                     QPointF(5, 20), QPointF(14, 16), QPointF(24, 20), QPointF(17, 27)}) {
+                node(point, 1.7);
+            }
+            painter->drawLine(QPointF(7, 9), QPointF(16, 5));
+            painter->drawLine(QPointF(16, 5), QPointF(25, 10));
+            painter->drawLine(QPointF(7, 9), QPointF(14, 16));
+            painter->drawLine(QPointF(25, 10), QPointF(14, 16));
+            painter->drawLine(QPointF(5, 20), QPointF(14, 16));
+            painter->drawLine(QPointF(14, 16), QPointF(24, 20));
+            painter->drawLine(QPointF(14, 16), QPointF(17, 27));
+            break;
+        case MeasurementToolGlyph::FitView:
+            painter->drawLine(QPointF(4, 12), QPointF(4, 4));
+            painter->drawLine(QPointF(4, 4), QPointF(12, 4));
+            painter->drawLine(QPointF(20, 4), QPointF(28, 4));
+            painter->drawLine(QPointF(28, 4), QPointF(28, 12));
+            painter->drawLine(QPointF(4, 20), QPointF(4, 28));
+            painter->drawLine(QPointF(4, 28), QPointF(12, 28));
+            painter->drawLine(QPointF(20, 28), QPointF(28, 28));
+            painter->drawLine(QPointF(28, 28), QPointF(28, 20));
+            painter->drawRoundedRect(QRectF(9, 10, 14, 12), 1.5, 1.5);
+            break;
+        case MeasurementToolGlyph::Surface3D:
+            painter->drawLine(QPointF(5, 26), QPointF(5, 7));
+            painter->drawLine(QPointF(5, 26), QPointF(27, 26));
+            painter->drawPolyline(QPolygonF{
+                QPointF(6, 22), QPointF(11, 17), QPointF(15, 20), QPointF(21, 9), QPointF(27, 14)});
+            painter->drawPolyline(QPolygonF{
+                QPointF(8, 26), QPointF(13, 21), QPointF(18, 24), QPointF(24, 14)});
+            break;
+        case MeasurementToolGlyph::Refresh:
+            painter->drawArc(QRectF(5, 5, 22, 22), 35 * 16, 275 * 16);
+            arrow({7, 8}, -1.8);
+            break;
+        case MeasurementToolGlyph::Connect:
+            painter->drawEllipse(QPointF(16, 16), 11, 11);
+            painter->drawPolyline(QPolygonF{
+                QPointF(10, 16), QPointF(14, 20), QPointF(23, 11)});
+            break;
+        case MeasurementToolGlyph::Disconnect:
+            painter->drawEllipse(QPointF(16, 16), 11, 11);
+            painter->drawLine(QPointF(11, 11), QPointF(21, 21));
+            painter->drawLine(QPointF(21, 11), QPointF(11, 21));
+            break;
+        case MeasurementToolGlyph::Reset:
+            painter->drawArc(QRectF(5, 5, 22, 22), 30 * 16, 280 * 16);
+            arrow({7, 8}, -1.8);
+            painter->drawLine(QPointF(16, 10), QPointF(16, 17));
+            painter->drawLine(QPointF(16, 17), QPointF(21, 20));
+            break;
+        case MeasurementToolGlyph::Roi:
+            painter->drawLine(QPointF(4, 12), QPointF(4, 4));
+            painter->drawLine(QPointF(4, 4), QPointF(12, 4));
+            painter->drawLine(QPointF(20, 4), QPointF(28, 4));
+            painter->drawLine(QPointF(28, 4), QPointF(28, 12));
+            painter->drawLine(QPointF(4, 20), QPointF(4, 28));
+            painter->drawLine(QPointF(4, 28), QPointF(12, 28));
+            painter->drawLine(QPointF(20, 28), QPointF(28, 28));
+            painter->drawLine(QPointF(28, 28), QPointF(28, 20));
+            painter->drawRect(QRectF(10, 10, 12, 12));
+            break;
+        case MeasurementToolGlyph::CaptureFrame:
+            painter->drawRoundedRect(QRectF(3, 8, 26, 18), 2.5, 2.5);
+            painter->drawEllipse(QPointF(16, 17), 6.0, 6.0);
+            painter->drawLine(QPointF(9, 8), QPointF(12, 5));
+            painter->drawLine(QPointF(12, 5), QPointF(20, 5));
+            painter->drawLine(QPointF(20, 5), QPointF(23, 8));
+            node({16, 17}, 1.6);
+            break;
         }
         painter->restore();
     }
@@ -214,6 +344,26 @@ private:
 QIcon measurementToolIcon(MeasurementToolGlyph glyph)
 {
     return QIcon(new MeasurementIconEngine(glyph));
+}
+
+QToolButton* createMeasurementActionButton(
+    MeasurementToolGlyph glyph,
+    const QString& text,
+    const QString& toolTip,
+    QWidget* parent)
+{
+    auto* button = new QToolButton(parent);
+    button->setText(text);
+    button->setIcon(measurementToolIcon(glyph));
+    button->setIconSize(QSize(30, 30));
+    button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    button->setToolTip(toolTip);
+    button->setAccessibleName(text);
+    button->setAccessibleDescription(toolTip);
+    button->setProperty("role", QStringLiteral("measurementAction"));
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    button->setMinimumSize(84, 68);
+    return button;
 }
 
 MeasurementToolButton::MeasurementToolButton(

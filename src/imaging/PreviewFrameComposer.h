@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../domain/ImageFrame.h"
+#include "ChannelFusionEngine.h"
 #include "Fluorescence.h"
 #include "PseudoColorMapper.h"
 
@@ -12,6 +13,7 @@ struct PreviewFrameComposition {
     const std::vector<FluorescenceChannel>* fluorescence_channels = nullptr;
     bool show_processing_result = false;
     bool show_fusion_preview = false;
+    FluorescenceFusionOptions fluorescence_fusion;
     PseudoColorPalette pseudo_color_palette = PseudoColorPalette::Original;
 };
 

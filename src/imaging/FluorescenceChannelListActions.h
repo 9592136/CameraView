@@ -9,7 +9,11 @@
 
 enum class FluorescenceChannelListActionStatus {
     NoFrame,
+    NoSelection,
     Added,
+    Removed,
+    Isolated,
+    ShownAll,
     Cleared
 };
 
@@ -29,5 +33,16 @@ public:
         const DyeProfile& dye);
 
     static FluorescenceChannelListActionResult Clear(
+        std::vector<FluorescenceChannel>& channels);
+
+    static FluorescenceChannelListActionResult RemoveSelected(
+        std::vector<FluorescenceChannel>& channels,
+        int selection);
+
+    static FluorescenceChannelListActionResult ShowOnlySelected(
+        std::vector<FluorescenceChannel>& channels,
+        int selection);
+
+    static FluorescenceChannelListActionResult ShowAll(
         std::vector<FluorescenceChannel>& channels);
 };

@@ -50,11 +50,18 @@ public:
     int GetBinningCount(Handle camera) const { return get_binning_count_ ? get_binning_count_(camera) : 0; }
     bool GetBinningList(Handle camera, int* widths, int* heights) const;
     bool SetBinningIndex(Handle camera, int index) const;
+    bool SetRoi(Handle camera, int* top, int* left, int* bottom, int* right) const;
+    bool SetFlip(Handle camera, bool enabled) const;
+    bool SetMirror(Handle camera, bool enabled) const;
     bool SetTriggerType(Handle camera, int trigger_type) const;
     bool GetExposureRange(Handle camera, float* min_value, float* max_value) const;
     bool SetExposure(Handle camera, float value) const;
     bool ApplyAutoExposure(Handle camera) const;
     bool SetRgbGainValue(Handle camera, float r, float g, float b, int* ri, int* gi, int* bi) const;
+    int GetGainCount(Handle camera) const;
+    bool GetGainList(Handle camera, float* values) const;
+    bool GetOffsetRange(Handle camera, int* minimum, int* maximum) const;
+    bool SetRgbOffset(Handle camera, int red, int green, int blue) const;
     bool ApplyWhiteBalance(Handle camera) const;
     int GetBayerFormat(Handle camera) const { return get_bayer_format_ ? get_bayer_format_(camera) : -1; }
     bool GetBayer(Handle camera, unsigned char* buffer, unsigned long* timestamp) const;
@@ -63,7 +70,12 @@ public:
     bool HasExposureControl() const { return get_exposure_range_ != nullptr && set_exposure_ != nullptr; }
     bool HasAutoExposureControl() const { return auto_exposure_once_ != nullptr || set_auto_exposure_ != nullptr; }
     bool HasGainControl() const { return set_rgb_gain_value_ != nullptr; }
+    bool HasOffsetControl() const { return get_offset_range_ != nullptr && set_rgb_offset_ != nullptr; }
     bool HasWhiteBalanceControl() const { return calc_white_balance_ != nullptr || set_white_balance_ != nullptr; }
+    bool HasRoiControl() const { return set_roi_ != nullptr; }
+    bool HasTriggerControl() const { return set_trigger_type_ != nullptr; }
+    bool HasFlipControl() const { return set_flip_ != nullptr; }
+    bool HasMirrorControl() const { return set_mirror_ != nullptr; }
     bool HasBayerReadout() const { return get_bayer_format_ != nullptr && get_bayer_ != nullptr; }
     bool HasBayerToRgb() const { return bayer_to_rgb_ != nullptr; }
 
@@ -81,12 +93,18 @@ private:
     using GetBinningCountFn = int(MUCAM_CALL*)(Handle);
     using GetBinningListFn = bool(MUCAM_CALL*)(Handle, int*, int*);
     using SetBinningIndexFn = bool(MUCAM_CALL*)(Handle, int);
+    using SetRoiFn = bool(MUCAM_CALL*)(Handle, int*, int*, int*, int*);
+    using SetBooleanFn = bool(MUCAM_CALL*)(Handle, bool);
     using SetTriggerTypeFn = bool(MUCAM_CALL*)(Handle, int);
     using GetExposureRangeFn = bool(MUCAM_CALL*)(Handle, float*, float*);
     using SetExposureFn = bool(MUCAM_CALL*)(Handle, float);
     using AutoExposureOnceFn = float(MUCAM_CALL*)(Handle, long);
     using SetAutoExposureFn = bool(MUCAM_CALL*)(Handle, int, float*);
     using SetRgbGainValueFn = bool(MUCAM_CALL*)(Handle, float, float, float, int*, int*, int*);
+    using GetGainCountFn = int(MUCAM_CALL*)(Handle);
+    using GetGainListFn = bool(MUCAM_CALL*)(Handle, float*);
+    using GetOffsetRangeFn = bool(MUCAM_CALL*)(Handle, int*, int*);
+    using SetRgbOffsetFn = bool(MUCAM_CALL*)(Handle, int, int, int);
     using CalcWhiteBalanceFn = bool(MUCAM_CALL*)(Handle);
     using SetWhiteBalanceFn = bool(MUCAM_CALL*)(Handle, int);
     using GetBayerFormatFn = int(MUCAM_CALL*)(Handle);
@@ -117,12 +135,19 @@ private:
     GetBinningCountFn get_binning_count_ = nullptr;
     GetBinningListFn get_binning_list_ = nullptr;
     SetBinningIndexFn set_binning_index_ = nullptr;
+    SetRoiFn set_roi_ = nullptr;
+    SetBooleanFn set_flip_ = nullptr;
+    SetBooleanFn set_mirror_ = nullptr;
     SetTriggerTypeFn set_trigger_type_ = nullptr;
     GetExposureRangeFn get_exposure_range_ = nullptr;
     SetExposureFn set_exposure_ = nullptr;
     AutoExposureOnceFn auto_exposure_once_ = nullptr;
     SetAutoExposureFn set_auto_exposure_ = nullptr;
     SetRgbGainValueFn set_rgb_gain_value_ = nullptr;
+    GetGainCountFn get_gain_count_ = nullptr;
+    GetGainListFn get_gain_list_ = nullptr;
+    GetOffsetRangeFn get_offset_range_ = nullptr;
+    SetRgbOffsetFn set_rgb_offset_ = nullptr;
     CalcWhiteBalanceFn calc_white_balance_ = nullptr;
     SetWhiteBalanceFn set_white_balance_ = nullptr;
     GetBayerFormatFn get_bayer_format_ = nullptr;
