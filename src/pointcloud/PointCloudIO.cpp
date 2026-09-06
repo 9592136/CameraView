@@ -383,7 +383,9 @@ bool LoadMoticH3d(
         error = L"The Motic H3D version is not supported.";
         return false;
     }
-    if (width < 2 || height < 2 || depth_sample_bytes != sizeof(float) ||
+    const bool float32_depth = depth_sample_bytes == sizeof(float) ||
+        depth_sample_bytes == sizeof(float) * 8U;
+    if (width < 2 || height < 2 || !float32_depth ||
         !std::isfinite(physical_width) || !std::isfinite(physical_height) ||
         !std::isfinite(minimum_z) || !std::isfinite(maximum_z) ||
         physical_width <= 0.0F || physical_height <= 0.0F || maximum_z < minimum_z) {

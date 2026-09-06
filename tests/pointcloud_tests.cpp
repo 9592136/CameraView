@@ -48,7 +48,9 @@ void writeLittleFloat(std::ofstream& output, float value)
     writeLittleUInt32(output, bits);
 }
 
-bool writeMoticH3dFixture(const std::filesystem::path& path)
+bool writeMoticH3dFixture(
+    const std::filesystem::path& path,
+    std::uint32_t depth_size_field = 4)
 {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) return false;
@@ -67,7 +69,7 @@ bool writeMoticH3dFixture(const std::filesystem::path& path)
     output.write(reserved_grid.data(), reserved_grid.size());
     writeLittleUInt32(output, 3);
     writeLittleUInt32(output, 2);
-    writeLittleUInt32(output, 4);
+    writeLittleUInt32(output, depth_size_field);
     writeLittleUInt32(output, 24);
     for (float value : {0.0F, 0.25F, 0.5F, 0.75F, 1.0F, 0.5F}) {
         writeLittleFloat(output, value);
@@ -595,6 +597,17 @@ int main(int argument_count, char** arguments)
         cropped_h3d.format_name != h3d_cloud.format_name) {
         return fail("Point filtering did not invalidate H3D grid topology safely.");
     }
+    const std::filesystem::path h3d_bits_path =
+        std::filesystem::temp_directory_path() / "CameraViewPointCloudTestsBits.h3d";
+    if (!writeMoticH3dFixture(h3d_bits_path, 32)) {
+        return fail("Bit-width Motic H3D fixture could not be created.");
+    }
+    PointCloud h3d_bits_cloud;
+    if (!PointCloudIO::Load(h3d_bits_path, h3d_bits_cloud, error) ||
+        !h3d_bits_cloud.HasTextureSurface() || h3d_bits_cloud.Size() != 6) {
+        return fail("Motic H3D 32-bit depth field was not accepted.");
+    }
+    std::filesystem::remove(h3d_bits_path);
     PointCloud h3d_override_cloud;
     if (!PointCloudIO::Load(h3d_path, h3d_override_cloud, error,
             PointCloudUnit::Millimeters) ||
