@@ -64,6 +64,7 @@ public:
     PointCloudColorMode colorMode() const { return color_mode_; }
     double pointSize() const { return point_size_; }
     bool textureEnhancementEnabled() const { return texture_enhancement_enabled_; }
+    std::uint64_t textureMeshRevision() const { return texture_mesh_revision_; }
     bool axesVisible() const { return axes_visible_; }
     const PointCloudPlane& fittedPlane() const { return fitted_plane_; }
     bool fittedPlaneVisible() const { return fitted_plane_visible_; }
@@ -203,4 +204,5 @@ private:
     bool texture_mesh_dirty_ = true;
     int texture_vertex_count_ = 0;
     int texture_index_count_ = 0;
+    std::uint64_t texture_mesh_revision_ = 0;
 };

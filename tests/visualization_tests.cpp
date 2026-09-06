@@ -343,13 +343,25 @@ int main(int argc, char* argv[])
     QApplication::sendEvent(&point_cloud_view, &texture_drag_move);
     point_cloud_view.grab();
     const int interactive_texture_vertices = point_cloud_view.renderedPointCount();
+    const std::uint64_t first_interactive_texture_revision =
+        point_cloud_view.textureMeshRevision();
+    QMouseEvent texture_drag_move_second(
+        QEvent::MouseMove, QPointF(370.0, 260.0), QPointF(370.0, 260.0),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&point_cloud_view, &texture_drag_move_second);
+    point_cloud_view.grab();
+    const std::uint64_t second_interactive_texture_revision =
+        point_cloud_view.textureMeshRevision();
     QMouseEvent texture_drag_release(
-        QEvent::MouseButtonRelease, QPointF(330.0, 235.0), QPointF(330.0, 235.0),
+        QEvent::MouseButtonRelease, QPointF(370.0, 260.0), QPointF(370.0, 260.0),
         Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(&point_cloud_view, &texture_drag_release);
     if (full_texture_vertices < 150000 || interactive_texture_vertices >= full_texture_vertices ||
         interactive_texture_vertices > 50000) {
         return fail("GPU texture mesh did not preserve static detail or reduce interaction cost.");
+    }
+    if (second_interactive_texture_revision <= first_interactive_texture_revision) {
+        return fail("GPU texture mesh was not rebuilt for consecutive drag frames.");
     }
 
     point_cloud_view.setCloud(point_cloud);

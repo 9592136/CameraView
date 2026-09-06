@@ -354,6 +354,7 @@ void PointCloudWidget::invalidateProjectionCache()
 {
     interaction_projection_valid_ = false;
     render_projection_valid_ = false;
+    texture_mesh_dirty_ = true;
     hovered_point_index_ = -1;
 }
 
@@ -612,6 +613,7 @@ bool PointCloudWidget::rebuildTextureSurface()
     texture_vertex_count_ = static_cast<int>(vertices.size());
     texture_index_count_ = static_cast<int>(indices.size());
     texture_mesh_dirty_ = false;
+    ++texture_mesh_revision_;
     return texture_index_count_ > 0;
 }
 
